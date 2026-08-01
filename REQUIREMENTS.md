@@ -54,8 +54,8 @@ Three roles recur throughout this domain:
 vcrd's initial scope is entirely on the verifier/inspector side: reading and checking
 credentials that already exist. Creating and editing them is a later phase (§9).
 
-The dominant data model is the **W3C Verifiable Credentials Data Model** (versions 1.1 and
-2.0), which describes a credential as a JSON(-LD) document containing claims plus
+The dominant data model is the [**W3C Verifiable Credentials Data Model**](https://www.w3.org/TR/vc-overview/) (versions [1.1](https://www.w3.org/TR/vc-data-model-1.1/) and
+[2.0](https://www.w3.org/TR/vc-data-model-2.0/)), which describes a credential as a JSON(-LD) document containing claims plus
 metadata (issuer, issuance/expiration dates, credential type, `@context`/schema) plus one
 or more **proofs**. Proof mechanisms vary significantly:
 
@@ -69,6 +69,17 @@ or more **proofs**. Proof mechanisms vary significantly:
   allow a holder to prove facts about claims (including range predicates, e.g. "over 18")
   without revealing the underlying values at all.
 
+Credentials are typically not submitted to a verifier individually and bare. Instead, a
+holder assembles one or more credentials into a **Verifiable Presentation (VP)** — itself
+a data model object defined alongside the credential itself, wrapping the included
+credential(s) (potentially after selectively disclosing only some of their claims) and
+typically carrying its own proof, separate from any credential's issuer proof, that binds
+the presentation to the holder and demonstrates they actually control it rather than
+merely holding a copy of someone else's credential. vcrd needs to be able to handle
+presentations as well as bare credentials: inspecting, validating, and verifying a
+presentation means checking its own holder-proof in addition to the proof(s) on each
+credential it contains.
+
 Credentials reference issuer and subject identities, typically via **Decentralized
 Identifiers (DIDs)**. Resolving a DID to usable key material is either self-contained (no
 network needed — e.g. `did:key`, or a JWK embedded directly in the credential) or requires
@@ -81,10 +92,14 @@ vcrd distinguishes four tiers of operation, each with different guarantees and d
 network/trust implications:
 
 1. **Parse** — is this input syntactically a credential in a format vcrd understands
-   (valid JSON-LD/JWT/CBOR structure, etc.)? No semantic checking.
+   (valid JSON-LD/JWT/CBOR structure, etc.)? No semantic checking. This default operation
+   can provide useful information to the user.
 2. **Validate** — does the parsed structure conform to the relevant data model (required
    fields present, dates well-formed, `@context`/schema correct)? No cryptography
-   involved, no network required — always available, always fast.
+   involved, no network required — always available, always fast. This remains a
+   distinct `vcrd-core` capability, but the CLI's `inspect` verb (§7) always runs it
+   immediately after a successful parse rather than exposing it as its own subcommand —
+   validating something that failed to parse isn't a meaningful operation on its own.
 3. **Verify** — does the cryptographic proof check out against the issuer's key material?
    This splits further:
    - *Offline verification* — key material is self-contained (`did:key`, an embedded JWK)
@@ -104,8 +119,8 @@ verification requires an explicit opt-in.
 
 ## 4. Language, Licensing, Naming & IP Policy
 
-**Language: Rust.** Chosen because it lets the no-network-by-default and read-only-by-
-default principles be enforced structurally (a capability like network access can be made
+**Language: Rust.** Chosen because it lets the no-network-by-default and read-only-by-default
+principles be enforced structurally (a capability like network access can be made
 impossible to reach without being deliberately threaded through), because it produces a
 single distributable binary (no runtime dependency for end users), because it has a clear
 path to WASM for a future browser-extension frontend, and because a meaningful and
@@ -113,13 +128,14 @@ growing share of cryptographic and identity-ecosystem work — including exactly
 BBS+/Bulletproofs territory vcrd is interested in — is happening in Rust.
 
 **License: dual MIT/Apache-2.0**, following the standard Rust ecosystem convention (the
-same pattern used by `serde`, `tokio`, and the Rust compiler itself):
+same pattern used by `serde`, `clap`, and the Rust compiler itself):
 
 - `LICENSE-APACHE` and `LICENSE-MIT` at the repo root, both already in place.
 - A short statement in the README (already added) that contributions are dual-licensed
   under the same terms unless stated otherwise.
 - Once a `Cargo.toml` exists, its `license` field should read `"MIT OR Apache-2.0"` (an
-  SPDX expression) — this is what crates.io and tooling like `cargo-deny` actually read;
+  [SPDX expression](https://spdx.github.io/spdx-spec/v3.0.1/annexes/spdx-license-expressions/)) —
+  this is what crates.io and tooling like `cargo-deny` actually read;
   GitHub's own "License" sidebar badge may only reflect one of the two files, which is a
   cosmetic limitation of its detection tooling, not a problem with the licensing itself.
 
@@ -173,6 +189,13 @@ specifically because vcrd is meant to be consumed by more than one kind of front
   The same principle applies to two specific capabilities: progress reporting and
   diagnostic/build-info are hooks that core exposes, not things core renders — `vcrd-cli`
   is one consumer of those hooks among others that may exist later.
+- **Results represent graduated success, not a single pass/fail.** A multi-stage pipeline
+  (parse → validate → verify) should let a caller see how far it got and why the next
+  stage failed, rather than collapsing to one opaque error. If parsing succeeds but
+  validation fails, the result carries both the successfully-parsed structure (or the
+  useful parts of it) and the specific validation failure reason(s). This is what lets
+  `vcrd inspect` (§7) give a genuinely useful answer even when a credential is broken,
+  instead of an all-or-nothing failure.
 - **No `unsafe` code.** `#![forbid(unsafe_code)]` in both `vcrd-core` and `vcrd-cli`.
   There's no principled reason this domain logic needs it, and forbidding it is a
   compile-time guarantee rather than a review habit.
@@ -239,7 +262,7 @@ would be far more disruptive than designing for it now.
 `version.workspace = true`. This is intentional for now (single maintainer, no reason for
 crates to diverge), but the mechanism already supports splitting — moving a crate to an
 independent version later is a one-line change (drop `.workspace = true`, set a literal
-version), not a restructuring. Worth documenting this intent explicitly (e.g. in
+version), not a restructuring. This intent will be documented explicitly (e.g. in
 `CONTRIBUTING.md`) so a future split doesn't look accidental.
 
 **Workspace-level lints** (`[workspace.lints.clippy]`): deny `unwrap_used`, `expect_used`,
@@ -249,27 +272,39 @@ panics" is only useful if panics were supposed to be impossible.
 
 ## 7. CLI Design
 
-`vcrd-cli` breaks deliberately from older single-command, flag-heavy CLI conventions in
-favor of a verb-first subcommand structure, in the style of tools like `cosign`, `age`,
-`gh`, and `cargo`:
+`vcrd-cli` uses a modern, verb-first subcommand structure, in the style of tools like `cosign`, `age`,
+`gh`, and `cargo` (contrasted with older single-command, flag-heavy CLI conventions):
 
-- `vcrd inspect <file>` — parse + validate, human-readable by default.
-- `vcrd validate <file>`
+- `vcrd inspect <file>` — combines the parse and validate tiers (§3) into a single verb;
+  human-readable by default. There is deliberately no separate `validate` subcommand: an
+  earlier draft had one, but splitting it out from `inspect` didn't earn its keep —
+  validating something that failed to parse isn't a meaningful operation on its own, so
+  `inspect` always runs both and reports on whichever stage it actually reached. Failure
+  behavior, subject to the verbosity level below:
+  - If parsing itself fails, `inspect` reports *why* — what was expected, what was found,
+    not just "parse failed at line X character Y."
+  - If parsing succeeds but validation fails, `inspect` still surfaces whatever useful
+    information the parse extracted, and separately explains why validation failed —
+    never collapsing a partially-successful result into a bare failure.
+  - `validate` remains a real `vcrd-core` capability (§3); it's just not exposed as its
+    own top-level verb today. Nothing rules out adding a flag or subcommand for
+    validate-only output later if a concrete use case for it shows up.
 - `vcrd verify <file>` — offline-only unless `--allow-network` is passed; this flag is
   global, not per-subcommand, so it can't be missed.
 - `vcrd formats` / `vcrd suites` — list supported credential formats and proof suites
   (discoverable capability probing, useful for both humans and agents).
 
 **Defaults matter.** Running `vcrd <file>` with no subcommand, or piping input via
-`cat file | vcrd`, defaults to `inspect` at the default verbosity level — a novice gets a
-useful answer without reading documentation first.
+`cat file | vcrd`, defaults to `inspect` at the default verbosity level and format —
+a novice gets a useful answer without reading documentation first.
 
-**Cross-cutting flags**: `--verbose`/`--verbosity` (diagnostic detail level) and
-`--format json|text|plain` (output shape). stdout is reserved for the actual result (so
-output stays pipeable); stderr carries diagnostics and progress. Distinct exit codes
-distinguish parse failure, validation failure, and verification failure, so a calling
-script can branch on which kind of failure occurred rather than just "something went
-wrong."
+**Cross-cutting flags**: `--verbose`/`--verbosity` (diagnostic detail level, down to a
+`0` setting that suppresses all output and relies solely on the exit code — useful for
+scripting that only cares whether something passed) and `--format json|text|plain`
+(output shape). stdout is reserved for the actual result (so output stays pipeable);
+stderr carries diagnostics and progress. Distinct exit codes distinguish parse failure,
+validation failure, and verification failure, so a calling script can branch on which
+kind of failure occurred rather than just "something went wrong."
 
 **`clap`** (derive macros) handles argument parsing, `--help` generation, shell completion
 generation, and man-page generation (`clap_mangen`) — all close to free once the argument
@@ -331,8 +366,16 @@ implementation understandable and testable, not because they're the only formats
 cares about. (The exact JWT-based format to implement first is an implementation-time
 decision, not pinned here.)
 
-Near/medium-term roadmap: **SD-JWT VC**, given its real-world adoption in wallet
-ecosystems.
+**Presentation support (§2) rides along with each credential format, rather than being a
+separate, indefinitely-deferred feature** — per format, the plan is to land credential
+(VC) support first and presentation (VP) support for that same format as a follow-on,
+in a separate PR rather than requiring both together. This is a provisional commitment:
+if presentation support for a given format turns out to be disproportionately complex
+relative to its credential support, that's reason to revisit scope for that format
+specifically, not a reason to abandon the general principle.
+
+Near/medium-term roadmap: [**SD-JWT VC**](https://datatracker.ietf.org/doc/draft-ietf-oauth-sd-jwt-vc/),
+given its real-world adoption in wallet ecosystems.
 
 Named future direction, deliberately not built first: **AnonCreds and BBS+ signatures,
 optionally combined with Bulletproofs for zero-knowledge range proofs.** This is a
@@ -343,9 +386,10 @@ before it's implemented. Relevant open-source prior art in Rust: Hyperledger's
 `proof-system`/crypto crates, which already implement BBS+ with bulletproofs-style range
 proofs.
 
-Noted but deprioritized: **mdoc/mDL** (ISO 18013-5) — partly because official ISO test
-vectors are not freely/openly licensed, which would complicate building an open
-conformance suite around it the way the W3C-based formats allow.
+Noted but deprioritized for the initial implementation: **mdoc/mDL** (ISO 18013-5) —
+partly because official ISO test vectors are not freely/openly licensed, which would complicate
+building an open conformance suite around it the way the W3C-based formats allow. This could
+be a valuable use case for designing and implementing a solution for external proprietary code.
 
 **DID resolution** starts with offline-resolvable methods (`did:key`, embedded JWKs);
 network-dependent resolution (`did:web` and similar) is available only with the
@@ -375,10 +419,11 @@ phase built on the same core), and the risk-based trust-advice layer described i
   the abstract.
 - **Negative and adversarial fixtures are a required category, not an afterthought.**
   Given vcrd's whole purpose is trust-relevant checking, "known-good credential verifies
-  successfully" fixtures are the less important half of the test matrix. Required
+  successfully" fixtures are only part of the test matrix. Required
   coverage includes: expired, not-yet-valid, revoked, tampered-signature, wrong-issuer,
-  and malformed-`@context` cases, plus — specifically — **algorithm-confusion attacks**
-  (e.g. tricking a verifier expecting RS256 into accepting an HMAC-signed token using the
+  abnormal size or depth, and malformed-`@context` cases, plus — specifically —
+  **algorithm-confusion attacks** (e.g. tricking a verifier expecting RS256 into accepting
+  an HMAC-signed token using the
   public key as the secret, or accepting `alg: none`). This class of bug has repeatedly
   and concretely affected real JWT/JOSE implementations and needs to be a named test
   category from the start, since vcrd implements verification itself rather than wrapping
@@ -570,7 +615,7 @@ the durable record — earlier in this project's discussion phase these were tra
 in-session task tool, which turned out not to persist reliably across sessions, so this
 document (not that tool) is the canonical source going forward.
 
-1. **Evaluate the `ssi` crate more deeply** during JSON-LD/Data Integrity implementation —
+1. **Evaluate the [`ssi`](https://crates.io/crates/ssi) crate more deeply** during JSON-LD/Data Integrity implementation —
    is any part of it worth depending on, versus the default plan of implementing
    domain-specific format/spec logic in-house (§5's dependency policy)?
 2. **VC-API vector-consumption spike**: build two throwaway branches when implementing
@@ -602,7 +647,7 @@ document (not that tool) is the canonical source going forward.
     resolve the still-open scope question between ordinary bug-report-oriented output and
     a full dependency/SBOM-style manifest (§7).
 12. **Identify a secondary Code of Conduct contact** — someone other than the primary
-    maintainer — before actively inviting outside contributors (§13).
+    maintainer — before openly and actively inviting outside contributors (§13).
 13. ~~Rename the GitHub repo and local clone from `vcrdtool` to `vcrd`~~ — **done**; the
     old repo was deleted and a new `vcrd` repo created directly.
 14. **Set up `cargo-llvm-cov` coverage tracking** with the ratchet (not hard-gate) policy
