@@ -1,0 +1,19 @@
+Write a 1 to 2 page review for the design in the REQUIREMENTS.md file.
+Put the review in a new markdown file called REQUIREMENTS-REVIEW.md.
+Roughly half the review should address the security topic.
+
+You should have access to the REQUIREMENTS.md file in the workspace. Let me
+know if you don't.
+
+I'm looking for the kind of feedback that domain experts
+like a senior product manager or a senior engineer might offer. Don't
+focus on the details of the design: I'm not looking for editorial/wording nitpicks.
+
+Here are some topics to consider:
+* Would vcrd be a valuable tool for people who are working in the area of verifiable credentials? Are there already tools that provide the functionality proposed for vcrd-core and/or vcrd-cli?
+* What might be the profile(s) of people who would find vcrd useful?
+* What would motivate people in the verifiable credentials community to consider contributing to the open source vcrd code base?
+* Are there important security risks that the design does not cover?
+* Are there ethical issues that the design does not address?
+* Are there legal issues that the design does not address?
+* Are there major areas of the design (functionality, language, structure, approach) that should be reconsidered?
