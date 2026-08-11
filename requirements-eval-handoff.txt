@@ -19,7 +19,7 @@ Watch for sensitive session data. Browser DevTools' Headers panel includes cooki
 Network-mode taxonomy, if testing any of these locally requires a server+tunnel setup: distinguish "fully offline," "opens a local listener, no outbound call," and "requires real network reachability" (tunnel/port-forward) — this vocabulary came directly out of the design discussion and matters for how vcrd would eventually scope a similar feature.
 Where findings feed back: the REQUIREMENTS.md "Related Work" section (sequenced first in the pending revision), the differential-testing/"neutral compatibility package" idea (review §2.7, open item §14.1), and possibly the live-protocol/mobile-wallet design question if any of these turn out to be a better test partner than openid4vp or walt.id.
 
-Progress: Credo-TS done (findings below). Remaining, in priority order: walt.id identity (self-hosted docker-compose), Digital Bazaar vc-js-cli, EUDI verifier-endpoint, Veramo, anoncreds-rs (skim only).
+Progress: Credo-TS done (findings below). vc-js-cli done, but code-reading only — not run (Docker platform-mismatch warning, linux/amd64 image vs. arm64 host, was the trigger for switching to reading the source instead of debugging Docker further); findings written directly into requirements-review-handoff.txt's Appendix rather than here, since that's where this sub-session's output was directed — see that file for the vc-js-cli paragraph. Remaining, in priority order: walt.id identity (self-hosted docker-compose — still open; only the hosted-demo bug-finding from the earlier session is recorded so far), EUDI verifier-endpoint, Veramo, anoncreds-rs (skim only).
 
 Findings: Credo-TS
 
