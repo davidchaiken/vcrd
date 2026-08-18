@@ -16,9 +16,9 @@ Goals:
   AI agent consuming vcrd's output should get stable, structured data it can parse without
   guesswork.
 - **Well documented.** Documentation is treated as a first-class deliverable, not an
-  afterthought — see §12.
+  afterthought — see §13.
 - **Free and open source**, licensed to make both use and contribution as unencumbered as
-  possible — see §4.
+  possible — see §5.
 - **Built for community contribution from day one**, not retrofitted later. Where the
   maintainer doesn't personally need something — platform support (e.g. Windows) is the
   running example — the project should make it easy for a contributor to add it, rather
@@ -52,7 +52,7 @@ Three roles recur throughout this domain:
   vcrd's scope) decides whether to trust it.
 
 vcrd's initial scope is entirely on the verifier/inspector side: reading and checking
-credentials that already exist. Creating and editing them is a later phase (§9).
+credentials that already exist. Creating and editing them is a later phase (§10).
 
 The dominant data model is the [**W3C Verifiable Credentials Data Model**](https://www.w3.org/TR/vc-overview/) (versions [1.1](https://www.w3.org/TR/vc-data-model-1.1/) and
 [2.0](https://www.w3.org/TR/vc-data-model-2.0/)), which describes a credential as a JSON(-LD) document containing claims plus
@@ -84,9 +84,103 @@ Credentials reference issuer and subject identities, typically via **Decentraliz
 Identifiers (DIDs)**. Resolving a DID to usable key material is either self-contained (no
 network needed — e.g. `did:key`, or a JWK embedded directly in the credential) or requires
 a network lookup (e.g. `did:web`). This distinction matters a great deal for vcrd, because
-of the no-network-by-default principle in §5.
+of the no-network-by-default principle in §6.
 
-## 3. Terminology
+## 3. Related Work
+
+vcrd exists because of, not instead of, a decade of work already done in this space. This
+section surveys the tools and libraries closest to vcrd's own scope, drawn from hands-on
+evaluation rather than secondhand claims, and describes what each contributes to the
+ecosystem vcrd is joining. It is not offered as a scorecard: vcrd's own design choices are
+stated on their own terms throughout this document, starting with §6, rather than as a
+point-by-point rebuttal of anyone else's.
+
+**A gap left by a departing generation of tools.** The most direct precedent for vcrd's own
+shape — a small, scriptable command-line inspector for verifiable credentials — is
+[didkit](https://github.com/spruceid/didkit), built by SpruceID. didkit did real, useful
+work: issuing, verifying, and presenting W3C VCs across multiple proof formats from a
+single Rust binary. It was archived in July 2025 as SpruceID's own engineering focus
+shifted toward its mobile driver's license (mDL) product line — a natural consequence of a
+company aligning its open-source investment with its business, not a judgment on the
+tool's design. Its archival leaves an orphaned user base: anyone with didkit in a script or
+CI pipeline today needs a replacement, and vcrd is built with exactly that gap in mind.
+Digital Bazaar's [vc-js-cli](https://github.com/digitalbazaar/vc-js-cli) played a similar
+role a generation earlier for JSON-LD credentials specifically; its choice to bundle common
+JSON-LD `@context` documents locally rather than fetch them live is a precedent vcrd's own
+offline-by-default design continues, even though the tool itself has seen no functional
+changes since 2019. Commercial vendors have now stepped back from this kind of tool twice.
+vcrd's answer to that pattern is structural rather than promised: a not-for-profit,
+community-maintained project has no revenue line to defund, so its continuity doesn't
+depend on staying inside any one company's product roadmap.
+
+**Libraries vcrd tests against, not on.** [ssi](https://github.com/spruceid/ssi)
+(SpruceID), [isomdl](https://github.com/spruceid/isomdl) (SpruceID, ISO 18013-5/mdoc), and
+[openid4vp](https://github.com/spruceid/openid4vp) (SpruceID) are active, well-built Rust
+implementations of exactly the specifications vcrd cares about: ssi's modular sub-crates
+cover DID methods and VC data models broadly; isomdl is a working mdoc implementation that
+ships its own conformance fixtures; openid4vp includes a conformance-grade reference wallet
+and verifier used during this project's own hands-on evaluation. vcrd's own dependency
+policy (§6) treats libraries like these as a resource to validate against rather than a
+foundation to build on: interoperability is demonstrated through differential testing
+against real implementations, keeping vcrd's own trust surface small and independent of any
+single maintainer's roadmap. The reasoning behind that choice is written into §6 and §15
+item 1, not repeated here.
+
+**Agent frameworks, a different layer.** [Credo-TS](https://github.com/openwallet-foundation/credo-ts)
+(OpenWallet Foundation, TypeScript) and [Veramo](https://github.com/decentralized-identity/veramo)
+(originally uPort, relaunched under ConsenSys Mesh, now stewarded by the Decentralized
+Identity Foundation) are full agent frameworks: they build issuer, holder, and verifier
+agents complete with DIDComm messaging, plugin architectures, and support for many DID
+methods beyond the W3C-VC-centric ones vcrd targets — Veramo's `did:ethr` and EIP-712
+support, for instance, reflect real Ethereum-ecosystem breadth outside vcrd's scope.
+Credo-TS is under active development with a broad plugin ecosystem; Veramo's day-to-day
+maintenance today rests substantially on one person's continued effort, a lineage worth
+naming plainly since contributor capacity is exactly what this document's own community
+strategy (§14) is written to take seriously. vcrd is solving a narrower problem
+than either: not standing up an agent, but answering one question about one credential from
+a single invocation — a shape aimed at scripts, CI pipelines, and coding agents that need a
+fast, structured answer without adopting an agent runtime.
+
+**Full-service platforms.** [walt.id](https://github.com/walt-id/waltid-identity) and the
+EU Digital Identity Wallet program's
+[verifier-endpoint](https://github.com/eu-digital-identity-wallet/eudi-srv-verifier-endpoint)
+reference implementation are the most complete tools surveyed for this document. walt.id's
+open community stack covers issuance and verification across JWT, SD-JWT, and mdoc
+credentials via OpenID4VCI/OpenID4VP, with a genuinely useful portal UI for manual testing;
+a separate paid enterprise tier funds its ongoing development. The EUDI verifier-endpoint, a
+Kotlin/Spring Boot service built for the EU's wallet reference-implementation program, pairs
+careful spec-accurate validation with some of the best diagnostic output surveyed anywhere
+in this evaluation — named, structured error codes once a request reaches real validation
+logic, plus a full timestamped, actor-attributed audit trail. Both served as this project's
+actual differential-testing partners during evaluation (§11), proving the protocol-level
+approach hands-on rather than just in theory. vcrd aims to be the minimal, embeddable,
+scriptable counterpart to platforms like these: something that runs from a single command
+or library call, with no server to stand up, for the cases where a full platform is more
+than what's needed.
+
+**A different proof paradigm, ahead of vcrd's own roadmap.**
+[anoncreds-rs](https://github.com/hyperledger/anoncreds-rs) (Hyperledger) is the reference
+Rust implementation of the AnonCreds specification, a privacy-preserving credential scheme
+predating and distinct from the W3C Data Model's Data Integrity/VC-JWT proofs. It supports
+selective disclosure and predicate proofs (e.g. proving "over 18" without revealing a birth
+date) and ships a bridge that converts AnonCreds credentials to and from W3C VC Data Model
+JSON. This is exactly the proof shape named in §10's AnonCreds/BBS+ roadmap item, and it's
+why the `ProofSuite` trait (§7) is being designed from the outset with room for
+partial/selective-disclosure proofs, rather than retrofitted once a simple signature-check
+assumption is already load-bearing.
+
+**Also considered.** Two further projects were deliberately scoped out of this evaluation
+rather than overlooked: TBD (Block)'s `ssi-sdk`/web5 stack, a fourth independently-backed
+implementation distinct from every lineage surveyed above, and the official W3C VC Data
+Model/VC-JOSE-COSE and OpenID Foundation conformance test suites — both real candidates for
+future differential-testing oracles once vcrd has enough surface area to test against them.
+It's also worth being precise about three Rust projects sometimes cited as evidence that
+this space is thin: IOTA identity, indy-vdr, and Aries `vcx` are all active, non-archived
+projects with recent commits. They solve different problems than vcrd does — a ledger-tied
+library with no CLI of its own, a ledger-client proxy rather than a VC tool, and a full
+pre-1.0 agent framework, respectively — not a gap in maintenance, just a gap in shape.
+
+## 4. Terminology
 
 vcrd distinguishes four tiers of operation, each with different guarantees and different
 network/trust implications:
@@ -97,7 +191,7 @@ network/trust implications:
 2. **Validate** — does the parsed structure conform to the relevant data model (required
    fields present, dates well-formed, `@context`/schema correct)? No cryptography
    involved, no network required — always available, always fast. This remains a
-   distinct `vcrd-core` capability, but the CLI's `inspect` verb (§7) always runs it
+   distinct `vcrd-core` capability, but the CLI's `inspect` verb (§8) always runs it
    immediately after a successful parse rather than exposing it as its own subcommand —
    validating something that failed to parse isn't a meaningful operation on its own.
 3. **Verify** — does the cryptographic proof check out against the issuer's key material?
@@ -113,11 +207,11 @@ network/trust implications:
    revocation check needs to be, etc. This is the job of the separate future tool
    described in §1.
 
-"Read-only, no-network by default" (§5) means: parse and validate are always available.
+"Read-only, no-network by default" (§6) means: parse and validate are always available.
 Verify is available offline only for self-contained key material; network-dependent
 verification requires an explicit opt-in.
 
-## 4. Language, Licensing, Naming & IP Policy
+## 5. Language, Licensing, Naming & IP Policy
 
 **Language: Rust.** Chosen because it lets the no-network-by-default and read-only-by-default
 principles be enforced structurally (a capability like network access can be made
@@ -142,7 +236,7 @@ same pattern used by `serde`, `clap`, and the Rust compiler itself):
 **IP policy:** to the extent vcrd ever needs to interact with proprietary or
 restricted-license code (a patented algorithm, a dependency that isn't OSS-compatible),
 that code must be isolated as an optional external module or plugin — never bundled into
-or required by the open-source core. The trait-based extension architecture (§6) is what
+or required by the open-source core. The trait-based extension architecture (§7) is what
 makes this possible without needing a special-case mechanism: an optional proprietary
 `ProofSuite` implementation, for example, could live entirely outside this repository as
 its own crate.
@@ -155,11 +249,11 @@ references to any proprietary or third-party API. (The closest analog in the sta
 world is the W3C Data Integrity specification's "cryptosuite" registry concept, which is
 itself an open standard.)
 
-## 5. Core Design Principles
+## 6. Core Design Principles
 
 These are the rules that keep the rest of the design coherent. Several of them exist
 specifically because vcrd is meant to be consumed by more than one kind of frontend
-(§6) — a rule that only works for the CLI isn't really a vcrd-core rule.
+(§7) — a rule that only works for the CLI isn't really a vcrd-core rule.
 
 - **Read-only, no-network by default.** Any operation that would write data or make a
   network call requires an explicit, per-operation opt-in. This is the tool's most basic
@@ -172,7 +266,7 @@ specifically because vcrd is meant to be consumed by more than one kind of front
   `@context` document loading go through injectable resolver/loader traits, defaulting to
   a local vendored cache rather than a silent HTTP fetch. This is what makes "no network,
   fully offline, deterministic" something that can actually be verified rather than just
-  hoped for, and it's what makes unit tests fast and non-flaky (§10) without mocking
+  hoped for, and it's what makes unit tests fast and non-flaky (§11) without mocking
   system-level facilities.
 - **`vcrd-core` operations must be low-latency by construction.** An operation belongs in
   core only if its cost scales with the size of the single credential/input being
@@ -194,7 +288,7 @@ specifically because vcrd is meant to be consumed by more than one kind of front
   stage failed, rather than collapsing to one opaque error. If parsing succeeds but
   validation fails, the result carries both the successfully-parsed structure (or the
   useful parts of it) and the specific validation failure reason(s). This is what lets
-  `vcrd inspect` (§7) give a genuinely useful answer even when a credential is broken,
+  `vcrd inspect` (§8) give a genuinely useful answer even when a credential is broken,
   instead of an all-or-nothing failure.
 - **No `unsafe` code.** `#![forbid(unsafe_code)]` in both `vcrd-core` and `vcrd-cli`.
   There's no principled reason this domain logic needs it, and forbidding it is a
@@ -225,7 +319,7 @@ specifically because vcrd is meant to be consumed by more than one kind of front
   Those operational ceilings are left to external sandboxes or process supervisors, which
   already solve this well.
 
-## 6. Architecture / Workspace Layout
+## 7. Architecture / Workspace Layout
 
 A single Cargo workspace (resolver `"2"`, Rust 2024 edition), with `[workspace.package]`
 inheritance for `version`, `edition`, `license`, `authors`, and `repository` so member
@@ -233,7 +327,7 @@ crates don't repeat this metadata.
 
 - **`vcrd-core`** — the library. Owns the data model, the `CredentialFormat` and
   `ProofSuite` traits, and all parsing/validation/verification logic. No CLI dependencies,
-  no `unsafe`, no ambient I/O (§5).
+  no `unsafe`, no ambient I/O (§6).
 - **`vcrd-cli`** — the binary crate, depending on `vcrd-core`, owning `clap` and all
   presentation logic. Produces the installed `vcrd` binary (crate name and binary name can
   differ, the same way the `ripgrep` crate produces the `rg` binary, if that turns out to
@@ -241,7 +335,7 @@ crates don't repeat this metadata.
 - **Deferred, future workspace members**: `vcrd-net` (network/tcpdump-style capture) and
   `vcrd-wasm`/`vcrd-browser` (a browser extension, most likely a thin shell around a
   WASM-compiled `vcrd-core`). Both are additional consumers of `vcrd-core` as a library,
-  not modifications to it — reinforcing why core must stay origin-agnostic (§8).
+  not modifications to it — reinforcing why core must stay origin-agnostic (§9).
 
 **Format and proof-suite implementations live as feature-gated modules inside
 `vcrd-core`** (e.g. `jsonld`, `jwt-vc` Cargo features), not as separate per-format crates.
@@ -252,7 +346,7 @@ provides extensibility; crate-level separation is an implementation detail that 
 demand rather than precede it.
 
 Note for `ProofSuite` specifically: because AnonCreds/BBS+ (with optional Bulletproofs
-range proofs, §9) involve proofs that reveal only a subset of claims rather than a simple
+range proofs, §10) involve proofs that reveal only a subset of claims rather than a simple
 "verify a signature over these exact bytes" operation, the trait should be designed with
 room for partial/selective-disclosure proofs from the start, even though those formats
 aren't implemented first. Retrofitting that shape after the trait is load-bearing API
@@ -267,15 +361,15 @@ version), not a restructuring. This intent will be documented explicitly (e.g. i
 
 **Workspace-level lints** (`[workspace.lints.clippy]`): deny `unwrap_used`, `expect_used`,
 and `indexing_slicing` outside test code, enforcing the no-panic-on-untrusted-input rule
-from §5. This also sets up future fuzzing (§10) to be meaningful — a fuzzer finding "this
+from §6. This also sets up future fuzzing (§11) to be meaningful — a fuzzer finding "this
 panics" is only useful if panics were supposed to be impossible.
 
-## 7. CLI Design
+## 8. CLI Design
 
 `vcrd-cli` uses a modern, verb-first subcommand structure, in the style of tools like `cosign`, `age`,
 `gh`, and `cargo` (contrasted with older single-command, flag-heavy CLI conventions):
 
-- `vcrd inspect <file>` — combines the parse and validate tiers (§3) into a single verb;
+- `vcrd inspect <file>` — combines the parse and validate tiers (§4) into a single verb;
   human-readable by default. There is deliberately no separate `validate` subcommand: an
   earlier draft had one, but splitting it out from `inspect` didn't earn its keep —
   validating something that failed to parse isn't a meaningful operation on its own, so
@@ -286,7 +380,7 @@ panics" is only useful if panics were supposed to be impossible.
   - If parsing succeeds but validation fails, `inspect` still surfaces whatever useful
     information the parse extracted, and separately explains why validation failed —
     never collapsing a partially-successful result into a bare failure.
-  - `validate` remains a real `vcrd-core` capability (§3); it's just not exposed as its
+  - `validate` remains a real `vcrd-core` capability (§4); it's just not exposed as its
     own top-level verb today. Nothing rules out adding a flag or subcommand for
     validate-only output later if a concrete use case for it shows up.
 - `vcrd verify <file>` — offline-only unless `--allow-network` is passed; this flag is
@@ -315,7 +409,7 @@ than drifting like hand-maintained docs would.
 with text — "PASS"/"FAIL", not just a colored symbol), and the `NO_COLOR` environment
 variable convention is honored.
 
-**Progress reporting** is a frontend concern, not a core one, per §5 — and ideally
+**Progress reporting** is a frontend concern, not a core one, per §6 — and ideally
 `vcrd-core` never needs it at all, since its operations are meant to stay fast by
 construction. Where a *frontend* offers a genuinely long-running feature (the running
 example is a recursive filesystem scan across many credential files), the design is a
@@ -337,16 +431,16 @@ independently of the CLI (as a library, and eventually via a WASM frontend) — 
 who never runs the `vcrd` binary still needs a way to produce good bug-report diagnostics.
 Separately, the *content* of that output still needs scoping: an ordinary bug report
 probably wants a short block (vcrd version, rustc version, target triple, commit hash),
-while a full dependency/SBOM-style manifest (useful for supply-chain verification, §11) is
+while a full dependency/SBOM-style manifest (useful for supply-chain verification, §12) is
 likely too much noise for that use case and probably belongs behind a separate, explicit
 command instead of folded into general `--verbose`. Both of these are open items — see
-§14.
+§15.
 
-## 8. Input/Output Modalities
+## 9. Input/Output Modalities
 
 **Input**: files and stdin/pipes are the initial supported modalities. Network capture
 (tcpdump-style) and a browser extension are explicitly anticipated but deferred to
-separate crates (§6). `vcrd-core`'s functions take bytes in and don't know or care where
+separate crates (§7). `vcrd-core`'s functions take bytes in and don't know or care where
 those bytes came from — that's what lets every current and future frontend share the same
 core logic.
 
@@ -358,7 +452,7 @@ be built on top of vcrd, and vcrd staying unopinionated about that higher-level 
 means it shouldn't bake in assumptions about what such a system needs. Plain structured
 JSON is the more general, more reusable choice.
 
-## 9. Initial Format & Verification Scope
+## 10. Initial Format & Verification Scope
 
 Initial format support: **JSON-LD with Data Integrity proofs**, plus **one JWT-based VC
 format** — chosen as the starting pair specifically because they keep the first
@@ -379,7 +473,7 @@ given its real-world adoption in wallet ecosystems.
 
 Named future direction, deliberately not built first: **AnonCreds and BBS+ signatures,
 optionally combined with Bulletproofs for zero-knowledge range proofs.** This is a
-different verification paradigm from a simple signature check (§2, §6) and is the reason
+different verification paradigm from a simple signature check (§2, §7) and is the reason
 `ProofSuite` needs to anticipate partial/selective-disclosure proofs architecturally, even
 before it's implemented. Relevant open-source prior art in Rust: Hyperledger's
 `anoncreds-rs` (the official successor to the older `libindy`/`ursa` stack) and Dock's
@@ -393,17 +487,17 @@ be a valuable use case for designing and implementing a solution for external pr
 
 **DID resolution** starts with offline-resolvable methods (`did:key`, embedded JWKs);
 network-dependent resolution (`did:web` and similar) is available only with the
-`--allow-network` opt-in described in §7.
+`--allow-network` opt-in described in §8.
 
 **Explicitly out of scope for this phase**: issuing and editing credentials (a later
 phase built on the same core), and the risk-based trust-advice layer described in §1
 (a separate program entirely).
 
-## 10. Testing Strategy
+## 11. Testing Strategy
 
 - **Unit tests** live alongside the code they test in `vcrd-core`, and must run fully
   offline with no external-state dependencies — no network, no reliance on system clock,
-  no ambient filesystem/environment coupling (§5 makes this possible by construction
+  no ambient filesystem/environment coupling (§6 makes this possible by construction
   rather than by test-time mocking).
 - **CLI black-box tests** live in `vcrd-cli`, using `assert_cmd`/`predicates` to exercise
   the actual binary's stdout/stderr/exit-code behavior.
@@ -415,7 +509,7 @@ phase built on the same core), and the risk-based trust-advice layer described i
   material, where paywalled standards could actually block vendoring vectors at all.
   Where a conformance suite (notably the W3C VC Test Suite) assumes an HTTP-based
   "VC-API" test harness rather than direct library calls, the resolution approach is
-  deliberately deferred to a two-branch implementation spike (§14) rather than decided in
+  deliberately deferred to a two-branch implementation spike (§15) rather than decided in
   the abstract.
 - **Negative and adversarial fixtures are a required category, not an afterthought.**
   Given vcrd's whole purpose is trust-relevant checking, "known-good credential verifies
@@ -433,11 +527,11 @@ phase built on the same core), and the risk-based trust-advice layer described i
   checks catch a different class of bug than example-based tests and are cheap to add as
   core modules are built.
 - **Fuzzing** (`cargo-fuzz`) is deferred to implementation time, but the workspace is
-  prepared for it now: the no-panic-on-untrusted-input lint policy (§5, §6) is what makes
+  prepared for it now: the no-panic-on-untrusted-input lint policy (§6, §7) is what makes
   a fuzz target meaningful, and the same vendored conformance fixtures will double as seed
   corpus. The `fuzz/` directory, when added, is excluded from the main workspace since it
   needs a nightly toolchain.
-- **Externalized state for determinism**, beyond just the clock (§5): randomness used in
+- **Externalized state for determinism**, beyond just the clock (§6): randomness used in
   proof generation is injectable (relevant specifically for BBS+/Bulletproofs, where
   proof generation itself consumes randomness, not just key generation); DID resolution
   and JSON-LD context loading go through injectable resolvers/loaders defaulting to local
@@ -465,7 +559,7 @@ phase built on the same core), and the risk-based trust-advice layer described i
   supply-chain compromise that used Codecov's bash uploader to exfiltrate CI secrets from
   downstream projects.
 
-## 11. Security Posture
+## 12. Security Posture
 
 **Threat model (lightweight, to be promoted to `docs/threat-model.md` once implementation
 is further along):**
@@ -476,13 +570,13 @@ is further along):**
   credentials from parties that aren't trusted — makes this a realistic threat even for a
   purely local, offline CLI invocation, not a hypothetical one.
 - **In scope now**: parsing, validation, and verification correctness (including the
-  algorithm-confusion and malformed-input categories named in §10); resource exhaustion
-  via oversized or pathologically-structured input (§5's structural limits); memory
+  algorithm-confusion and malformed-input categories named in §11); resource exhaustion
+  via oversized or pathologically-structured input (§6's structural limits); memory
   safety (addressed largely for free by Rust plus the `#![forbid(unsafe_code)]` policy).
 - **Explicitly deferred, named so the gap is deliberate rather than accidental**:
   network-facing attack scenarios (out of scope while network access stays opt-in and
   off by default); secret-key handling and storage (verification primarily operates on
-  public key material; this becomes relevant once issuance — §9 — enters scope, since
+  public key material; this becomes relevant once issuance — §10 — enters scope, since
   that involves private signing keys).
 
 **Supply chain**: `cargo-audit` and `cargo-deny` run in CI, checking dependencies against
@@ -492,7 +586,7 @@ exact versions is standard practice here even though a library-only crate typica
 wouldn't commit its lockfile). Longer-term, not needed immediately: publishing a
 Software Bill of Materials per release (`cargo cyclonedx` or similar), baking build/
 dependency metadata into the binary itself so it's self-reporting even without source
-access (tying into the diagnostic API discussed in §7), and signed/reproducible releases.
+access (tying into the diagnostic API discussed in §8), and signed/reproducible releases.
 
 **Crypto dependency selection criterion**: prefer crates that explicitly document
 constant-time/side-channel handling (RustCrypto and `dalek-cryptography` crates generally
@@ -537,7 +631,7 @@ after an incident) is far more painful than starting clean:
   malicious workflow-file change from being buried inside an otherwise-unrelated-looking
   PR, once there's more than one contributor.
 
-## 12. Release, Versioning & Documentation Tooling
+## 13. Release, Versioning & Documentation Tooling
 
 - **SemVer**: vcrd follows Cargo's own pre-1.0 convention explicitly (stated here rather
   than left to assumption) — `0.x.y → 0.x.(y+1)` is treated as non-breaking, `0.x.y →
@@ -550,7 +644,7 @@ after an incident) is far more painful than starting clean:
   docs.rs with no extra effort beyond writing good doc comments. `vcrd-cli` is published
   to crates.io as well, and — once there's release infrastructure to build — distributed
   as prebuilt cross-platform binaries via `cargo-dist`, which also covers SBOM generation
-  and checksums as part of the same pipeline (tying back to §11's supply-chain goals).
+  and checksums as part of the same pipeline (tying back to §12's supply-chain goals).
 - **Documentation**: CLI reference documentation and man pages are generated directly from
   the `clap` argument definitions (`clap_mangen` and similar), so they can't drift out of
   sync with actual CLI behavior the way hand-maintained docs would. README + doc comments
@@ -572,7 +666,7 @@ after an incident) is far more painful than starting clean:
 - **CI platforms**: Linux and macOS initially. Windows CI is deliberately left as an open
   community-contribution opportunity, consistent with §1's stance on platform support.
 
-## 13. Contribution & Community Structure
+## 14. Contribution & Community Structure
 
 Kept deliberately light while the project is solo-maintained — the right frame is "rules
 the maintainer already follows, written down now so they apply to any future
@@ -586,12 +680,12 @@ contributor," not a heavyweight process built in advance of needing one.
   than an apologized-for gap; and a pointer to `SECURITY.md` for vulnerability reports
   rather than the public issue tracker.
 - **Issue and PR templates**: a bug report template nudges reporters to include vcrd's
-  diagnostic/version output (§7), and explicitly warns against pasting a real, live
+  diagnostic/version output (§8), and explicitly warns against pasting a real, live
   credential into a public GitHub issue — VCs can carry real personal data, and encouraging
   synthetic/test fixtures instead is a deliberate norm for a tool whose whole purpose is
   handling this kind of data carefully. A PR template checklist covers: tests pass
   offline, `clippy`/`fmt` clean, and flags changes touching `.github/workflows/` or adding
-  a new dependency for extra scrutiny (§11).
+  a new dependency for extra scrutiny (§12).
 - **`CODE_OF_CONDUCT.md`** adopts the Contributor Covenant as-is, rather than a
   custom-authored document — it's the de facto standard across the Rust ecosystem and
   contributors already know it. Its reporting section needs two things settled before the
@@ -608,7 +702,7 @@ contributor," not a heavyweight process built in advance of needing one.
   history, so this is a "do it right before it matters" decision rather than "do it
   whenever."
 
-## 14. Open / Deferred Items
+## 15. Open / Deferred Items
 
 These were deliberately deferred during discussion rather than decided now. This list is
 the durable record — earlier in this project's discussion phase these were tracked in an
@@ -617,14 +711,14 @@ document (not that tool) is the canonical source going forward.
 
 1. **Evaluate the [`ssi`](https://crates.io/crates/ssi) crate more deeply** during JSON-LD/Data Integrity implementation —
    is any part of it worth depending on, versus the default plan of implementing
-   domain-specific format/spec logic in-house (§5's dependency policy)?
+   domain-specific format/spec logic in-house (§6's dependency policy)?
 2. **VC-API vector-consumption spike**: build two throwaway branches when implementing
    JSON-LD/Data Integrity — (a) extract W3C VC-API-shaped test vectors and adapt them into
    direct calls against `vcrd-core`, versus (b) a minimal local VC-API HTTP shim so the
    official test harness runs unmodified. Compare the actual working code and the delta
    from `main` on each, then merge the winner and discard the other.
 3. **Set up `cargo-fuzz` targets** for `vcrd-core`'s untrusted-input parsers, seeded from
-   the same vendored conformance fixtures used in testing (§10).
+   the same vendored conformance fixtures used in testing (§11).
 4. **Fable-based review of this document**, with particular attention to security risks —
    threat model completeness, verification-bypass classes, resource-exhaustion surface,
    crypto dependency choices, and any other design-level security gap, before
@@ -633,22 +727,22 @@ document (not that tool) is the canonical source going forward.
    that feature is actually built — naive tests would be coupled to the exact build
    environment/commit/timestamp.
 6. **Switch to Conventional Commits and add `CHANGELOG.md`**, gated on "before talking to
-   other people about the project" (§13).
-7. **Wire up `cargo-semver-checks`** in CI before the 1.0 release (§12).
+   other people about the project" (§14).
+7. **Wire up `cargo-semver-checks`** in CI before the 1.0 release (§13).
 8. **Add `CONTRIBUTING.md`, issue/PR templates, and `CODE_OF_CONDUCT.md`** to the repo,
-   same gating milestone as item 6 (§13).
+   same gating milestone as item 6 (§14).
 9. **Enable GitHub's "require approval for first-time contributor workflows" setting** —
    an early-setup item, not gated on going public, since it costs nothing while solo
-   (§11).
+   (§12).
 10. **Add a `CODEOWNERS` entry for `.github/workflows/*`** — same early-setup timing as
-    item 9 (§11).
+    item 9 (§12).
 11. **Design `vcrd-core`'s diagnostic/build-info API**, with `vcrd-cli`'s
     `--version --verbose` as one consumer of it rather than a CLI-only feature, and
     resolve the still-open scope question between ordinary bug-report-oriented output and
-    a full dependency/SBOM-style manifest (§7).
+    a full dependency/SBOM-style manifest (§8).
 12. **Identify a secondary Code of Conduct contact** — someone other than the primary
-    maintainer — before openly and actively inviting outside contributors (§13).
+    maintainer — before openly and actively inviting outside contributors (§14).
 13. ~~Rename the GitHub repo and local clone from `vcrdtool` to `vcrd`~~ — **done**; the
     old repo was deleted and a new `vcrd` repo created directly.
 14. **Set up `cargo-llvm-cov` coverage tracking** with the ratchet (not hard-gate) policy
-    described in §10, and document that policy in `CONTRIBUTING.md`.
+    described in §11, and document that policy in `CONTRIBUTING.md`.
