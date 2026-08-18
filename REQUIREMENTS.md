@@ -89,9 +89,9 @@ of the no-network-by-default principle in §6.
 ## 3. Related Work
 
 vcrd builds on and seeks to complement a decade of work already done in this space. This
-section surveys the tools and libraries closest to vcrd's own scope, drawn from hands-on
-evaluation rather than secondhand claims, and describes what each contributes to the
-ecosystem vcrd is joining. It is not offered as a scorecard: vcrd's own design choices are
+section surveys the tools and libraries closest to vcrd's own scope, based on direct
+experience using each one rather than secondhand claims, and describes what each
+contributes to the ecosystem vcrd is joining. It is not offered as a scorecard: vcrd's own design choices are
 stated on their own terms throughout this document, starting with §6, rather than as a
 point-by-point comparison with related work.
 
@@ -102,7 +102,7 @@ work: issuing, verifying, and presenting W3C VCs across multiple proof formats f
 single Rust binary. It was archived in July 2025 as SpruceID's own engineering focus
 shifted toward its mobile driver's license (mDL) product line — a natural consequence of a
 company aligning its open-source investment with its business. Anyone with didkit in a script or
-CI pipeline today will eventually need a replacement, and vcrd is built with exactly that gap in mind.
+CI pipeline today will eventually need a replacement, and vcrd is built with that gap in mind.
 Digital Bazaar's [vc-js-cli](https://github.com/digitalbazaar/vc-js-cli) played a similar
 role a generation earlier for JSON-LD credentials specifically; its choice to bundle common
 JSON-LD `@context` documents locally rather than fetch them live is a precedent vcrd's own
@@ -115,10 +115,10 @@ depend on staying inside any one company's product roadmap.
 **Libraries vcrd tests against, not on.** [ssi](https://github.com/spruceid/ssi)
 (SpruceID), [isomdl](https://github.com/spruceid/isomdl) (SpruceID, ISO 18013-5/mdoc), and
 [openid4vp](https://github.com/spruceid/openid4vp) (SpruceID) are active, well-built Rust
-implementations of exactly the specifications vcrd cares about: ssi's modular sub-crates
+implementations of the kind of specifications that underlie vcrd: ssi's modular sub-crates
 cover DID methods and VC data models broadly; isomdl is a working mdoc implementation that
-ships its own conformance fixtures; openid4vp includes a conformance-grade reference wallet
-and verifier used during this project's own hands-on evaluation. vcrd's own dependency
+ships its own conformance fixtures; openid4vp includes a reference wallet
+and verifier useful for conformance testing. vcrd's own dependency
 policy (§6) treats libraries like these as a resource to validate against rather than a
 foundation to build on: interoperability is demonstrated through differential testing
 against existing implementations, keeping vcrd's own trust surface small and independent of any
@@ -133,7 +133,7 @@ agents complete with DIDComm messaging, plugin architectures, and support for ma
 methods beyond the W3C-VC-centric ones vcrd targets — Veramo's `did:ethr` and EIP-712
 support, for instance, reflect Ethereum-ecosystem breadth outside vcrd's scope.
 Credo-TS is under active development with a broad plugin ecosystem; Veramo's day-to-day
-maintenance today rests substantially on one developers's continued effort, a lineage worth
+maintenance today rests substantially on one developer's continued effort, a constraint worth
 naming plainly since contributor capacity is exactly what this document's own community
 strategy (§14) is written to take seriously. vcrd is solving a narrower problem
 than either: not standing up an agent, but answering one question about one credential from
@@ -143,19 +143,18 @@ fast, structured answer without adopting an agent runtime.
 **Full-service platforms.** [walt.id](https://github.com/walt-id/waltid-identity) and the
 EU Digital Identity Wallet program's
 [verifier-endpoint](https://github.com/eu-digital-identity-wallet/eudi-srv-verifier-endpoint)
-reference implementation are the most complete tools surveyed for this document. walt.id's
+reference implementation are among the most complete tools in this space. walt.id's
 open community stack covers issuance and verification across JWT, SD-JWT, and mdoc
 credentials via OpenID4VCI/OpenID4VP, with a useful portal UI for manual testing;
 a separate paid enterprise tier funds its ongoing development. The EUDI verifier-endpoint, a
 Kotlin/Spring Boot service built for the EU's wallet reference-implementation program, pairs
-careful spec-accurate validation with some of the best diagnostic output surveyed anywhere
-in this evaluation — named, structured error codes once a request reaches validation
-logic, plus a full timestamped, actor-attributed audit trail. Both served as this project's
-differential-testing partners during evaluation (§11), proving the protocol-level
-approach hands-on rather than just in theory. vcrd aims to be the minimal, embeddable,
-scriptable counterpart to platforms like these: something that runs from a single command
-or library call, with no server to stand up, for the cases where a full platform is more
-than what's needed.
+careful spec-accurate validation with standout diagnostic output — named, structured error
+codes once a request reaches validation logic, plus a full timestamped, actor-attributed
+audit trail. Both have served as differential-testing partners for vcrd's protocol-level
+work (§11), confirming that approach is workable in practice, not just in theory. vcrd aims
+to be the minimal, embeddable, scriptable counterpart to platforms like these: something
+that runs from a single command or library call, with no server to stand up, for the cases
+where a full platform is more than what's needed.
 
 **A different proof paradigm, ahead of vcrd's own roadmap.**
 [anoncreds-rs](https://github.com/hyperledger/anoncreds-rs) (Hyperledger) is the reference
@@ -166,14 +165,20 @@ date) and ships a bridge that converts AnonCreds credentials to and from W3C VC 
 JSON. This is exactly the proof shape named in §10's AnonCreds/BBS+ roadmap item, and it's
 why the `ProofSuite` trait (§7) is being designed from the outset with room for
 partial/selective-disclosure proofs, rather than retrofitted once a simple signature-check
-assumption is already load-bearing.
+assumption is already load-bearing. [ACA-Py](https://github.com/openwallet-foundation/acapy),
+the long-standing reference agent implementation for the Aries/AnonCreds ecosystem, is the
+natural place to look for a vcrd-style CLI already built on anoncreds-rs — but it's a full DIDComm
+agent framework with a controller/admin-API architecture — the same shape difference already
+true of Credo-TS and Veramo above — not a thin single-binary inspector. No lightweight tool
+like that exists yet for this proof paradigm: a plausible future direction once vcrd's own
+AnonCreds/BBS+ roadmap item (§10) is reached.
 
-**Also considered.** Two further projects were deliberately scoped out of related work evaluation
-rather than overlooked: TBD (Block)'s `ssi-sdk`/web5 stack, a fourth independently-backed
-implementation distinct from every lineage surveyed above, and the official W3C VC Data
+**Also considered.** Two further projects are deliberately out of scope here, not
+overlooked: TBD (Block)'s `ssi-sdk`/web5 stack, a fourth independently-backed
+implementation distinct from every lineage discussed above, and the official W3C VC Data
 Model/VC-JOSE-COSE and OpenID Foundation conformance test suites — both candidates for
 future differential-testing oracles once vcrd has enough surface area to test against them.
-In addition, three Rust projects help demonstrate an active development community:
+It's also worth noting three further Rust projects show this is an active community:
 IOTA identity, indy-vdr, and Aries `vcx` are all active, non-archived
 projects with recent commits. They solve different problems than vcrd does — a ledger-tied
 library with no CLI of its own, a ledger-client proxy rather than a VC tool, and a full
