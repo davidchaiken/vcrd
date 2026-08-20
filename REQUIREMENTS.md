@@ -11,10 +11,14 @@ all of the work indefinitely.
 
 Goals:
 
-- **Usable across a wide range of audiences.** A novice should get useful, safe-by-default
-  behavior with no flags. An expert should be able to script and compose vcrd tightly. An
-  AI agent consuming vcrd's output should get stable, structured data it can parse without
-  guesswork.
+- **Coding/code-aware agents are the primary design lens — without degrading the experience for humans.**
+  vcrd is designed foremost for unsupervised, scripted callers: CI pipelines and coding
+  agents that need stable, structured output and no interactive prompts (§6). This shapes
+  priorities — diagnosability and non-interactive-by-default come ahead of other, competing
+  concerns (§6) — without making human usability secondary or provisional. A novice still
+  gets useful, safe-by-default behavior with no flags; an expert can still script and
+  compose vcrd tightly; and human-readable output stays a fully-supported, first-class
+  format (§9).
 - **Well documented.** Documentation is treated as a first-class deliverable, not an
   afterthought — see §13.
 - **Free and open source**, licensed to make both use and contribution as unencumbered as
@@ -122,8 +126,8 @@ and verifier useful for conformance testing. vcrd's own dependency
 policy (§6) treats libraries like these as a resource to validate against rather than a
 foundation to build on: interoperability is demonstrated through differential testing
 against existing implementations, keeping vcrd's own trust surface small and independent of any
-other maintainers' roadmaps. The reasoning behind that choice is written into §6 and §15
-item 1, not repeated here.
+other maintainers' roadmaps. The reasoning behind that choice is written into §6, not
+repeated here.
 
 **Agent frameworks, a different layer.** [Credo-TS](https://github.com/openwallet-foundation/credo-ts)
 (OpenWallet Foundation, TypeScript) and [Veramo](https://github.com/decentralized-identity/veramo)
@@ -263,6 +267,12 @@ specifically because vcrd is meant to be consumed by more than one kind of front
   network call requires an explicit, per-operation opt-in. This is the tool's most basic
   safety property and should be true even for a first-time user who reads no
   documentation.
+- **Flags over prompts — every capability is reachable non-interactively.** No `vcrd`
+  command ever blocks waiting on interactive input to do its job; every option is reachable
+  via a flag, environment variable, or config value, in a single non-interactive
+  invocation. This is what keeps vcrd usable unsupervised — by scripts, CI pipelines, and
+  coding agents, none of which can answer a prompt. A frontend may layer an interactive
+  mode on top for human convenience, but never as the only way to reach a feature.
 - **`vcrd-core` takes its dependencies explicitly, rather than reaching for ambient
   state.** Concretely: a controllable clock is passed in (`now: DateTime`) rather than
   calling `SystemTime::now()`; randomness needed for proof generation is passed in via an
@@ -309,6 +319,18 @@ specifically because vcrd is meant to be consumed by more than one kind of front
     changes) — with a foreign-language (FFI) dependency penalized in that calculation,
     since it breaks single-binary distribution and complicates cross-compilation in a way
     a pure-Rust reimplementation against a written spec does not.
+  - *Ecosystem VC/OIDC4VP libraries (`ssi`, `openid4vp`, `isomdl`, and similar)*: settled
+    exclusion, not a case-by-case call — never a direct production dependency of
+    `vcrd-core` or `vcrd-cli`, full stop. These are strong, actively-maintained
+    implementations (§3), but each is maintained by a company (SpruceID) optimizing its
+    own product roadmap (mDL/gov-ID business) in a way that structurally can't guarantee
+    to stay aligned with vcrd's own standalone/universal/unopinionated goals.
+    Interoperability is demonstrated instead through differential testing against these
+    and other independent implementations (§11) — comparing verdicts on identical input,
+    not sharing a dependency graph. This exclusion applies to the shipped `[dependencies]`
+    graph specifically; it does not preclude using these crates as Cargo
+    `[dev-dependencies]` inside differential-testing tooling that never ships in the
+    built binary (§11).
 - **No panics on untrusted input.** Every code path that touches externally-supplied bytes
   returns `Result`; `unwrap`/`expect`/panicking-index are forbidden on those paths via
   workspace-level clippy lints (exempted only in test code). This matters because vcrd's
@@ -448,13 +470,21 @@ separate crates (§7). `vcrd-core`'s functions take bytes in and don't know or c
 those bytes came from — that's what lets every current and future frontend share the same
 core logic.
 
-**Output**: structured JSON, well-formatted human-readable text, and unformatted/plain
-text are the three initial formats. JSON deliberately doubles as the agent-facing format
-— there is no separate "agent mode" output, and no natural-language summarization baked
-into vcrd itself. This is intentional: the future risk/trust-advice tool (§1) is meant to
-be built on top of vcrd, and vcrd staying unopinionated about that higher-level use case
-means it shouldn't bake in assumptions about what such a system needs. Plain structured
-JSON is the more general, more reusable choice.
+**Output**: structured JSON, well-formatted (probably tabular) human-readable text, and unformatted/plain
+text are the three initial formats. JSON deliberately doubles as the
+agent-facing format — there is no separate "agent mode" output, and no natural-language
+summarization baked into vcrd itself. This is intentional: the future risk/trust-advice
+tool (§1) is meant to be built on top of vcrd, and vcrd staying unopinionated about that
+higher-level use case means it shouldn't bake in assumptions about what such a system
+needs. Plain structured JSON is the more general, more reusable choice.
+
+Coding/code-aware agents being the primary design lens (§1) doesn't mean the other formats
+are deprioritized: `tabular`/`text` are fully-supported, first-class outputs for human use. The no-flag default stays `text` (§8) — a human at a terminal
+still gets a readable answer without needing to know vcrd exists to serve agents too.
+Because a human's preferred default may reasonably differ from vcrd's own default without
+that person wanting to type `--format text` on every invocation, that default should be
+overridable in one place — a config file, once one exists — rather than only
+per-invocation.
 
 ## 10. Initial Format & Verification Scope
 
@@ -515,6 +545,21 @@ phase built on the same core), and the risk-based trust-advice layer described i
   "VC-API" test harness rather than direct library calls, the resolution approach is
   deliberately deferred to a two-branch implementation spike (§15) rather than decided in
   the abstract.
+- **Differential testing** validates vcrd's own verification logic against independent
+  implementations of the same specs, rather than only against hand-written fixtures: feed
+  an identical credential/presentation to vcrd and to another implementation, and compare
+  verdicts. A disagreement is almost always a real bug in one side or the other, and the
+  disagreeing case is itself the fixture that pinpoints it — no one has to hand-derive the
+  "correct" answer the way an example-based test requires. This is what makes §6's
+  dependency-policy exclusion safe rather than isolating: interoperability is demonstrated
+  this way instead of by coupling to those libraries in `vcrd-core`'s shipped dependency
+  graph. Tools hands-on-validated this session as viable oracles: openid4vp's reference
+  wallet and verifier, a self-hosted walt.id identity instance (JWT/SD-JWT/mdoc via
+  OpenID4VCI/OpenID4VP), and the EUDI verifier-endpoint reference implementation (SD-JWT
+  VC). Two further candidates are scoped out for now rather than evaluated (§3): the
+  official W3C VC Data Model/VC-JOSE-COSE and OpenID Foundation conformance test suites,
+  and TBD's `ssi-sdk`/web5 stack. Exact harness mechanics (a dedicated workspace crate, ad
+  hoc scripts, a separate CI job) are left as an open item (§15).
 - **Negative and adversarial fixtures are a required category, not an afterthought.**
   Given vcrd's whole purpose is trust-relevant checking, "known-good credential verifies
   successfully" fixtures are only part of the test matrix. Required
@@ -713,9 +758,12 @@ the durable record — earlier in this project's discussion phase these were tra
 in-session task tool, which turned out not to persist reliably across sessions, so this
 document (not that tool) is the canonical source going forward.
 
-1. **Evaluate the [`ssi`](https://crates.io/crates/ssi) crate more deeply** during JSON-LD/Data Integrity implementation —
-   is any part of it worth depending on, versus the default plan of implementing
-   domain-specific format/spec logic in-house (§6's dependency policy)?
+1. ~~Evaluate the [`ssi`](https://crates.io/crates/ssi) crate more deeply during
+   JSON-LD/Data Integrity implementation — is any part of it worth depending on?~~ —
+   **decided**: no, never as a direct production dependency of `vcrd-core`. See §6's
+   dependency policy for the full rationale (interop via differential testing, not
+   coupling to a company-backed library) and §11 for the resulting differential-testing
+   strategy.
 2. **VC-API vector-consumption spike**: build two throwaway branches when implementing
    JSON-LD/Data Integrity — (a) extract W3C VC-API-shaped test vectors and adapt them into
    direct calls against `vcrd-core`, versus (b) a minimal local VC-API HTTP shim so the
