@@ -167,7 +167,13 @@ contributor-acquisition strategy, distinct from and prioritized above the repo-h
 (§13 already covers CONTRIBUTING.md/templates/CoC) that are necessary but insufficient on their
 own.
 
-### 12. Final consistency pass
+### 12. Style checks
+
+* Remove words or phrases like "authentic, real, genuine, or to be honest" that seek to give the reader an emotional feeling of trust without significantly adding to the technical content.
+* Remove words like "full stop" or "period" that emphasize a point without adding to the technical content.
+* Ensure that REQUIREMENTS.md does not refer internally to previous versions of itself. It should read as a specification for what should be built in the future, not as a conversation over time about what should be built in the future.
+
+### 13. Final consistency pass
 Re-read the full revised REQUIREMENTS.md against REQUIREMENTS-REVIEW.md §4's seven-item
 recommendation summary to confirm each is addressed or explicitly deferred with reasoning; fix
 cross-references and section numbers disturbed by the new Related Work section from step 1.

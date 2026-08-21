@@ -370,10 +370,28 @@ crates don't repeat this metadata.
   presentation logic. Produces the installed `vcrd` binary (crate name and binary name can
   differ, the same way the `ripgrep` crate produces the `rg` binary, if that turns out to
   be convenient).
-- **Deferred, future workspace members**: `vcrd-net` (network/tcpdump-style capture) and
-  `vcrd-wasm`/`vcrd-browser` (a browser extension, most likely a thin shell around a
-  WASM-compiled `vcrd-core`). Both are additional consumers of `vcrd-core` as a library,
-  not modifications to it — reinforcing why core must stay origin-agnostic (§9).
+- **Deferred, future workspace members**: `vcrd-live-verify` (the mobile-wallet
+  live-verifier feature, detailed in §9) and `vcrd-wasm`/`vcrd-browser` (a browser
+  extension, most likely a thin shell around a WASM-compiled `vcrd-core`). Both are
+  additional consumers of `vcrd-core` as a library, not modifications to it — reinforcing
+  why core must stay origin-agnostic (§9). `vcrd-live-verify` implements the OpenID4VP-style
+  protocol machinery once, with two role-specific entry points built on it — a verifier
+  role and a wallet role (§9); exact CLI verb/subcommand naming for each is left as an
+  implementation-time decision (§15).
+
+  A tcpdump-style network-capture crate (sometimes called `vcrd-net`) is explicitly
+  **out of scope** — not a deferred workspace member. A capture tool for
+  identity credentials is an interception tool: wiretap/lawful-intercept statutes and
+  privacy law apply, and the legitimate use case is thin, since credential exchanges
+  already ride inside TLS, meaning passive capture would mostly show ciphertext anyway.
+  The network-facing capability vcrd does offer is `vcrd-live-verify`: an
+  actively-consented protocol exchange both sides participate in — in its primary form,
+  one that vcrd itself drives on both ends (§9) — not passive traffic observation.
+
+  The signing capability the wallet role needs (§9) is exposed from `vcrd-core`
+  symmetrically to its existing verify capability — same key material, same crates,
+  mirroring how most signing-algorithm crates already implement both directions — rather
+  than duplicated inside `vcrd-live-verify`, keeping crypto logic centralized in core.
 
 **Format and proof-suite implementations live as feature-gated modules inside
 `vcrd-core`** (e.g. `jsonld`, `jwt-vc` Cargo features), not as separate per-format crates.
@@ -496,14 +514,57 @@ command instead of folded into general `--verbose`. Both of these are open items
 
 ## 9. Input/Output Modalities
 
-**Input**: files and stdin/pipes are the initial supported modalities. Network capture
-(tcpdump-style) and a browser extension are explicitly anticipated but deferred to
-separate crates (§7). A future wallet-interaction feature would add a
+**Input**: files and stdin/pipes are the initial supported modalities. A browser
+extension and the mobile-wallet live-verifier feature below are explicitly anticipated
+but deferred to separate crates (§7). The live-verifier feature specifically adds a
 network input modality — receiving a presentation over a local listener, per the
 network taxonomy in §6 — but that's a `vcrd-cli`/future-crate concern, not a change to
 this contract:
 `vcrd-core`'s functions take bytes in and don't know or care where those bytes came from —
 that's what lets every current and future frontend share the same core logic.
+
+**Mobile-wallet live-verifier feature.** Rather than only reading a presentation someone
+already has in hand, this feature has vcrd actively request one from a wallet over a live
+protocol exchange.
+
+*Primary path, fully CLI-driven.* `vcrd` plays both roles: a verifier (opens a local
+listener, tier (b) §6, gated by `--allow-inbound-network`) and a scriptable wallet-side
+counterpart (connects to that listener, tier (c) outbound from the wallet role, gated by
+`--allow-outbound-network`) — both invoked from the command line, no external device
+needed. Worth stating explicitly: even though nothing leaves the local machine, both
+opt-in flags still apply, one per role — §6 doesn't carve out a "trusted because it's
+loopback" exception, and this feature is no different. The wallet-side counterpart
+presents one of vcrd's own curated example credentials (§11), signing a fresh
+holder-binding proof over the verifier's actual request nonce on every run rather than
+replaying a canned response — a genuinely spec-compliant round trip, and a
+self-contained way to validate vcrd's own protocol implementation with no external
+dependency at all.
+
+*Secondary path, built after the primary one works.* Rendering the verifier's request as
+a QR code and accepting a response from a real external mobile wallet — the
+interop-facing form of the same feature, worth building once the protocol mechanics are
+proven against vcrd's own wallet-side counterpart first, not before.
+
+*Protocol.* Follows the OpenID4VP family of specs, the dominant real-world mechanism for
+this exchange. Per §6's dependency policy, vcrd implements this against the published
+spec itself rather than depending on an existing OpenID4VP library; independent
+implementations are used only as differential-testing oracles (§3, §11).
+
+*Format scope.* A CA-issued mobile driver's license (mDL) is the feature's motivating
+real-world example, but the feature ships independent of mdoc: it works against
+whichever credential formats vcrd already supports (§10). Actual mDL presentations wait
+on mdoc format support landing, unchanged by this feature's scoping.
+
+*Trust boundary.* Cryptographically verifying the wallet's holder-binding proof and the
+issuer's signature (tiers 1–3, §4) is not the same as knowing the issuer is a real,
+accredited authority — for a government-grade credential like an mDL, that's gated by an
+ecosystem accreditation/trust-list scheme, not by anything a valid signature alone
+establishes. Per §1/§4's tier-4 trust-evaluation boundary, the live-verifier feature
+performs verification, not trust evaluation. Consistent
+with §6's dependency-injection principle, vcrd doesn't ship or maintain a trust list — a
+caller who wants issuer-accreditation checking supplies their own trust anchor as
+explicit input, the same way DID resolution and `@context` loading are already
+injectable rather than hardcoded.
 
 **Output**: structured JSON, well-formatted (tabular where appropriate, via `tabled`, §8)
 human-readable text, and unformatted/plain text are the three initial formats. JSON deliberately doubles as the
@@ -558,7 +619,10 @@ Noted but deprioritized for the initial implementation: **mdoc/mDL** (ISO 18013-
 uses a different serialization and proof paradigm entirely (CBOR/COSE, plus
 device-engagement and session-transcript mechanics) from the two JSON-based formats
 prioritized above, so it isn't an incremental step from either and is deferred as a
-scope decision rather than a blocked one.
+scope decision rather than a blocked one. This deferral also bounds the mobile-wallet
+live-verifier feature's (§9) initial scope: a CA mDL is that feature's motivating
+real-world example, but actual mDL presentations aren't handled until mdoc format
+support lands here.
 
 **DID resolution** starts with offline-resolvable methods (`did:key`, embedded JWKs);
 network-dependent resolution (`did:web` and similar) is available only with the
@@ -606,7 +670,10 @@ phase built on the same core), and the risk-based trust-advice layer described i
   seed corpus below, not the shipped issuance feature §10 defers, and not a use of the
   ecosystem libraries §6/§14 already decided against depending on directly; it needs no
   workspace member of its own, unlike `fuzz/`, and lives alongside vcrd-core's existing
-  test suite instead.
+  test suite instead. This helper reuses the signing capability `vcrd-core` exposes for
+  the mobile-wallet live-verifier feature's wallet-side counterpart (§9, §7) rather than
+  implementing a separate scheme; the helper itself stays dev-only and never-shipped, per
+  the description above.
 - **Differential testing** validates vcrd's own verification logic against independent
   implementations of the same specs, rather than only against hand-written fixtures: feed
   an identical credential/presentation to vcrd and to another implementation, and compare
@@ -686,9 +753,15 @@ is further along):**
   safety (addressed largely for free by Rust plus the `#![forbid(unsafe_code)]` policy).
 - **Explicitly deferred, named so the gap is deliberate rather than accidental**:
   network-facing attack scenarios (out of scope while network access stays opt-in and
-  off by default); secret-key handling and storage (verification primarily operates on
-  public key material; this becomes relevant once issuance — §10 — enters scope, since
-  that involves private signing keys).
+  off by default); most secret-key handling and storage. Verification primarily operates
+  on public key material, and general issuance (§10, which would need durable private
+  signing keys) is implemented in a later phase. The mobile-wallet live-verifier
+  feature's wallet-side counterpart (§9) does need a narrowly-scoped runtime signing
+  capability: a holder-binding proof over an existing credential's presentation, not a
+  new credential — distinct from general issuance. Scoped minimally: that counterpart
+  generates an ephemeral holder keypair fresh per invocation rather than persisting one,
+  so no secret-storage-at-rest subsystem is needed. Persistent keys, at-rest encryption,
+  and HSM/KMS integration remain deferred until general issuance (§10) enters scope.
 
 **Supply chain**: `cargo-audit` and `cargo-deny` run in CI, checking dependencies against
 the RustSec advisory database and enforcing license compliance. `Cargo.lock` is committed
@@ -860,3 +933,14 @@ document (not that tool) is the canonical source going forward.
     old repo was deleted and a new `vcrd` repo created directly.
 14. **Set up `cargo-llvm-cov` coverage tracking** with the ratchet (not hard-gate) policy
     described in §11, and document that policy in `CONTRIBUTING.md`.
+15. **Scope the mobile-wallet live-verifier feature's initial OpenID4VP protocol
+    coverage** (which request/response variants, response-mode/encryption handling,
+    credential-query mechanism) and its CLI verb/subcommand naming for the verifier and
+    wallet roles, once implementation starts (§9, §7).
+16. **Design the live-verifier feature's trust-anchor input mechanism** — how a caller
+    supplies their own root-of-trust/accreditation material for issuer trust checks
+    (§9) — a flag-vs-config-file question deferred to implementation time, consistent
+    with §8's existing config-file precedent.
+17. **Design the secondary QR-code + external-wallet path** for the live-verifier
+    feature (§9), once the primary self-contained round trip (vcrd playing both roles)
+    is implemented and working.
