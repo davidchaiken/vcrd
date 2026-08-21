@@ -580,6 +580,27 @@ phase built on the same core), and the risk-based trust-advice layer described i
   "VC-API" test harness rather than direct library calls, the resolution approach is
   deliberately deferred to a two-branch implementation spike (§15) rather than decided in
   the abstract.
+- **Curated example library**, separate from the vendored fixtures above: vcrd maintains
+  its own small set of hand-authored example credentials — one canonical, self-signed,
+  offline-verifiable credential per supported proof format, expanding as format support
+  grows (§10). Unlike the vendored conformance fixtures, these are vcrd's own original
+  content, so no redistribution-rights tracking is needed; they're covered by the
+  project's own license like any other repo file. The library serves double duty: it
+  supplies the known-good positive fixtures the test suite exercises, and it's what
+  README/quickstart documentation points to directly for a first successful `vcrd verify`
+  run, rather than embedding illustrative credential JSON inline in prose — keeping docs
+  and tests pointed at the same local examples. Signing these examples
+  doesn't reopen §10's issuing-is-out-of-scope stance: they're static files, committed to
+  the repo rather than regenerated at test time, produced by a dev/test-only helper
+  (`#[cfg(test)]`-gated or under `dev-dependencies`, never shipped in the `vcrd-core`
+  library artifact or the `vcrd` binary) that signs using the same signing-algorithm
+  crates vcrd-core already depends on for verification — most such crates implement both
+  `Sign` and `Verify` from the same key material, so no new dependency is needed. This is
+  internal repo tooling, the same category as the `criterion` benchmarks or the `fuzz/`
+  seed corpus below, not the shipped issuance feature §10 defers, and not a use of the
+  ecosystem libraries §6/§14 already decided against depending on directly; it needs no
+  workspace member of its own, unlike `fuzz/`, and lives alongside vcrd-core's existing
+  test suite instead.
 - **Differential testing** validates vcrd's own verification logic against independent
   implementations of the same specs, rather than only against hand-written fixtures: feed
   an identical credential/presentation to vcrd and to another implementation, and compare
