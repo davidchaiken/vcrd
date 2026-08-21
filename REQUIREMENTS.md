@@ -263,10 +263,22 @@ These are the rules that keep the rest of the design coherent. Several of them e
 specifically because vcrd is meant to be consumed by more than one kind of frontend
 (§7) — a rule that only works for the CLI isn't really a vcrd-core rule.
 
-- **Read-only, no-network by default.** Any operation that would write data or make a
-  network call requires an explicit, per-operation opt-in. This is the tool's most basic
-  safety property and should be true even for a first-time user who reads no
-  documentation.
+- **Read-only, no-network by default, with options for inbound and outbound requests.** Any
+  operation that would write data or touch the network requires an explicit, per-operation
+  opt-in.
+  - **(a) Fully offline** — parse, validate, and offline verify (self-contained key
+    material). This is the default: true especially for a first-time user who reads no
+    documentation.
+  - **(b) Opens a local listener, no outbound call** — e.g. standing up a local server to
+    receive a wallet-interaction protocol message. Gated by its own opt-in,
+    `--allow-inbound-network` (§8), separate from (c). Inbound exposure — something else
+    connecting to a port vcrd opened — is a materially different risk shape than vcrd
+    dialing out, so it doesn't belong lumped under the same flag. Note: making
+    a local listener externally reachable is the user's own separate infrastructure
+    decision (running `ngrok`, configuring a port-forward), not something vcrd does on
+    their behalf.
+  - **(c) Requires external network calls** — outbound resolution (`did:web`,
+    a remotely-hosted revocation list — gated by `--allow-outbound-network`, §8).
 - **Flags over prompts — every capability is reachable non-interactively.** No `vcrd`
   command ever blocks waiting on interactive input to do its job; every option is reachable
   via a flag, environment variable, or config value, in a single non-interactive
@@ -409,8 +421,10 @@ panics" is only useful if panics were supposed to be impossible.
   - `validate` remains a real `vcrd-core` capability (§4); it's just not exposed as its
     own top-level verb today. Nothing rules out adding a flag or subcommand for
     validate-only output later if a concrete use case for it shows up.
-- `vcrd verify <file>` — offline-only unless `--allow-network` is passed; this flag is
-  global, not per-subcommand, so it can't be missed.
+- `vcrd verify <file>` — offline-only unless `--allow-outbound-network` is allowed (§6); this flag is global, not per-subcommand, so it can't be missed.
+  `--allow-inbound-network` is the separate opt-in for operations that open a local
+  listener without dialing out (§6) — distinct because inbound exposure is a different risk
+  shape than outbound resolution, not a subset of it.
 - `vcrd formats` / `vcrd suites` — list supported credential formats and proof suites
   (discoverable capability probing, useful for both humans and agents).
 
@@ -425,6 +439,24 @@ scripting that only cares whether something passed) and `--format json|text|plai
 stderr carries diagnostics and progress. Distinct exit codes distinguish parse failure,
 validation failure, and verification failure, so a calling script can branch on which
 kind of failure occurred rather than just "something went wrong."
+
+**Tabular rendering** for the `text` format uses the [`tabled`](https://crates.io/crates/tabled)
+crate, chosen over the more-downloaded `comfy-table` alternative: `tabled`'s
+`#[derive(Tabled)]` approach generates a table directly from a struct, which scales better
+across vcrd's eventual breadth of format-specific structs (§3, §10) — many credential
+formats and proof suites, each with its own shape to render — than hand-building rows
+per format the way `comfy-table` requires. This choice is scoped to `text` rendering only;
+JSON output stays `serde_json`, independent of whatever renders `text`.
+
+**Configuration file** lets any of the above become a permanent default instead of a
+per-invocation flag — a human who always wants `--format json`, or who always works
+against `did:web`-resolving issuers and is tired of retyping `--allow-outbound-network`, sets it
+once. A single user-global TOML file (standard per-OS config directory, e.g. via the
+`directories` crate convention — no project-local/repo-local layer for now) holds
+defaults for `--format`, `--allow-outbound-network`, and `--allow-inbound-network`. Precedence is
+flag > environment variable > config file > built-in default, and parsing this file is a
+`vcrd-cli` concern, not a `vcrd-core` one — consistent with core doing no ambient I/O or
+environment-variable reads of its own (§6, §11).
 
 **`clap`** (derive macros) handles argument parsing, `--help` generation, shell completion
 generation, and man-page generation (`clap_mangen`) — all close to free once the argument
@@ -466,12 +498,15 @@ command instead of folded into general `--verbose`. Both of these are open items
 
 **Input**: files and stdin/pipes are the initial supported modalities. Network capture
 (tcpdump-style) and a browser extension are explicitly anticipated but deferred to
-separate crates (§7). `vcrd-core`'s functions take bytes in and don't know or care where
-those bytes came from — that's what lets every current and future frontend share the same
-core logic.
+separate crates (§7). A future wallet-interaction feature would add a
+network input modality — receiving a presentation over a local listener, per the
+network taxonomy in §6 — but that's a `vcrd-cli`/future-crate concern, not a change to
+this contract:
+`vcrd-core`'s functions take bytes in and don't know or care where those bytes came from —
+that's what lets every current and future frontend share the same core logic.
 
-**Output**: structured JSON, well-formatted (probably tabular) human-readable text, and unformatted/plain
-text are the three initial formats. JSON deliberately doubles as the
+**Output**: structured JSON, well-formatted (tabular where appropriate, via `tabled`, §8)
+human-readable text, and unformatted/plain text are the three initial formats. JSON deliberately doubles as the
 agent-facing format — there is no separate "agent mode" output, and no natural-language
 summarization baked into vcrd itself. This is intentional: the future risk/trust-advice
 tool (§1) is meant to be built on top of vcrd, and vcrd staying unopinionated about that
@@ -482,9 +517,9 @@ Coding/code-aware agents being the primary design lens (§1) doesn't mean the ot
 are deprioritized: `tabular`/`text` are fully-supported, first-class outputs for human use. The no-flag default stays `text` (§8) — a human at a terminal
 still gets a readable answer without needing to know vcrd exists to serve agents too.
 Because a human's preferred default may reasonably differ from vcrd's own default without
-that person wanting to type `--format text` on every invocation, that default should be
-overridable in one place — a config file, once one exists — rather than only
-per-invocation.
+that person wanting to type `--format text` on every invocation, that default is
+overridable in one place, permanently, via the configuration file described in §8, rather
+than only per-invocation.
 
 ## 10. Initial Format & Verification Scope
 
@@ -521,7 +556,7 @@ be a valuable use case for designing and implementing a solution for external pr
 
 **DID resolution** starts with offline-resolvable methods (`did:key`, embedded JWKs);
 network-dependent resolution (`did:web` and similar) is available only with the
-`--allow-network` opt-in described in §8.
+`--allow-outbound-network` opt-in described in §8.
 
 **Explicitly out of scope for this phase**: issuing and editing credentials (a later
 phase built on the same core), and the risk-based trust-advice layer described in §1
