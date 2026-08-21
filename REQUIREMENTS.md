@@ -523,11 +523,16 @@ than only per-invocation.
 
 ## 10. Initial Format & Verification Scope
 
-Initial format support: **JSON-LD with Data Integrity proofs**, plus **one JWT-based VC
-format** — chosen as the starting pair specifically because they keep the first
-implementation understandable and testable, not because they're the only formats vcrd
-cares about. (The exact JWT-based format to implement first is an implementation-time
-decision, not pinned here.)
+Initial format support: **one JWT-based VC format**, plus **JSON-LD with Data Integrity
+proofs** — the JWT-based format leads because it starts on the JOSE verification path,
+which is materially less initial implementation surface than RDF canonicalization
+(RDFC-1.0, required for JSON-LD Data Integrity) — a substantial, subtle machine in its
+own right. This is a sequencing choice, not a scope one: JSON-LD + Data Integrity is
+still committed as the second format in this same initial phase, not deferred
+indefinitely. (The exact JWT-based format to implement first is an implementation-time
+decision, not pinned here — the intent is to start with whichever shape is easiest to
+implement, then follow quickly with SD-JWT VC's fuller selective-disclosure
+functionality, below.)
 
 **Presentation support (§2) rides along with each credential format, rather than being a
 separate, indefinitely-deferred feature** — per format, the plan is to land credential
@@ -537,7 +542,7 @@ if presentation support for a given format turns out to be disproportionately co
 relative to its credential support, that's reason to revisit scope for that format
 specifically, not a reason to abandon the general principle.
 
-Near/medium-term roadmap: [**SD-JWT VC**](https://datatracker.ietf.org/doc/draft-ietf-oauth-sd-jwt-vc/),
+Near-term roadmap: [**SD-JWT VC**](https://datatracker.ietf.org/doc/draft-ietf-oauth-sd-jwt-vc/),
 given its real-world adoption in wallet ecosystems.
 
 Named future direction, deliberately not built first: **AnonCreds and BBS+ signatures,
@@ -549,10 +554,11 @@ before it's implemented. Relevant open-source prior art in Rust: Hyperledger's
 `proof-system`/crypto crates, which already implement BBS+ with bulletproofs-style range
 proofs.
 
-Noted but deprioritized for the initial implementation: **mdoc/mDL** (ISO 18013-5) —
-partly because official ISO test vectors are not freely/openly licensed, which would complicate
-building an open conformance suite around it the way the W3C-based formats allow. This could
-be a valuable use case for designing and implementing a solution for external proprietary code.
+Noted but deprioritized for the initial implementation: **mdoc/mDL** (ISO 18013-5) — it
+uses a different serialization and proof paradigm entirely (CBOR/COSE, plus
+device-engagement and session-transcript mechanics) from the two JSON-based formats
+prioritized above, so it isn't an incremental step from either and is deferred as a
+scope decision rather than a blocked one.
 
 **DID resolution** starts with offline-resolvable methods (`did:key`, embedded JWKs);
 network-dependent resolution (`did:web` and similar) is available only with the
