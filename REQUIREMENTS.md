@@ -316,6 +316,18 @@ specifically because vcrd is meant to be consumed by more than one kind of front
   useful parts of it) and the specific validation failure reason(s). This is what lets
   `vcrd inspect` (§8) give a genuinely useful answer even when a credential is broken,
   instead of an all-or-nothing failure.
+- **Diagnosability: a failure pins down which pipeline tier failed, whose side it's on,
+  and why.** This is one level more specific than graduated success above: it's not
+  enough for a caller to see *that* a stage failed, they should get enough structure to
+  act on the failure without hand-decoding tokens or cross-referencing spec text
+  themselves. This matters most acutely for the mobile-wallet live-verifier feature (§9),
+  where "whose side it's on" is what tells a caller whether they've hit a vcrd bug or a
+  counterparty's non-conformance during a live protocol exchange. Related but distinct: a
+  verify result also needs to enumerate what it did *not* evaluate (revocation, context
+  resolution, holder-binding) with the same prominence as what passed (§12) — that's
+  about disclosing scope, diagnosability is about localizing why a stage failed.
+  Diagnosability is itself a testable property, not just an aspiration: tests assert on
+  specific structured error variants/fields (§11), not merely that some error occurred.
 - **No `unsafe` code.** `#![forbid(unsafe_code)]` in both `vcrd-core` and `vcrd-cli`.
   There's no principled reason this domain logic needs it, and forbidding it is a
   compile-time guarantee rather than a review habit.
@@ -595,6 +607,17 @@ decision, not pinned here — the intent is to start with whichever shape is eas
 implement, then follow quickly with SD-JWT VC's fuller selective-disclosure
 functionality, below.)
 
+**JOSE algorithm coverage is a first-class requirement of the JWT-based path, not an
+implementation detail left to whichever crate is picked.** Algorithm support should be as
+broad as practical across the standard JOSE signature algorithm set, not just the common
+ES256/RS256 subset, and an algorithm outside what's supported must fail **by name** —
+naming the unsupported algorithm and what is supported — rather than surfacing as an
+opaque parse error (§6's diagnosability principle applied concretely here). This is
+directly evidenced, not aspirational: EUDI's real-world default signing algorithm
+(ES512/P-521) turned out to be unsupported by two of three Rust JOSE crates evaluated
+this session, blocking an otherwise-clean interop round trip outright with no indication
+of why.
+
 **Presentation support (§2) rides along with each credential format, rather than being a
 separate, indefinitely-deferred feature** — per format, the plan is to land credential
 (VC) support first and presentation (VP) support for that same format as a follow-on,
@@ -699,7 +722,12 @@ phase built on the same core), and the risk-based trust-advice layer described i
   public key as the secret, or accepting `alg: none`). This class of bug has repeatedly
   and concretely affected real JWT/JOSE implementations and needs to be a named test
   category from the start, since vcrd implements verification itself rather than wrapping
-  an already-hardened library.
+  an already-hardened library. Alongside it, **unsupported-algorithm rejection** (§10) is
+  its own required fixture category: a credential signed with an algorithm outside vcrd's
+  supported set must be asserted against the specific by-name error (naming the algorithm
+  and what is supported), not just a generic verification failure — the same fuzz corpus,
+  property tests, and differential-testing oracles below apply to it, no separate testing
+  machinery is needed.
 - **Property-based tests** (`proptest`) are included from the start alongside unit tests
   — round-trip (`parse(serialize(x)) == x`) and invariant (canonicalization idempotency)
   checks catch a different class of bug than example-based tests and are cheap to add as
@@ -944,3 +972,8 @@ document (not that tool) is the canonical source going forward.
 17. **Design the secondary QR-code + external-wallet path** for the live-verifier
     feature (§9), once the primary self-contained round trip (vcrd playing both roles)
     is implemented and working.
+18. **Choose the JOSE dependency** against §10's algorithm-coverage requirement. Data
+    point on record from this session's evaluation: `josekit` was confirmed to have full
+    ECDSA-family algorithm coverage (including ES512/P-521) on paper, though its maturity
+    wasn't vetted; `jsonwebtoken` and `ssi-jwk` both stop at ES384. Not a decision now —
+    the actual selection happens when the JWT-based format lands.
