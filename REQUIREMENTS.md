@@ -367,7 +367,14 @@ specifically because vcrd is meant to be consumed by more than one kind of front
   limits. A timeout is a symptom-level control — it doesn't bound the resources consumed
   before it fires, and it's a sign the underlying complexity isn't actually understood.
   Those operational ceilings are left to external sandboxes or process supervisors, which
-  already solve this well.
+  already solve this well. One path deserves naming explicitly: RDF canonicalization
+  (RDFC-1.0, required for JSON-LD Data Integrity, §10) has pathological "poison graph"
+  inputs whose canonicalization cost is super-polynomial in graph structure, not linear in
+  input bytes — the one place a small input can defeat the "core is fast by construction"
+  principle above. The canonicalization step therefore enforces its own explicit
+  iteration/permutation budget, failing closed (reporting a bounded-out condition, not
+  silently returning a wrong or partial canonical form) rather than relying on the general
+  size/depth/iteration limits above to catch it incidentally.
 
 ## 7. Architecture / Workspace Layout
 
@@ -469,6 +476,30 @@ scripting that only cares whether something passed) and `--format json|text|plai
 stderr carries diagnostics and progress. Distinct exit codes distinguish parse failure,
 validation failure, and verification failure, so a calling script can branch on which
 kind of failure occurred rather than just "something went wrong."
+
+**Redaction-aware output by default; `--unsafe` opts out.** vcrd's own output is a leak
+surface: printing full claim sets — including PII and, for SD-JWT, disclosed values —
+into terminals, CI logs, and agent transcripts is exactly the exposure a careful user
+already avoids when handling live credentials by hand. Every output format (`text`,
+`json`, `plain`) redacts claim *values* by default, while still showing claim *names*,
+document structure, and all non-claim metadata (issuer, type, dates, algorithm/proof-suite
+names) in full — none of that is sensitive, and all of it is needed for diagnosis.
+When it's useful and practical, a redacted
+value is replaced by a deterministic hash (truncated to a short, human-scannable form)
+rather than elided to nothing, so a caller can tell whether the same field matches or
+differs across two credentials/transactions without ever seeing the plaintext — the
+debugging need this default serves, not just a privacy stance. An unsalted hash doesn't
+meaningfully protect a low-entropy field (a boolean, a small enum, a birth year), so
+these kinds of fields should be masked instead of hashed.
+`--unsafe` (global, same family as the network opt-in flags,
+§6) disables redaction and prints full cleartext claim values; using it triggers both a
+human-visible stderr warning banner and a structured marker in the result itself (e.g. a
+top-level `unsafe_cleartext` field in JSON output), so a script or agent consuming
+stdout — not just a human reading a terminal — can detect that the output is unredacted
+and handle it accordingly (e.g. refuse to persist it into a shared log store).
+`--verbose` is orthogonal to this: it raises diagnostic detail (which pipeline tier,
+timing, structural info), never claim-value cleartext — only `--unsafe` crosses that
+line.
 
 **Tabular rendering** for the `text` format uses the [`tabled`](https://crates.io/crates/tabled)
 crate, chosen over the more-downloaded `comfy-table` alternative: `tabled`'s
@@ -581,7 +612,10 @@ injectable rather than hardcoded.
 **Output**: structured JSON, well-formatted (tabular where appropriate, via `tabled`, §8)
 human-readable text, and unformatted/plain text are the three initial formats. JSON deliberately doubles as the
 agent-facing format — there is no separate "agent mode" output, and no natural-language
-summarization baked into vcrd itself. This is intentional: the future risk/trust-advice
+summarization baked into vcrd itself. Redaction-aware output (§8) applies uniformly
+across all three formats, JSON included: since JSON is the agent/CI-log-facing default,
+exempting it from redaction would leave exactly the leak surface that default exists to
+close. This is intentional: the future risk/trust-advice
 tool (§1) is meant to be built on top of vcrd, and vcrd staying unopinionated about that
 higher-level use case means it shouldn't bake in assumptions about what such a system
 needs. Plain structured JSON is the more general, more reusable choice.
@@ -625,6 +659,16 @@ in a separate PR rather than requiring both together. This is a provisional comm
 if presentation support for a given format turns out to be disproportionately complex
 relative to its credential support, that's reason to revisit scope for that format
 specifically, not a reason to abandon the general principle.
+
+**Presentation verification needs protocol inputs, not just cryptography.** A VP's
+holder-binding proof is only meaningful when checked against a verifier-supplied
+challenge/nonce and domain/audience — without that check, a replayed presentation
+verifies perfectly well cryptographically. `verify` on a VP therefore takes optional
+expected-challenge/expected-domain parameters in v1 of the API, not retrofitted later:
+changing the result schema after it's load-bearing would be disruptive. When those
+parameters are absent, the result reports "holder-proof cryptographically valid,
+replay-binding not evaluated" rather than a bare pass, per §6's diagnosability and
+non-checks-enumeration principles.
 
 Near-term roadmap: [**SD-JWT VC**](https://datatracker.ietf.org/doc/draft-ietf-oauth-sd-jwt-vc/),
 given its real-world adoption in wallet ecosystems.
@@ -775,13 +819,33 @@ is further along):**
   a malformed or adversarially-crafted credential file. vcrd's core purpose — checking
   credentials from parties that aren't trusted — makes this a realistic threat even for a
   purely local, offline CLI invocation, not a hypothetical one.
-- **In scope now**: parsing, validation, and verification correctness (including the
-  algorithm-confusion and malformed-input categories named in §11); resource exhaustion
-  via oversized or pathologically-structured input (§6's structural limits); memory
-  safety (addressed largely for free by Rust plus the `#![forbid(unsafe_code)]` policy).
-- **Explicitly deferred, named so the gap is deliberate rather than accidental**:
-  network-facing attack scenarios (out of scope while network access stays opt-in and
-  off by default); most secret-key handling and storage. Verification primarily operates
+- **In scope**:
+  - Parsing, validation, and verification correctness (including the algorithm-confusion
+    and malformed-input categories named in §11).
+  - **JSON-LD context substitution.** In JSON-LD credentials, `@context` controls the
+    *meaning* of every term — a signature can remain valid over canonicalized RDF while a
+    manipulated or attacker-hosted context silently changes what the claims mean.
+    Verification against an unpinned or unresolvable context is a distinct,
+    loudly-reported condition, never a silent fetch-and-proceed, even under
+    `--allow-outbound-network` — surfaced with the same prominence as an
+    algorithm-confusion failure, not folded into a generic parse/validate error. The
+    vendored context cache and injectable loader trait (§6) are the mechanism; this is
+    the policy governing what happens when a context falls outside that cache.
+  - Resource exhaustion via oversized or pathologically-structured input, including the
+    RDF-canonicalization iteration/permutation budget (§6's structural limits).
+  - Memory safety (addressed largely for free by Rust plus the
+    `#![forbid(unsafe_code)]` policy).
+- **Result-contract non-checks.** Per §6's diagnosability principle, a `verify` result
+  names what it did *not* evaluate — revocation/status-checking, context resolution
+  beyond the pinned cache, and holder-binding on presentations (§10) — with the same
+  prominence as what passed. This is what prevents "verified: true" from being misread as
+  "trustworthy" (§1's non-goal), the false-assurance failure mode this threat model exists
+  to guard against.
+- **Explicitly deferred, named so the gap is deliberate rather than accidental**: the
+  broader network-facing threat model (out of scope while network access stays opt-in
+  and off by default) — except for the minimum hardening bar below, which can't wait,
+  since tier-(c) network calls (`did:web`, remote revocation lists, §6) are already in
+  initial scope; most secret-key handling and storage. Verification primarily operates
   on public key material, and general issuance (§10, which would need durable private
   signing keys) is implemented in a later phase. The mobile-wallet live-verifier
   feature's wallet-side counterpart (§9) does need a narrowly-scoped runtime signing
@@ -790,6 +854,34 @@ is further along):**
   generates an ephemeral holder keypair fresh per invocation rather than persisting one,
   so no secret-storage-at-rest subsystem is needed. Persistent keys, at-rest encryption,
   and HSM/KMS integration remain deferred until general issuance (§10) enters scope.
+
+**Network minimum hardening bar**, scoped to tier-(c) external network calls (§6) —
+`did:web` resolution and remotely-hosted revocation/status lists — since these are
+already in initial scope even though the broader network threat model is deferred above:
+
+- HTTPS-only with certificate validation; no flag disables this. Testability doesn't
+  require weakening it: the client's trust anchor is itself injectable, mirroring §6's
+  DID-resolver/context-loader injection pattern — defaulting to the system trust store
+  in production, letting tests supply an ephemeral, in-process test CA (e.g. via the
+  `rcgen` crate) rather than trusting a modified system/browser trust store or disabling
+  validation.
+- Response size caps and a bounded redirect count, reusing §6's structural-limits
+  principle rather than inventing a separate mechanism.
+- An SSRF stance for `did:web` resolution: the *resolved* socket address, not the
+  hostname string, is checked before connecting, and a resolution landing on a
+  link-local, private, or loopback range is refused by default. This is a real concern
+  the moment vcrd runs inside CI or server-side tooling, where an attacker-supplied
+  `did:web` value could otherwise be pointed at an internal host or a cloud metadata
+  endpoint.
+- **Loopback carve-out, scoped narrowly.** The mobile-wallet live-verifier's primary path
+  (§9, §10) is a fully local round trip between vcrd's own two roles on one machine — no
+  network hop exists for a MITM to sit on, so HTTPS-only doesn't protect against anything
+  real there. That path is exempt from this bar (plain HTTP over loopback is fine,
+  precedented by RFC 8252's native-app loopback-redirect pattern), but the exemption is
+  keyed off the same resolved-socket-address check as the SSRF stance above — an actual
+  loopback address, verified at connection time — not a hostname that merely claims to be
+  `localhost`. This keeps the carve-out from doubling as a bypass for the SSRF stance it
+  sits next to.
 
 **Supply chain**: `cargo-audit` and `cargo-deny` run in CI, checking dependencies against
 the RustSec advisory database and enforcing license compliance. `Cargo.lock` is committed
@@ -811,7 +903,12 @@ selection-time policy, not a task to track before any crate has actually been pi
 private security advisory feature, avoiding separate email infrastructure), an honest
 best-effort/pre-1.0 response expectation rather than an SLA that can't be backed, a
 "supported: main branch only" statement while pre-1.0, and a pointer to the threat model
-above.
+above. It also carries a plain-language reliance/liability stance: people will make real
+decisions based on vcrd's output, and the MIT/Apache warranty disclaimers cover only the
+legal floor, not the practical one — so `SECURITY.md` states directly that vcrd is
+pre-1.0 and not to be relied on for production trust decisions. This reinforces §1's
+existing non-goal (vcrd reports facts, trust evaluation is a separate future layer)
+rather than duplicating it — that non-goal is about scope, this is about maturity.
 
 **GitHub Actions / CI hardening**, adopted immediately even while the project is
 solo-maintained, since retrofitting these habits after bad patterns are established (or
@@ -883,6 +980,18 @@ after an incident) is far more painful than starting clean:
 Kept deliberately light while the project is solo-maintained — the right frame is "rules
 the maintainer already follows, written down now so they apply to any future
 contributor," not a heavyweight process built in advance of needing one.
+
+**Community presence is the primary contributor-acquisition strategy — the repo-hygiene
+items below are necessary but insufficient on their own.** A polished `CONTRIBUTING.md`
+and issue templates only help a contributor who has already found the project; they
+don't manufacture discovery. The higher-leverage path is showing up where the identity
+ecosystem already congregates: participating in the W3C Verifiable Credentials Working
+Group / Credentials Community Group, registering vcrd against the official W3C VC test
+suites (also a candidate differential-testing oracle, §3, §11), taking part in
+interop events and plugfests, and filing issues against the specs themselves when
+implementation surfaces a real ambiguity. That's where vcrd's actual target audience —
+other implementers, tool maintainers, the standards community — looks for tools worth
+trying, not the repo's own issue tracker.
 
 - **`CONTRIBUTING.md`** covers: local build/test commands; the PR workflow (short-lived
   branch off `main`); a pointer to the trait-based extension points in `vcrd-core`
