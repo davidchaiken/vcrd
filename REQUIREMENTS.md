@@ -650,6 +650,23 @@ directly evidenced, not aspirational: EUDI's real-world default signing algorith
 (ES512/P-521) turned out to be unsupported by two of three Rust JOSE crates evaluated,
 blocking an otherwise-clean interop round trip outright with no indication of why.
 
+**The caller, not the credential, decides which algorithms verification accepts.** Broad
+algorithm support (above) is a capability statement; the set of algorithms a given
+verification will *accept* is policy, and it belongs to the caller — never to
+attacker-supplied input. `verify` therefore takes an optional algorithm-allowlist policy
+input in v1 of the API, for the same reason the presentation protocol inputs below are
+in v1: retrofitting a parameter into a load-bearing API and result schema later is
+disruptive. When the input is absent, the default is vcrd's full supported set. A
+credential signed with a supported-but-disallowed algorithm fails by name as a *policy
+rejection* — a distinct diagnosis from the unsupported-algorithm error above, since
+"vcrd can't do this" and "your policy forbids this" call for different responses from a
+caller (§6's diagnosability principle again). This is the generalization of the
+algorithm-confusion defense (§11): every attack in that class works by letting
+attacker-controlled input steer the verifier onto a weaker algorithm than the caller
+intended, and a caller-held allowlist closes the class rather than its named instances.
+The CLI exposes this as a flag with a config-file default per §8's precedence rules;
+exact naming is an implementation-time decision.
+
 **Presentation support (§2) rides along with each credential format, rather than being a
 separate, indefinitely-deferred feature** — per format, the plan is to land credential
 (VC) support first and presentation (VP) support for that same format as a follow-on,
@@ -709,8 +726,11 @@ phase built on the same core), and the risk-based trust-advice layer described i
   static fixture files drawn from the W3C VC Test Suite, the DID Test Suite, and RDF
   Dataset Canonicalization (URDNA2015/RDFC-1.0) test vectors. Each vendored fixture's
   source and license should be tracked (source repo + commit/tag), since redistribution
-  rights aren't automatically safe to assume — this matters more for any future mdoc/ISO
-  material, where paywalled standards could actually block vendoring vectors at all.
+  rights aren't automatically safe to assume. Future mdoc/ISO material falls under the
+  same rule, not a harsher one: the paywalled ISO standard doesn't block fixture
+  vendoring in practice, since permissively-licensed implementations that ship their own
+  independently-authored conformance fixtures already exist (§3) — the question there is
+  the usual provenance-tracking one above, not availability.
   Where a conformance suite (notably the W3C VC Test Suite) assumes an HTTP-based
   "VC-API" test harness rather than direct library calls, the resolution approach is
   deliberately deferred to a two-branch implementation spike (§16) rather than decided in
@@ -767,9 +787,12 @@ phase built on the same core), and the risk-based trust-advice layer described i
   an already-hardened library. Alongside it, **unsupported-algorithm rejection** (§10) is
   its own required fixture category: a credential signed with an algorithm outside vcrd's
   supported set must be asserted against the specific by-name error (naming the algorithm
-  and what is supported), not just a generic verification failure — the same fuzz corpus,
-  property tests, and differential-testing oracles below apply to it, no separate testing
-  machinery is needed.
+  and what is supported), not just a generic verification failure. So is **allowlist
+  policy rejection** (§10): a supported algorithm excluded by the caller's allowlist
+  policy must be asserted against the distinct policy-rejection variant, never conflated
+  with the unsupported case — the same fuzz corpus,
+  property tests, and differential-testing oracles below apply to both, no separate
+  testing machinery is needed.
 - **Property-based tests** (`proptest`) are included from the start alongside unit tests
   — round-trip (`parse(serialize(x)) == x`) and invariant (canonicalization idempotency)
   checks catch a different class of bug than example-based tests and are cheap to add as
@@ -1123,3 +1146,8 @@ canonical record of these open items.
     ECDSA-family algorithm coverage (including ES512/P-521) on paper, though its maturity
     wasn't vetted; `jsonwebtoken` and `ssi-jwk` both stop at ES384. Not a decision now —
     the actual selection happens when the JWT-based format lands.
+17. **Decide the default clock-skew tolerance for expiry/not-before checks.** The
+    injectable clock (§6) settles testability, not semantics: whether verification
+    applies zero tolerance or a small bounded leeway by default, and whether that
+    tolerance is configurable, is decided when the first format's verify path lands
+    (§10).
