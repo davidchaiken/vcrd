@@ -396,7 +396,7 @@ crates don't repeat this metadata.
   why core must stay origin-agnostic (§9). `vcrd-live-verify` implements the OpenID4VP-style
   protocol machinery once, with two role-specific entry points built on it — a verifier
   role and a wallet role (§9); exact CLI verb/subcommand naming for each is left as an
-  implementation-time decision (§15).
+  implementation-time decision (§16).
 
   A tcpdump-style network-capture crate (sometimes called `vcrd-net`) is explicitly
   **out of scope** — not a deferred workspace member. A capture tool for
@@ -552,7 +552,7 @@ probably wants a short block (vcrd version, rustc version, target triple, commit
 while a full dependency/SBOM-style manifest (useful for supply-chain verification, §12) is
 likely too much noise for that use case and probably belongs behind a separate, explicit
 command instead of folded into general `--verbose`. Both of these are open items — see
-§15.
+§16.
 
 ## 9. Input/Output Modalities
 
@@ -713,7 +713,7 @@ phase built on the same core), and the risk-based trust-advice layer described i
   material, where paywalled standards could actually block vendoring vectors at all.
   Where a conformance suite (notably the W3C VC Test Suite) assumes an HTTP-based
   "VC-API" test harness rather than direct library calls, the resolution approach is
-  deliberately deferred to a two-branch implementation spike (§15) rather than decided in
+  deliberately deferred to a two-branch implementation spike (§16) rather than decided in
   the abstract.
 - **Curated example library**, separate from the vendored fixtures above: vcrd maintains
   its own small set of hand-authored example credentials — one canonical, self-signed,
@@ -733,7 +733,7 @@ phase built on the same core), and the risk-based trust-advice layer described i
   `Sign` and `Verify` from the same key material, so no new dependency is needed. This is
   internal repo tooling, the same category as the `criterion` benchmarks or the `fuzz/`
   seed corpus below, not the shipped issuance feature §10 defers, and not a use of the
-  ecosystem libraries §6/§14 already decided against depending on directly; it needs no
+  ecosystem libraries §6/§11 already decided against depending on directly; it needs no
   workspace member of its own, unlike `fuzz/`, and lives alongside vcrd-core's existing
   test suite instead. This helper reuses the signing capability `vcrd-core` exposes for
   the mobile-wallet live-verifier feature's wallet-side counterpart (§9, §7) rather than
@@ -753,7 +753,7 @@ phase built on the same core), and the risk-based trust-advice layer described i
   VC). Two further candidates are scoped out for now rather than evaluated (§3): the
   official W3C VC Data Model/VC-JOSE-COSE and OpenID Foundation conformance test suites,
   and TBD's `ssi-sdk`/web5 stack. Exact harness mechanics (a dedicated workspace crate, ad
-  hoc scripts, a separate CI job) are left as an open item (§15).
+  hoc scripts, a separate CI job) are left as an open item (§16).
 - **Negative and adversarial fixtures are a required category, not an afterthought.**
   Given vcrd's whole purpose is trust-relevant checking, "known-good credential verifies
   successfully" fixtures are only part of the test matrix. Required
@@ -1023,15 +1023,11 @@ trying, not the repo's own issue tracker.
 
 ## 15. Glossary
 
-**Acronym glossary.** Protocol- and format-specific acronyms used throughout this
-document, defined once here. (Verifiable Credential, Verifiable Presentation, and
-Decentralized Identifier are defined where introduced above, in §2.)
-
 - **CBOR** — Concise Binary Object Representation, the binary serialization mdoc/mDL
   credentials use in place of JSON.
 - **COSE** — CBOR Object Signing and Encryption, the CBOR-based analog to JOSE's
   signing/encryption mechanics.
-- **DID** - Decentralized Identifier.
+- **DID** — Decentralized Identifier.
 - **DIDComm** — DID Communication, a secure agent-to-agent messaging protocol built on
   DIDs.
 - **EIP-712** — Ethereum Improvement Proposal 712, a typed structured-data
@@ -1068,8 +1064,10 @@ Decentralized Identifier are defined where introduced above, in §2.)
 - **TTY** — teletypewriter, i.e. an interactive terminal.
 - **URDNA2015** — Universal RDF Dataset Normalization Algorithm 2015, RDFC-1.0's
   predecessor.
+- **VC** — Verifiable Credential.
 - **VC-API** — the W3C Credentials Community Group's HTTP API specification for VC
   issuance/verification services.
+- **VP** — Verifiable Presentation.
 - **WASM** — WebAssembly.
 
 ## 16. Open / Deferred Items
@@ -1095,12 +1093,12 @@ canonical record of these open items.
    other people about the project" (§14).
 6. **Wire up `cargo-semver-checks`** in CI before the 1.0 release (§13).
 7. **Add `CONTRIBUTING.md`, issue/PR templates, and `CODE_OF_CONDUCT.md`** to the repo,
-   same gating milestone as item 6 (§14).
+   same gating milestone as item 5 (§14).
 8. **Enable GitHub's "require approval for first-time contributor workflows" setting** —
    an early-setup item, not gated on going public, since it costs nothing while solo
    (§12).
 9. **Add a `CODEOWNERS` entry for `.github/workflows/*`** — same early-setup timing as
-    item 9 (§12).
+   item 8 (§12).
 10. **Design `vcrd-core`'s diagnostic/build-info API**, with `vcrd-cli`'s
     `--version --verbose` as one consumer of it rather than a CLI-only feature, and
     resolve the still-open scope question between ordinary bug-report-oriented output and

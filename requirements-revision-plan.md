@@ -185,4 +185,4 @@ re-read of the edited section(s) against: (a) the specific review passage(s) it 
 (b) the corresponding handoff paragraph(s), confirming no unverified claim is written in as
 settled fact (e.g. the walt.id "still-open" bug status correction, the isomdl fixture-licensing
 finding) and that each open decision is actually decided in-session rather than re-deferred
-silently. Step 12 is the final check across the whole document.
+silently. Step 13 is the final check across the whole document.
