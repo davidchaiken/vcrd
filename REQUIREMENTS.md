@@ -188,7 +188,7 @@ projects with recent commits. They solve different problems than vcrd does — a
 library with no CLI of its own, a ledger-client proxy rather than a VC tool, and a full
 pre-1.0 agent framework, respectively — not a gap in maintenance, just a gap in shape.
 
-## 4. Terminology
+## 4. Operational Tiers
 
 vcrd distinguishes four tiers of operation, each with different guarantees and different
 network/trust implications:
@@ -314,7 +314,7 @@ specifically because vcrd is meant to be consumed by more than one kind of front
   stage failed, rather than collapsing to one opaque error. If parsing succeeds but
   validation fails, the result carries both the successfully-parsed structure (or the
   useful parts of it) and the specific validation failure reason(s). This is what lets
-  `vcrd inspect` (§8) give a genuinely useful answer even when a credential is broken,
+  `vcrd inspect` (§8) give a useful answer even when a credential is broken,
   instead of an all-or-nothing failure.
 - **Diagnosability: a failure pins down which pipeline tier failed, whose side it's on,
   and why.** This is one level more specific than graduated success above: it's not
@@ -345,7 +345,7 @@ specifically because vcrd is meant to be consumed by more than one kind of front
     a pure-Rust reimplementation against a written spec does not.
   - *Ecosystem VC/OIDC4VP libraries (`ssi`, `openid4vp`, `isomdl`, and similar)*: settled
     exclusion, not a case-by-case call — never a direct production dependency of
-    `vcrd-core` or `vcrd-cli`, full stop. These are strong, actively-maintained
+    `vcrd-core` or `vcrd-cli`. These are strong, actively-maintained
     implementations (§3), but each is maintained by a company (SpruceID) optimizing its
     own product roadmap (mDL/gov-ID business) in a way that structurally can't guarantee
     to stay aligned with vcrd's own standalone/universal/unopinionated goals.
@@ -445,8 +445,7 @@ panics" is only useful if panics were supposed to be impossible.
 `gh`, and `cargo` (contrasted with older single-command, flag-heavy CLI conventions):
 
 - `vcrd inspect <file>` — combines the parse and validate tiers (§4) into a single verb;
-  human-readable by default. There is deliberately no separate `validate` subcommand: an
-  earlier draft had one, but splitting it out from `inspect` didn't earn its keep —
+  human-readable by default. There is deliberately no separate `validate` subcommand:
   validating something that failed to parse isn't a meaningful operation on its own, so
   `inspect` always runs both and reports on whichever stage it actually reached. Failure
   behavior, subject to the verbosity level below:
@@ -455,7 +454,7 @@ panics" is only useful if panics were supposed to be impossible.
   - If parsing succeeds but validation fails, `inspect` still surfaces whatever useful
     information the parse extracted, and separately explains why validation failed —
     never collapsing a partially-successful result into a bare failure.
-  - `validate` remains a real `vcrd-core` capability (§4); it's just not exposed as its
+  - `validate` remains a `vcrd-core` capability (§4); it's just not exposed as its
     own top-level verb today. Nothing rules out adding a flag or subcommand for
     validate-only output later if a concrete use case for it shows up.
 - `vcrd verify <file>` — offline-only unless `--allow-outbound-network` is allowed (§6); this flag is global, not per-subcommand, so it can't be missed.
@@ -530,7 +529,7 @@ variable convention is honored.
 
 **Progress reporting** is a frontend concern, not a core one, per §6 — and ideally
 `vcrd-core` never needs it at all, since its operations are meant to stay fast by
-construction. Where a *frontend* offers a genuinely long-running feature (the running
+construction. Where a *frontend* offers a long-running feature (the running
 example is a recursive filesystem scan across many credential files), the design is a
 producer/consumer split: a fast enumerator (the `ignore` crate, the same one `ripgrep`/
 `fd` are built on, handles fast parallel-aware directory walking) establishes a total
@@ -579,7 +578,7 @@ opt-in flags still apply, one per role — §6 doesn't carve out a "trusted beca
 loopback" exception, and this feature is no different. The wallet-side counterpart
 presents one of vcrd's own curated example credentials (§11), signing a fresh
 holder-binding proof over the verifier's actual request nonce on every run rather than
-replaying a canned response — a genuinely spec-compliant round trip, and a
+replaying a canned response — a spec-compliant round trip, and a
 self-contained way to validate vcrd's own protocol implementation with no external
 dependency at all.
 
@@ -648,9 +647,8 @@ ES256/RS256 subset, and an algorithm outside what's supported must fail **by nam
 naming the unsupported algorithm and what is supported — rather than surfacing as an
 opaque parse error (§6's diagnosability principle applied concretely here). This is
 directly evidenced, not aspirational: EUDI's real-world default signing algorithm
-(ES512/P-521) turned out to be unsupported by two of three Rust JOSE crates evaluated
-this session, blocking an otherwise-clean interop round trip outright with no indication
-of why.
+(ES512/P-521) turned out to be unsupported by two of three Rust JOSE crates evaluated,
+blocking an otherwise-clean interop round trip outright with no indication of why.
 
 **Presentation support (§2) rides along with each credential format, rather than being a
 separate, indefinitely-deferred feature** — per format, the plan is to land credential
@@ -749,7 +747,7 @@ phase built on the same core), and the risk-based trust-advice layer described i
   "correct" answer the way an example-based test requires. This is what makes §6's
   dependency-policy exclusion safe rather than isolating: interoperability is demonstrated
   this way instead of by coupling to those libraries in `vcrd-core`'s shipped dependency
-  graph. Tools hands-on-validated this session as viable oracles: openid4vp's reference
+  graph. Tools hands-on-validated as viable oracles: openid4vp's reference
   wallet and verifier, a self-hosted walt.id identity instance (JWT/SD-JWT/mdoc via
   OpenID4VCI/OpenID4VP), and the EUDI verifier-endpoint reference implementation (SD-JWT
   VC). Two further candidates are scoped out for now rather than evaluated (§3): the
@@ -764,7 +762,7 @@ phase built on the same core), and the risk-based trust-advice layer described i
   **algorithm-confusion attacks** (e.g. tricking a verifier expecting RS256 into accepting
   an HMAC-signed token using the
   public key as the secret, or accepting `alg: none`). This class of bug has repeatedly
-  and concretely affected real JWT/JOSE implementations and needs to be a named test
+  and concretely affected JWT/JOSE implementations and needs to be a named test
   category from the start, since vcrd implements verification itself rather than wrapping
   an already-hardened library. Alongside it, **unsupported-algorithm rejection** (§10) is
   its own required fixture category: a credential signed with an algorithm outside vcrd's
@@ -805,7 +803,7 @@ phase built on the same core), and the risk-based trust-advice layer described i
   auto-rejected. Coverage is a signal, not proof of correctness, and shouldn't be gamed
   with tests that execute a line without asserting anything meaningful. If Codecov is used
   for reporting, it must be wired in via their official GitHub Action pinned to a commit
-  SHA — not a `curl | bash` uploader script, which was the actual vector in a real 2021
+  SHA — not a `curl | bash` uploader script, which was the actual vector in a 2021
   supply-chain compromise that used Codecov's bash uploader to exfiltrate CI secrets from
   downstream projects.
 
@@ -869,7 +867,7 @@ already in initial scope even though the broader network threat model is deferre
   principle rather than inventing a separate mechanism.
 - An SSRF stance for `did:web` resolution: the *resolved* socket address, not the
   hostname string, is checked before connecting, and a resolution landing on a
-  link-local, private, or loopback range is refused by default. This is a real concern
+  link-local, private, or loopback range is refused by default. This matters
   the moment vcrd runs inside CI or server-side tooling, where an attacker-supplied
   `did:web` value could otherwise be pointed at an internal host or a cloud metadata
   endpoint.
@@ -900,7 +898,7 @@ individually as a watch/upgrade/replace candidate at the point it's chosen — t
 selection-time policy, not a task to track before any crate has actually been picked.
 
 **`SECURITY.md`**, present from the start of the project: a reporting channel (GitHub's
-private security advisory feature, avoiding separate email infrastructure), an honest
+private security advisory feature, avoiding separate email infrastructure), a
 best-effort/pre-1.0 response expectation rather than an SLA that can't be backed, a
 "supported: main branch only" statement while pre-1.0, and a pointer to the threat model
 above. It also carries a plain-language reliance/liability stance: people will make real
@@ -916,7 +914,7 @@ after an incident) is far more painful than starting clean:
 
 - Untrusted PR code never runs with secrets or write access. The dangerous trigger is
   `pull_request_target`, which runs with the base repo's token/secrets but can be pointed
-  at the PR's own (attacker-controlled) code — this exact pattern has caused real,
+  at the PR's own (attacker-controlled) code — this exact pattern has caused
   publicized secret-exfiltration incidents elsewhere. Anything that builds/tests/runs PR
   code uses plain `pull_request` (read-only token, no secrets for fork PRs by default). If
   something privileged needs to happen based on a PR's results (e.g. posting a comment), it
@@ -958,7 +956,7 @@ after an incident) is far more painful than starting clean:
   the `clap` argument definitions (`clap_mangen` and similar), so they can't drift out of
   sync with actual CLI behavior the way hand-maintained docs would. README + doc comments
   + this generated CLI reference are sufficient for now; a higher-level conceptual guide
-  (mdBook-style) is deferred until there's enough real surface area to justify the
+  (mdBook-style) is deferred until there's enough surface area to justify the
   investment.
 - **Branching / release cadence**: trunk-based development — work happens on `main` with
   short-lived branches for PRs and experiments, no long-lived release branches, until
@@ -1014,7 +1012,7 @@ trying, not the repo's own issue tracker.
   alias (rather than the maintainer's everyday personal email, for portability and light
   privacy separation) and an identified secondary/backup contact who isn't the primary
   maintainer, specifically so a report *about* the maintainer has a safe channel — the
-  template alone doesn't solve this for a genuinely solo project.
+  template alone doesn't solve this for a solo project.
 - **Commit conventions**: free-form while solo, by deliberate choice. The switch to
   Conventional Commits (`feat:`/`fix:`/`chore:`/etc., enabling automated `CHANGELOG.md`
   generation via a tool like `git-cliff`) is deferred, but gated on the same milestone as
@@ -1023,66 +1021,107 @@ trying, not the repo's own issue tracker.
   history, so this is a "do it right before it matters" decision rather than "do it
   whenever."
 
-## 15. Open / Deferred Items
+## 15. Glossary
 
-These were deliberately deferred during discussion rather than decided now. This list is
-the durable record — earlier in this project's discussion phase these were tracked in an
-in-session task tool, which turned out not to persist reliably across sessions, so this
-document (not that tool) is the canonical source going forward.
+**Acronym glossary.** Protocol- and format-specific acronyms used throughout this
+document, defined once here. (Verifiable Credential, Verifiable Presentation, and
+Decentralized Identifier are defined where introduced above, in §2.)
 
-1. ~~Evaluate the [`ssi`](https://crates.io/crates/ssi) crate more deeply during
-   JSON-LD/Data Integrity implementation — is any part of it worth depending on?~~ —
-   **decided**: no, never as a direct production dependency of `vcrd-core`. See §6's
-   dependency policy for the full rationale (interop via differential testing, not
-   coupling to a company-backed library) and §11 for the resulting differential-testing
-   strategy.
-2. **VC-API vector-consumption spike**: build two throwaway branches when implementing
+- **CBOR** — Concise Binary Object Representation, the binary serialization mdoc/mDL
+  credentials use in place of JSON.
+- **COSE** — CBOR Object Signing and Encryption, the CBOR-based analog to JOSE's
+  signing/encryption mechanics.
+- **DID** - Decentralized Identifier.
+- **DIDComm** — DID Communication, a secure agent-to-agent messaging protocol built on
+  DIDs.
+- **EIP-712** — Ethereum Improvement Proposal 712, a typed structured-data
+  message-signing standard.
+- **EUDI** — the EU Digital Identity Wallet program, producer of the `verifier-endpoint`
+  reference implementation discussed in §3.
+- **FFI** — Foreign Function Interface, a dependency that crosses a non-Rust language
+  boundary.
+- **HSM** — Hardware Security Module.
+- **JOSE** — JSON Object Signing and Encryption, the IETF framework covering JWS/JWK/JWT.
+- **JWK** — JSON Web Key.
+- **JWS** — JSON Web Signature.
+- **JWT** — JSON Web Token.
+- **KMS** — Key Management Service.
+- **mDL** — mobile driver's license.
+- **mdoc** — the ISO 18013-5 "mobile document" CBOR-encoded credential format that mDLs
+  are an instance of.
+- **MITM** — Man-in-the-Middle (attack).
+- **MSRV** — Minimum Supported Rust Version.
+- **OIDC** — OpenID Connect.
+- **OpenID4VCI** — OpenID for Verifiable Credential Issuance.
+- **OpenID4VP** — OpenID for Verifiable Presentations.
+- **PII** — Personally Identifiable Information.
+- **RDF** — Resource Description Framework, the data model JSON-LD credentials are
+  canonicalized as.
+- **RDFC-1.0** — RDF Dataset Canonicalization 1.0, the W3C canonicalization spec used by
+  JSON-LD Data Integrity proofs.
+- **SBOM** — Software Bill of Materials.
+- **SD-JWT / SD-JWT VC** — Selective Disclosure JWT / Selective Disclosure JWT
+  Verifiable Credential.
+- **SPDX** — Software Package Data Exchange, the license-identifier format used in
+  `Cargo.toml`'s `license` field.
+- **SSRF** — Server-Side Request Forgery.
+- **TTY** — teletypewriter, i.e. an interactive terminal.
+- **URDNA2015** — Universal RDF Dataset Normalization Algorithm 2015, RDFC-1.0's
+  predecessor.
+- **VC-API** — the W3C Credentials Community Group's HTTP API specification for VC
+  issuance/verification services.
+- **WASM** — WebAssembly.
+
+## 16. Open / Deferred Items
+
+These are deliberately deferred rather than decided now. This document is the durable,
+canonical record of these open items.
+
+1. **VC-API vector-consumption spike**: build two throwaway branches when implementing
    JSON-LD/Data Integrity — (a) extract W3C VC-API-shaped test vectors and adapt them into
    direct calls against `vcrd-core`, versus (b) a minimal local VC-API HTTP shim so the
    official test harness runs unmodified. Compare the actual working code and the delta
    from `main` on each, then merge the winner and discard the other.
-3. **Set up `cargo-fuzz` targets** for `vcrd-core`'s untrusted-input parsers, seeded from
+2. **Set up `cargo-fuzz` targets** for `vcrd-core`'s untrusted-input parsers, seeded from
    the same vendored conformance fixtures used in testing (§11).
-4. **Fable-based review of this document**, with particular attention to security risks —
+3. **Fable-based review of this document**, with particular attention to security risks —
    threat model completeness, verification-bypass classes, resource-exhaustion surface,
    crypto dependency choices, and any other design-level security gap, before
    implementation starts in earnest.
-5. **Research non-flaky test patterns** for `vcrd --version --verbose`-style output, once
+4. **Research non-flaky test patterns** for `vcrd --version --verbose`-style output, once
    that feature is actually built — naive tests would be coupled to the exact build
    environment/commit/timestamp.
-6. **Switch to Conventional Commits and add `CHANGELOG.md`**, gated on "before talking to
+5. **Switch to Conventional Commits and add `CHANGELOG.md`**, gated on "before talking to
    other people about the project" (§14).
-7. **Wire up `cargo-semver-checks`** in CI before the 1.0 release (§13).
-8. **Add `CONTRIBUTING.md`, issue/PR templates, and `CODE_OF_CONDUCT.md`** to the repo,
+6. **Wire up `cargo-semver-checks`** in CI before the 1.0 release (§13).
+7. **Add `CONTRIBUTING.md`, issue/PR templates, and `CODE_OF_CONDUCT.md`** to the repo,
    same gating milestone as item 6 (§14).
-9. **Enable GitHub's "require approval for first-time contributor workflows" setting** —
+8. **Enable GitHub's "require approval for first-time contributor workflows" setting** —
    an early-setup item, not gated on going public, since it costs nothing while solo
    (§12).
-10. **Add a `CODEOWNERS` entry for `.github/workflows/*`** — same early-setup timing as
+9. **Add a `CODEOWNERS` entry for `.github/workflows/*`** — same early-setup timing as
     item 9 (§12).
-11. **Design `vcrd-core`'s diagnostic/build-info API**, with `vcrd-cli`'s
+10. **Design `vcrd-core`'s diagnostic/build-info API**, with `vcrd-cli`'s
     `--version --verbose` as one consumer of it rather than a CLI-only feature, and
     resolve the still-open scope question between ordinary bug-report-oriented output and
     a full dependency/SBOM-style manifest (§8).
-12. **Identify a secondary Code of Conduct contact** — someone other than the primary
+11. **Identify a secondary Code of Conduct contact** — someone other than the primary
     maintainer — before openly and actively inviting outside contributors (§14).
-13. ~~Rename the GitHub repo and local clone from `vcrdtool` to `vcrd`~~ — **done**; the
-    old repo was deleted and a new `vcrd` repo created directly.
-14. **Set up `cargo-llvm-cov` coverage tracking** with the ratchet (not hard-gate) policy
+12. **Set up `cargo-llvm-cov` coverage tracking** with the ratchet (not hard-gate) policy
     described in §11, and document that policy in `CONTRIBUTING.md`.
-15. **Scope the mobile-wallet live-verifier feature's initial OpenID4VP protocol
+13. **Scope the mobile-wallet live-verifier feature's initial OpenID4VP protocol
     coverage** (which request/response variants, response-mode/encryption handling,
     credential-query mechanism) and its CLI verb/subcommand naming for the verifier and
     wallet roles, once implementation starts (§9, §7).
-16. **Design the live-verifier feature's trust-anchor input mechanism** — how a caller
+14. **Design the live-verifier feature's trust-anchor input mechanism** — how a caller
     supplies their own root-of-trust/accreditation material for issuer trust checks
     (§9) — a flag-vs-config-file question deferred to implementation time, consistent
     with §8's existing config-file precedent.
-17. **Design the secondary QR-code + external-wallet path** for the live-verifier
+15. **Design the secondary QR-code + external-wallet path** for the live-verifier
     feature (§9), once the primary self-contained round trip (vcrd playing both roles)
     is implemented and working.
-18. **Choose the JOSE dependency** against §10's algorithm-coverage requirement. Data
-    point on record from this session's evaluation: `josekit` was confirmed to have full
+16. **Choose the JOSE dependency** against §10's algorithm-coverage requirement. Data
+    point on record: `josekit` was confirmed to have full
     ECDSA-family algorithm coverage (including ES512/P-521) on paper, though its maturity
     wasn't vetted; `jsonwebtoken` and `ssi-jwk` both stop at ES384. Not a decision now —
     the actual selection happens when the JWT-based format lands.

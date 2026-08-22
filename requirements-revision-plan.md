@@ -177,7 +177,7 @@ own.
 ### 13. Final consistency pass
 Re-read the full revised REQUIREMENTS.md against REQUIREMENTS-REVIEW.md §4's seven-item
 recommendation summary to confirm each is addressed or explicitly deferred with reasoning; fix
-cross-references and section numbers disturbed by the new Related Work section from step 1.
+cross-references and section numbers -- especially the ones disturbed by the new Related Work section from step 1.
 
 ## Verification
 This is a documentation-editing sequence with no code to run. Verification per step is a
