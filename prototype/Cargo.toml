@@ -1,0 +1,33 @@
+[workspace]
+resolver = "2"
+members = ["vcrd-core", "vcrd-cli", "fixtures-gen"]
+
+[workspace.package]
+version = "0.0.0-spike"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+base64 = "0.22"
+sha2 = "0.10"
+hmac = "0.12"
+subtle = "2"
+ed25519-dalek = "2"
+p256 = { version = "0.13", features = ["ecdsa"] }
+p521 = { version = "0.13", features = ["ecdsa"] }
+rsa = { version = "0.9", features = ["sha2"] }
+multibase = "0.9"
+unsigned-varint = "0.8"
+time = { version = "0.3", features = ["parsing", "formatting", "macros"] }
+clap = { version = "4", features = ["derive"] }
+tabled = "0.21"
+anyhow = "1"
+
+# Debugger-friendly: full DWARF, no optimization, symbols where lldb looks on macOS.
+[profile.dev]
+debug = 2
+opt-level = 0
+split-debuginfo = "unpacked"

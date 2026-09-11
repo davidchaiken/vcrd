@@ -1,0 +1,87 @@
+{
+  "fixtures": [
+    {
+      "file": "alg-none.jwt",
+      "category": "algorithm-confusion",
+      "expect": "verify.alg_none",
+      "note": "unsigned token claiming a valid issuer"
+    },
+    {
+      "file": "alg-confusion-hs256.jwt",
+      "category": "algorithm-confusion",
+      "expect": "verify.alg_key_type_mismatch",
+      "note": "HMAC-SHA256 over the token, keyed with the issuer's own P-256 public key bytes"
+    },
+    {
+      "file": "embedded-jwk.jwt",
+      "category": "key-provenance",
+      "expect": "verify.signature_invalid",
+      "note": "attacker key in the jwk header; issuer is a did:key for a different key"
+    },
+    {
+      "file": "embedded-jwk-only.jwt",
+      "category": "key-provenance",
+      "expect": "key.embedded_untrusted",
+      "note": "self-consistent signature; the only key material is the credential's own"
+    },
+    {
+      "file": "expired.jwt",
+      "category": "temporal",
+      "expect": "validate.expired",
+      "note": "signature is good; only the dates are wrong"
+    },
+    {
+      "file": "not-yet-valid.jwt",
+      "category": "temporal",
+      "expect": "validate.not_yet_valid",
+      "note": "signature is good"
+    },
+    {
+      "file": "tampered.jwt",
+      "category": "integrity",
+      "expect": "verify.signature_invalid",
+      "note": "a claim was edited after signing"
+    },
+    {
+      "file": "unsupported-alg.jwt",
+      "category": "unsupported-algorithm",
+      "expect": "verify.alg_unsupported",
+      "note": "ES256K is a real registered algorithm outside vcrd's set; signature bytes are filler"
+    },
+    {
+      "file": "deep-nesting.jwt",
+      "category": "resource-limits",
+      "expect": "parse.nesting_too_deep",
+      "note": "66 levels of nesting inside credentialSubject"
+    },
+    {
+      "file": "vcdm11-mapping.jwt",
+      "category": "profile",
+      "expect": "validate.profile_not_implemented",
+      "note": "registered exp = 2030-01-01, inner expirationDate = 2035-01-01"
+    },
+    {
+      "file": "happy-ed25519.jwt",
+      "category": "control",
+      "expect": "verified"
+    },
+    {
+      "file": "happy-es256.jwt",
+      "category": "control",
+      "expect": "verified",
+      "note": "also the allowlist-rejection case, run with --allow-alg EdDSA"
+    },
+    {
+      "file": "happy-es512.jwt",
+      "category": "control",
+      "expect": "verified",
+      "note": "ES512/P-521 -- the EUDI interop case that blocked two of three JOSE crates"
+    },
+    {
+      "file": "happy-rs256.jwt",
+      "category": "control",
+      "expect": "verified",
+      "note": "needs --jwks fixtures/caller-jwks.json; did:key has no RSA codec here"
+    }
+  ]
+}
