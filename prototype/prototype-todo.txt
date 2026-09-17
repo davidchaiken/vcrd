@@ -1,0 +1,21 @@
+Things to discuss and do to conclude the prototype spike.
+
+- What have we learned about software structures from this prototype? Are we ready to document file layout, abstract classes, implementations, etc?
+
+- Shift from modifying the REQUIREMENTS.md document to an ARCHITECTURE.md document that captures all of the technical questions to be answered, documents the reasons for decisions, diagrams the tech stack, provides a catalog of data structures, and describes the control and/or data flow of each crate (vcrd-core and vcrd-cli). REQUIREMENTS.md should be modified only when there is a material change in vcrd functionality, not in the implementation. For example, debuggability should be added as a requirement. (Should there be an ARCHITECTURE.md and an IMPLEMENTATION.md to separate structural concerns from code-level concerns?)
+
+- Is Tier the same as Stage? If so, I prefer Stage to Tier. Stage captures the notion of a pipeline better that Tier (which has the connotation of a hierarchy).
+
+- I'd like to find a synonym to substitute for Blame. The word Blame is kind of acceptable in this context, but is jarring in the context of a blameless risk management philosophy. (I think that "git blame" predates the blameless approach.)
+- Same goes for disagreement. Maybe "inconsistency" instead?
+
+- Need to do some thinking about usability.
+
+- Are hashed values of sensitive data really worthwhile? (Hashing just follows a pattern that I used for helping people debug high-entropy credentials in an OAuth2 app.)
+-- Given how hard it is to reason about "low entropy," maybe fields should be catagorized by hand as Non-Sensitive, Sensitive-High-Entropy, and Sensitive-Low-Entropy. The default should be Sensitive-Low-Entropy unless a field is specifically identified otherwise by a curator (either a compliance-savvy human or a ML model that has been specifically trained for this purpose).
+-- It seems like there should be good unit and integration testing around sensitive fields that should not be printed in cleartext without the --unsafe flag. Sensitive fields can be populated with values that never should be seen in output without --unsafe.
+-- see vcrd-core/src/redact.rs
+
+- This comment in vcrd-core/src/lib.rs doesn't have appropriate context: /// Deliberately not a `Default`: a caller has to state what "now" is.
+
+- vcrd-core/src/limits.rs::measure_depth does lightweight parsing of JSON. It seems odd that this kind of functionality wouldn't already be packaged in a popular third-party crate. Why would vcrd have to be an outlier when it comes to how it treats JSON? For example, why not stick with the fixed recursion limit of 128 in serde_json?
