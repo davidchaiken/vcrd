@@ -476,29 +476,37 @@ stderr carries diagnostics and progress. Distinct exit codes distinguish parse f
 validation failure, and verification failure, so a calling script can branch on which
 kind of failure occurred rather than just "something went wrong."
 
-**Redaction-aware output by default; `--unsafe` opts out.** vcrd's own output is a leak
-surface: printing full claim sets — including PII and, for SD-JWT, disclosed values —
-into terminals, CI logs, and agent transcripts is exactly the exposure a careful user
-already avoids when handling live credentials by hand. Every output format (`text`,
-`json`, `plain`) redacts claim *values* by default, while still showing claim *names*,
-document structure, and all non-claim metadata (issuer, type, dates, algorithm/proof-suite
-names) in full — none of that is sensitive, and all of it is needed for diagnosis.
-When it's useful and practical, a redacted
-value is replaced by a deterministic hash (truncated to a short, human-scannable form)
-rather than elided to nothing, so a caller can tell whether the same field matches or
-differs across two credentials/transactions without ever seeing the plaintext — the
-debugging need this default serves, not just a privacy stance. An unsalted hash doesn't
-meaningfully protect a low-entropy field (a boolean, a small enum, a birth year), so
-these kinds of fields should be masked instead of hashed.
-`--unsafe` (global, same family as the network opt-in flags,
-§6) disables redaction and prints full cleartext claim values; using it triggers both a
-human-visible stderr warning banner and a structured marker in the result itself (e.g. a
-top-level `unsafe_cleartext` field in JSON output), so a script or agent consuming
-stdout — not just a human reading a terminal — can detect that the output is unredacted
-and handle it accordingly (e.g. refuse to persist it into a shared log store).
-`--verbose` is orthogonal to this: it raises diagnostic detail (which pipeline tier,
-timing, structural info), never claim-value cleartext — only `--unsafe` crosses that
-line.
+**Redaction-aware output by default; revealing values is an explicit opt-in.** vcrd's own
+output is a leak surface: printing full claim sets — including PII and, for SD-JWT,
+disclosed values — into terminals, CI logs, and agent transcripts is exactly the exposure
+a careful user already avoids when handling live credentials by hand. Every output
+format (`text`, `json`, `plain`) masks every claim *value* by default, while still
+showing claim *names* (as paths), document structure, and all non-claim metadata
+(issuer, type, dates, algorithm/proof-suite names) in full — none of that is sensitive,
+and all of it is needed for diagnosis. Each credential format defines which of its
+fields are claims and which are metadata. Redaction is enforced by `vcrd-core` rather
+than left to each frontend, so every consumer of the library — not only the CLI —
+receives masked values unless it explicitly asks for something else.
+
+vcrd does not attempt to decide which claims are sensitive. Credential formats do not
+generally carry field-sensitivity metadata for display purposes, and judging
+sensitivity is the kind of decision §1 leaves to the caller. Instead, a caller may
+designate individual claim paths as shown in cleartext, as hashed, or explicitly as
+masked, using a flag, an environment variable, or the configuration file described
+below. Paths use the same notation vcrd prints in its own output, so a path copied from
+masked output designates that field. A hashed value is a deterministic hash truncated to
+a short, human-scannable form, so a caller can tell whether a field matches or differs
+across two credentials/transactions without seeing the plaintext. `--unsafe` (global,
+same family as the network opt-in flags, §6) shows every claim value in cleartext and
+triggers a human-visible stderr warning banner. Every reveal — a designated path or
+`--unsafe` — is reported by a structured marker in the result itself (e.g. a top-level
+field in JSON output listing each path shown in cleartext or hashed), so a script or
+agent consuming stdout — not just a human reading a terminal — can detect that the
+output is not fully masked and handle it accordingly (e.g. refuse to persist it into a
+shared log store). `--verbose` is orthogonal to this: it raises diagnostic detail
+(which pipeline tier, timing, structural info), never claim-value cleartext — only an
+explicit reveal crosses that line. This designation mechanism is an initial design,
+expected to change once actual usage shows how callers need to reveal values (§16).
 
 **Tabular rendering** for the `text` format uses the [`tabled`](https://crates.io/crates/tabled)
 crate, chosen over the more-downloaded `comfy-table` alternative: `tabled`'s
@@ -513,10 +521,13 @@ per-invocation flag — a human who always wants `--format json`, or who always 
 against `did:web`-resolving issuers and is tired of retyping `--allow-outbound-network`, sets it
 once. A single user-global TOML file (standard per-OS config directory, e.g. via the
 `directories` crate convention — no project-local/repo-local layer for now) holds
-defaults for `--format`, `--allow-outbound-network`, and `--allow-inbound-network`. Precedence is
-flag > environment variable > config file > built-in default, and parsing this file is a
-`vcrd-cli` concern, not a `vcrd-core` one — consistent with core doing no ambient I/O or
-environment-variable reads of its own (§6, §11).
+defaults for `--format`, `--allow-outbound-network`, and `--allow-inbound-network`, the
+clock-skew tolerance applied to validity-period checks (zero by default), and per-path
+redaction designations (mask, show, or hash; see redaction above). Precedence is
+flag > environment variable > config file > built-in default; for redaction
+designations it is resolved independently for each path, with masking as the built-in
+default. Parsing this file is a `vcrd-cli` concern, not a `vcrd-core` one — consistent
+with core doing no ambient I/O or environment-variable reads of its own (§6, §11).
 
 **`clap`** (derive macros) handles argument parsing, `--help` generation, shell completion
 generation, and man-page generation (`clap_mangen`) — all close to free once the argument
@@ -649,6 +660,9 @@ opaque parse error (§6's diagnosability principle applied concretely here). Thi
 directly evidenced, not aspirational: EUDI's real-world default signing algorithm
 (ES512/P-521) turned out to be unsupported by two of three Rust JOSE crates evaluated,
 blocking an otherwise-clean interop round trip outright with no indication of why.
+vcrd therefore implements the JWS layer itself — algorithm policy, rejection by name,
+and the binding of each algorithm to its key type — directly over well-audited
+cryptographic primitive crates, rather than depending on a JOSE library (§16 item 16).
 
 **The caller, not the credential, decides which algorithms verification accepts.** Broad
 algorithm support (above) is a capability statement; the set of algorithms a given
@@ -1105,10 +1119,10 @@ canonical record of these open items.
    from `main` on each, then merge the winner and discard the other.
 2. **Set up `cargo-fuzz` targets** for `vcrd-core`'s untrusted-input parsers, seeded from
    the same vendored conformance fixtures used in testing (§11).
-3. **Fable-based review of this document**, with particular attention to security risks —
+3. ~~**Fable-based review of this document**, with particular attention to security risks —
    threat model completeness, verification-bypass classes, resource-exhaustion surface,
    crypto dependency choices, and any other design-level security gap, before
-   implementation starts in earnest.
+   implementation starts in earnest.~~
 4. **Research non-flaky test patterns** for `vcrd --version --verbose`-style output, once
    that feature is actually built — naive tests would be coupled to the exact build
    environment/commit/timestamp.
@@ -1141,13 +1155,27 @@ canonical record of these open items.
 15. **Design the secondary QR-code + external-wallet path** for the live-verifier
     feature (§9), once the primary self-contained round trip (vcrd playing both roles)
     is implemented and working.
-16. **Choose the JOSE dependency** against §10's algorithm-coverage requirement. Data
+16. ~~**Choose the JOSE dependency** against §10's algorithm-coverage requirement. Data
     point on record: `josekit` was confirmed to have full
     ECDSA-family algorithm coverage (including ES512/P-521) on paper, though its maturity
     wasn't vetted; `jsonwebtoken` and `ssi-jwk` both stop at ES384. Not a decision now —
-    the actual selection happens when the JWT-based format lands.
-17. **Decide the default clock-skew tolerance for expiry/not-before checks.** The
+    the actual selection happens when the JWT-based format lands.~~
+    Resolved: no JOSE dependency; vcrd implements the JWS layer directly (§10).
+17. ~~**Decide the default clock-skew tolerance for expiry/not-before checks.** The
     injectable clock (§6) settles testability, not semantics: whether verification
     applies zero tolerance or a small bounded leeway by default, and whether that
     tolerance is configurable, is decided when the first format's verify path lands
-    (§10).
+    (§10).~~
+    Resolved: zero tolerance by default, configurable by flag, environment variable, or
+    configuration file (§8).
+18. **Refine redaction path designation from actual usage** (§8). The initial design —
+    mask every claim value; callers designate paths to show, hash, or mask — leaves
+    questions best answered after real use: the path notation for each credential
+    format; whether a designation can match more than one path (for example, every
+    element of an array), and if so how overlapping designations from different sources
+    resolve; whether a selective cleartext reveal should print the same stderr warning
+    as `--unsafe`, or whether that is noise for a script that routinely reveals one
+    field; whether a designation should be scopable to a credential type, since the same
+    path can differ in sensitivity across types; and the hash construction — an unkeyed
+    hash is comparable, and therefore linkable, across all callers, while a hash keyed
+    with a caller-supplied secret is comparable only within that caller's own runs.
