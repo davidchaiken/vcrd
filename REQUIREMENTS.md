@@ -19,6 +19,15 @@ Goals:
   gets useful, safe-by-default behavior with no flags; an expert can still script and
   compose vcrd tightly; and human-readable output stays a fully-supported, first-class
   format (§9).
+- **Report as much as can be established about a credential, and name the risks
+  explicitly.** Given a choice between designs, vcrd prefers the one that tells the
+  caller more: a phase that fails still reports what it established, conditions that
+  bear on security or trust are reported as distinct, named results rather than folded
+  into a generic failure, and a result states what was *not* evaluated alongside what
+  passed (§12). This is what makes vcrd useful to the trust-evaluation layer above it
+  (§1's non-goal), which can only judge what vcrd reports. It does not extend to
+  interpreting results for a reader: explaining what a result means for a particular
+  use is that higher layer's job, not vcrd's.
 - **Well documented.** Documentation is treated as a first-class deliverable, not an
   afterthought — see §13.
 - **Free and open source**, licensed to make both use and contribution as unencumbered as
@@ -188,34 +197,52 @@ projects with recent commits. They solve different problems than vcrd does — a
 library with no CLI of its own, a ledger-client proxy rather than a VC tool, and a full
 pre-1.0 agent framework, respectively — not a gap in maintenance, just a gap in shape.
 
-## 4. Operational Tiers
+## 4. Operational Phases
 
-vcrd distinguishes four tiers of operation, each with different guarantees and different
-network/trust implications:
+vcrd runs three phases over an input, each with different guarantees and different
+network implications:
 
 1. **Parse** — is this input syntactically a credential in a format vcrd understands
    (valid JSON-LD/JWT/CBOR structure, etc.)? No semantic checking. This default operation
    can provide useful information to the user.
-2. **Validate** — does the parsed structure conform to the relevant data model (required
-   fields present, dates well-formed, `@context`/schema correct)? No cryptography
-   involved, no network required — always available, always fast. This remains a
-   distinct `vcrd-core` capability, but the CLI's `inspect` verb (§8) always runs it
-   immediately after a successful parse rather than exposing it as its own subcommand —
-   validating something that failed to parse isn't a meaningful operation on its own.
-3. **Verify** — does the cryptographic proof check out against the issuer's key material?
-   This splits further:
+2. **Inspect** — does the parsed structure conform to the relevant data model (required
+   fields present, dates well-formed, `@context`/schema correct), and is the credential
+   currently within its validity period? No cryptography involved, no network required —
+   always available, always fast. Checking the validity period belongs here rather than
+   in verify: it needs a clock but no key material, and keeping it separate is what lets
+   a result report that a credential is expired *and* correctly signed as two distinct
+   facts.
+3. **Verify** — does the cryptographic proof check out against the issuer's key material,
+   and is the securing mechanism itself current? This splits further:
    - *Offline verification* — key material is self-contained (`did:key`, an embedded JWK)
      or resolvable from a local cache. No network call needed.
    - *Network-dependent verification* — key material requires resolving a DID via a
      method that needs a network round-trip (e.g. `did:web`), or requires checking a
      remotely-hosted revocation/status list.
-4. **Trust evaluation** *(explicitly out of scope for vcrd)* — deciding whether a
-   successfully verified credential should actually be relied upon, given a specific risk
-   context: issuer reputation, schema appropriateness for the use case, how fresh a
-   revocation check needs to be, etc. This is the job of the separate future tool
-   described in §1.
 
-"Read-only, no-network by default" (§6) means: parse and validate are always available.
+**Trust evaluation is not a phase**, and is explicitly out of scope for vcrd: deciding
+whether a successfully verified credential should actually be relied upon, given a
+specific risk context — issuer reputation, schema appropriateness for the use case, how
+fresh a revocation check needs to be. This is the job of the separate future tool
+described in §1. Note that the W3C data model uses the word *validation* for
+approximately this activity, which is why vcrd does not use that word for any of its own
+phases (§15).
+
+**Phases run in order, and an operation runs every phase up to its own.** Running
+`verify` therefore also parses and inspects; running `inspect` does not verify (§8).
+
+**A failed phase does not automatically stop the next one.** A parse failure blocks both
+later phases, since there is nothing to work on. An inspect failure blocks verify only
+when it shows that verification would be *impossible* — the materials for checking the
+proof are not available — or *dangerous* — verifying could expose vcrd to an internal
+exploit, or would require fetching external material, such as cryptographic key
+material, from a suspicious source. Any other inspect failure is reported, and verify
+still runs: a credential can fail inspection and still carry a sound signature, and
+saying so is more useful than refusing to look. When an inspect failure does block
+verify, the result identifies the findings responsible and which of the two reasons
+applied.
+
+"Read-only, no-network by default" (§6) means: parse and inspect are always available.
 Verify is available offline only for self-contained key material; network-dependent
 verification requires an explicit opt-in.
 
@@ -266,7 +293,7 @@ specifically because vcrd is meant to be consumed by more than one kind of front
 - **Read-only, no-network by default, with options for inbound and outbound requests.** Any
   operation that would write data or touch the network requires an explicit, per-operation
   opt-in.
-  - **(a) Fully offline** — parse, validate, and offline verify (self-contained key
+  - **(a) Fully offline** — parse, inspect, and offline verify (self-contained key
     material). This is the default: true especially for a first-time user who reads no
     documentation.
   - **(b) Opens a local listener, no outbound call** — e.g. standing up a local server to
@@ -309,23 +336,29 @@ specifically because vcrd is meant to be consumed by more than one kind of front
   The same principle applies to two specific capabilities: progress reporting and
   diagnostic/build-info are hooks that core exposes, not things core renders — `vcrd-cli`
   is one consumer of those hooks among others that may exist later.
-- **Results represent graduated success, not a single pass/fail.** A multi-stage pipeline
-  (parse → validate → verify) should let a caller see how far it got and why the next
-  stage failed, rather than collapsing to one opaque error. If parsing succeeds but
-  validation fails, the result carries both the successfully-parsed structure (or the
-  useful parts of it) and the specific validation failure reason(s). This is what lets
-  `vcrd inspect` (§8) give a useful answer even when a credential is broken,
-  instead of an all-or-nothing failure.
-- **Diagnosability: a failure pins down which pipeline tier failed, whose side it's on,
-  and why.** This is one level more specific than graduated success above: it's not
-  enough for a caller to see *that* a stage failed, they should get enough structure to
+- **Results represent graduated success, not a single pass/fail.** The phase pipeline
+  (parse → inspect → verify, §4) should let a caller see how far it got and why a phase
+  failed, rather than collapsing to one opaque error. Concretely, a result reports for
+  every phase which of four outcomes applied — the operation did not request it, an
+  earlier phase prevented it, it ran and failed, or it ran and passed — and a phase that
+  failed still carries whatever it established before failing, not only its failure
+  reasons. Findings accumulate rather than replace one another: where several independent
+  things are wrong, the result reports all of them. This is what lets `vcrd inspect` (§8)
+  give a useful answer even when a credential is broken, instead of an all-or-nothing
+  failure.
+- **Diagnosability: a failure pins down which phase failed, whose side it's on,
+  and why.** Every finding carries an *attribution* — whether the condition is the
+  input's, the caller's policy, a limit of vcrd itself, or the environment's — as a
+  distinct field rather than something a caller infers from prose. This is one level
+  more specific than graduated success above: it's not enough for a caller to see *that*
+  a phase failed, they should get enough structure to
   act on the failure without hand-decoding tokens or cross-referencing spec text
   themselves. This matters most acutely for the mobile-wallet live-verifier feature (§9),
   where "whose side it's on" is what tells a caller whether they've hit a vcrd bug or a
   counterparty's non-conformance during a live protocol exchange. Related but distinct: a
   verify result also needs to enumerate what it did *not* evaluate (revocation, context
   resolution, holder-binding) with the same prominence as what passed (§12) — that's
-  about disclosing scope, diagnosability is about localizing why a stage failed.
+  about disclosing scope, diagnosability is about localizing why a phase failed.
   Diagnosability is itself a testable property, not just an aspiration: tests assert on
   specific structured error variants/fields (§11), not merely that some error occurred.
 - **No `unsafe` code.** `#![forbid(unsafe_code)]` in both `vcrd-core` and `vcrd-cli`.
@@ -360,9 +393,23 @@ specifically because vcrd is meant to be consumed by more than one kind of front
   workspace-level clippy lints (exempted only in test code). This matters because vcrd's
   entire purpose is processing credentials from parties that aren't trusted — a malicious
   or malformed credential is a realistic input even for a purely local CLI invocation.
+- **Debuggability is a design constraint, not a downstream concern.** Diagnosing a wrong
+  verdict on a real credential means stepping through the code that produced it, so the
+  data structures a caller's answer is built from must stay legible under a debugger.
+  Concretely: long-lived structures hold typed data rather than values whose
+  representation the toolchain renders opaquely; the development build keeps usable
+  debugging information; and the project documents a debugger configuration that is
+  known to work, since the ecosystem's default tooling does not reliably display Rust
+  data on every supported platform. A contributor (§14) should not have to rediscover
+  that configuration, and a documented procedure that has not been run end to end does
+  not count as documented.
 - **Structural resource limits, not timeouts.** Every untrusted-input code path enforces
   explicit limits on size, nesting depth, and iteration/recursion count, externalized as
-  configuration with conservative defaults derived from measurement (not guessed).
+  configuration with conservative defaults derived from measurement (not guessed). A
+  limit is enforced *before* the work it is meant to bound: size and depth are checked
+  against the encoded input before it is decoded and parsed, or the decoding is itself
+  bounded. A limit consulted after the input has already been decoded and parsed reports
+  a number but controls nothing.
   Deliberately *not* included: built-in wall-clock timeouts, memory ceilings, or network
   limits. A timeout is a symptom-level control — it doesn't bound the resources consumed
   before it fires, and it's a sign the underlying complexity isn't actually understood.
@@ -383,7 +430,7 @@ inheritance for `version`, `edition`, `license`, `authors`, and `repository` so 
 crates don't repeat this metadata.
 
 - **`vcrd-core`** — the library. Owns the data model, the `CredentialFormat` and
-  `ProofSuite` traits, and all parsing/validation/verification logic. No CLI dependencies,
+  `ProofSuite` traits, and all parsing, inspection, and verification logic. No CLI dependencies,
   no `unsafe`, no ambient I/O (§6).
 - **`vcrd-cli`** — the binary crate, depending on `vcrd-core`, owning `clap` and all
   presentation logic. Produces the installed `vcrd` binary (crate name and binary name can
@@ -444,19 +491,17 @@ panics" is only useful if panics were supposed to be impossible.
 `vcrd-cli` uses a modern, verb-first subcommand structure, in the style of tools like `cosign`, `age`,
 `gh`, and `cargo` (contrasted with older single-command, flag-heavy CLI conventions):
 
-- `vcrd inspect <file>` — combines the parse and validate tiers (§4) into a single verb;
-  human-readable by default. There is deliberately no separate `validate` subcommand:
-  validating something that failed to parse isn't a meaningful operation on its own, so
-  `inspect` always runs both and reports on whichever stage it actually reached. Failure
-  behavior, subject to the verbosity level below:
+- `vcrd inspect <file>` — runs the parse and inspect phases (§4); human-readable by
+  default. There is deliberately no `parse`-only subcommand: parsing without inspecting
+  answers less than a caller wants, and inspecting something that failed to parse isn't
+  a meaningful operation on its own, so `inspect` always runs both and reports on
+  whichever phase it actually reached. Failure behavior, subject to the verbosity level
+  below:
   - If parsing itself fails, `inspect` reports *why* — what was expected, what was found,
     not just "parse failed at line X character Y."
-  - If parsing succeeds but validation fails, `inspect` still surfaces whatever useful
-    information the parse extracted, and separately explains why validation failed —
+  - If parsing succeeds but inspection fails, `inspect` still surfaces whatever useful
+    information the parse extracted, and separately explains why inspection failed —
     never collapsing a partially-successful result into a bare failure.
-  - `validate` remains a `vcrd-core` capability (§4); it's just not exposed as its
-    own top-level verb today. Nothing rules out adding a flag or subcommand for
-    validate-only output later if a concrete use case for it shows up.
 - `vcrd verify <file>` — offline-only unless `--allow-outbound-network` is allowed (§6); this flag is global, not per-subcommand, so it can't be missed.
   `--allow-inbound-network` is the separate opt-in for operations that open a local
   listener without dialing out (§6) — distinct because inbound exposure is a different risk
@@ -472,9 +517,15 @@ a novice gets a useful answer without reading documentation first.
 `0` setting that suppresses all output and relies solely on the exit code — useful for
 scripting that only cares whether something passed) and `--format json|text|plain`
 (output shape). stdout is reserved for the actual result (so output stays pipeable);
-stderr carries diagnostics and progress. Distinct exit codes distinguish parse failure,
-validation failure, and verification failure, so a calling script can branch on which
-kind of failure occurred rather than just "something went wrong."
+stderr carries diagnostics and progress. Distinct exit codes let a calling script branch
+on which kind of failure occurred rather than just "something went wrong." The code is
+determined first by the *attribution* of the failure (§6) and only then by the phase that
+produced it: a failure attributed to vcrd's own limits, or to the caller's policy, takes
+its own code whichever phase reported it, because "vcrd cannot do this" and "your policy
+forbade this" call for different responses from a caller than "this credential is
+bad". Failures attributed to the input take a code naming the phase — parse, inspect, or
+verify. One integer cannot express a graduated result, so a script that needs more than
+the headline reason reads the per-phase outcomes in the structured output (§9).
 
 **Redaction-aware output by default; revealing values is an explicit opt-in.** vcrd's own
 output is a leak surface: printing full claim sets — including PII and, for SD-JWT,
@@ -504,7 +555,7 @@ field in JSON output listing each path shown in cleartext or hashed), so a scrip
 agent consuming stdout — not just a human reading a terminal — can detect that the
 output is not fully masked and handle it accordingly (e.g. refuse to persist it into a
 shared log store). `--verbose` is orthogonal to this: it raises diagnostic detail
-(which pipeline tier, timing, structural info), never claim-value cleartext — only an
+(which phase, timing, structural info), never claim-value cleartext — only an
 explicit reveal crosses that line. This designation mechanism is an initial design,
 expected to change once actual usage shows how callers need to reveal values (§16).
 
@@ -609,10 +660,10 @@ whichever credential formats vcrd already supports (§10). Actual mDL presentati
 on mdoc format support landing, unchanged by this feature's scoping.
 
 *Trust boundary.* Cryptographically verifying the wallet's holder-binding proof and the
-issuer's signature (tiers 1–3, §4) is not the same as knowing the issuer is a real,
+issuer's signature (the three phases of §4) is not the same as knowing the issuer is a real,
 accredited authority — for a government-grade credential like an mDL, that's gated by an
 ecosystem accreditation/trust-list scheme, not by anything a valid signature alone
-establishes. Per §1/§4's tier-4 trust-evaluation boundary, the live-verifier feature
+establishes. Per §1/§4's trust-evaluation boundary, the live-verifier feature
 performs verification, not trust evaluation. Consistent
 with §6's dependency-injection principle, vcrd doesn't ship or maintain a trust list — a
 caller who wants issuer-accreditation checking supplies their own trust anchor as
@@ -629,6 +680,20 @@ close. This is intentional: the future risk/trust-advice
 tool (§1) is meant to be built on top of vcrd, and vcrd staying unopinionated about that
 higher-level use case means it shouldn't bake in assumptions about what such a system
 needs. Plain structured JSON is the more general, more reusable choice.
+
+**The JSON output is a deliberately designed, versioned contract, owned by the
+frontend.** Agents parse it, so its structure must change only when someone intends it
+to:
+
+- `vcrd-core`'s own data types are not directly serializable. Each frontend defines the
+  schema it emits and maps core's results into it, so renaming something inside core
+  cannot silently change what a consumer parses.
+- Every invocation emits exactly one JSON document on stdout — including when parsing
+  fails and when vcrd itself cannot run (an unreadable file, an invalid flag). A consumer
+  never has to fall back to interpreting an empty stdout plus a message on stderr.
+- The document carries a schema version. It stays at `0` — meaning no compatibility
+  promise — during initial development, the same convention §13 applies to pre-1.0
+  crate versions, and starts counting only when the schema is declared stable.
 
 Coding/code-aware agents being the primary design lens (§1) doesn't mean the other formats
 are deprioritized: `tabular`/`text` are fully-supported, first-class outputs for human use. The no-flag default stays `text` (§8) — a human at a terminal
@@ -681,6 +746,17 @@ intended, and a caller-held allowlist closes the class rather than its named ins
 The CLI exposes this as a flag with a config-file default per §8's precedence rules;
 exact naming is an implementation-time decision.
 
+**Verification rejects key material that cannot bind a signature to a message, and says
+so by name.** Some public keys are valid encodings yet structurally unable to bind a
+signature to a message — a small-order elliptic-curve key, for example, admits
+signatures that verify for almost every message without any private key. A credential
+checked against such a key would otherwise report *verified* while proving nothing
+about who signed it. vcrd therefore checks key material for these properties when the
+key is resolved, reports a weak key as its own distinct finding rather than as a
+generic signature failure, and uses the strictest verification each algorithm's
+primitives provide. This is the same principle as the allowlist: a condition that bears
+on trust is reported as what it is (§1).
+
 **Presentation support (§2) rides along with each credential format, rather than being a
 separate, indefinitely-deferred feature** — per format, the plan is to land credential
 (VC) support first and presentation (VP) support for that same format as a follow-on,
@@ -724,6 +800,29 @@ support lands here.
 network-dependent resolution (`did:web` and similar) is available only with the
 `--allow-outbound-network` opt-in described in §8.
 
+**Key material has a precedence, and a verify result states where the key came from.**
+A credential can carry a public key about itself — in a JWT header, for instance — and
+verifying against that key proves only that whoever produced the credential holds the
+matching private key, which an attacker does. So key material is taken, highest first,
+from: key material the caller supplies; the issuer identifier, where the identifier
+itself encodes the key (`did:key`); a key embedded in the credential, *only* when it
+matches key material from one of the first two; and an embedded key on its own only with
+an explicit caller opt-in. Otherwise the embedded key is refused, and the refusal is
+reported rather than treated as "no key material".
+
+Key provenance is a required field of the v1 result schema, for the same reason the
+algorithm allowlist and the challenge/domain parameters are: retrofitting it once the
+schema is load-bearing would be disruptive, and consumers built in the meantime could
+not distinguish the two most different outcomes vcrd produces — verified against key
+material the credential did not choose, and verified against a key the credential
+supplied about itself. The result states where the key actually used came from, as an
+open set of values each with documented guarantees rather than a single trust boolean;
+and, whenever the credential offered a key of its own, which key that was, whether it
+matched the key used, and whether the signature verifies under it. It is reported when
+verification fails as well as when it succeeds: a credential whose own key verifies the
+signature while the issuer's key does not is specific evidence of key substitution.
+Deciding which sources are acceptable remains the caller's judgment (§1).
+
 **Explicitly out of scope for this phase**: issuing and editing credentials (a later
 phase built on the same core), and the risk-based trust-advice layer described in §1
 (a separate program entirely).
@@ -747,8 +846,8 @@ phase built on the same core), and the risk-based trust-advice layer described i
   the usual provenance-tracking one above, not availability.
   Where a conformance suite (notably the W3C VC Test Suite) assumes an HTTP-based
   "VC-API" test harness rather than direct library calls, the resolution approach is
-  deliberately deferred to a two-branch implementation spike (§16) rather than decided in
-  the abstract.
+  deliberately deferred to a two-branch implementation spike (ARCHITECTURE §10 [T1])
+  rather than decided in the abstract.
 - **Curated example library**, separate from the vendored fixtures above: vcrd maintains
   its own small set of hand-authored example credentials — one canonical, self-signed,
   offline-verifiable credential per supported proof format, expanding as format support
@@ -787,7 +886,7 @@ phase built on the same core), and the risk-based trust-advice layer described i
   VC). Two further candidates are scoped out for now rather than evaluated (§3): the
   official W3C VC Data Model/VC-JOSE-COSE and OpenID Foundation conformance test suites,
   and TBD's `ssi-sdk`/web5 stack. Exact harness mechanics (a dedicated workspace crate, ad
-  hoc scripts, a separate CI job) are left as an open item (§16).
+  hoc scripts, a separate CI job) are left as an open item (ARCHITECTURE §10 [T7]).
 - **Negative and adversarial fixtures are a required category, not an afterthought.**
   Given vcrd's whole purpose is trust-relevant checking, "known-good credential verifies
   successfully" fixtures are only part of the test matrix. Required
@@ -807,6 +906,17 @@ phase built on the same core), and the risk-based trust-advice layer described i
   with the unsupported case — the same fuzz corpus,
   property tests, and differential-testing oracles below apply to both, no separate
   testing machinery is needed.
+- **Review against the standards at every development milestone.** At the end of each
+  milestone, the implementation is reviewed against the normative text — the MUST,
+  SHOULD, and MAY statements — of every standard it implements, rather than against
+  anyone's recollection of them. Each gap the review finds becomes a test that cites the
+  section it enforces, and goes through four steps in order: write the test; run it and
+  observe it fail against the current code; fix the code; rerun it and observe it pass.
+  Seeing the test fail first is not ceremony — a test that has never failed has not shown
+  it detects the gap it names, and can pass for reasons unrelated to the requirement.
+  The same review compares each newly in-scope standard's terminology with vcrd's own
+  (§15), so that conflicting uses of a term are recorded when they arrive rather than
+  discovered later.
 - **Property-based tests** (`proptest`) are included from the start alongside unit tests
   — round-trip (`parse(serialize(x)) == x`) and invariant (canonicalization idempotency)
   checks catch a different class of bug than example-based tests and are cheap to add as
@@ -855,7 +965,7 @@ is further along):**
   credentials from parties that aren't trusted — makes this a realistic threat even for a
   purely local, offline CLI invocation, not a hypothetical one.
 - **In scope**:
-  - Parsing, validation, and verification correctness (including the algorithm-confusion
+  - Parsing, inspection, and verification correctness (including the algorithm-confusion
     and malformed-input categories named in §11).
   - **JSON-LD context substitution.** In JSON-LD credentials, `@context` controls the
     *meaning* of every term — a signature can remain valid over canonicalized RDF while a
@@ -863,7 +973,7 @@ is further along):**
     Verification against an unpinned or unresolvable context is a distinct,
     loudly-reported condition, never a silent fetch-and-proceed, even under
     `--allow-outbound-network` — surfaced with the same prominence as an
-    algorithm-confusion failure, not folded into a generic parse/validate error. The
+    algorithm-confusion failure, not folded into a generic parse or inspect error. The
     vendored context cache and injectable loader trait (§6) are the mechanism; this is
     the policy governing what happens when a context falls outside that cache.
   - Resource exhaustion via oversized or pathologically-structured input, including the
@@ -1009,6 +1119,11 @@ after an incident) is far more painful than starting clean:
   `libfuzzer-sys`), not part of normal CI.
 - **CI platforms**: Linux and macOS initially. Windows CI is deliberately left as an open
   community-contribution opportunity, consistent with §1's stance on platform support.
+- **CI feature combinations**: because formats and proof suites are feature-gated modules
+  (§7), CI builds and tests each supported combination of features, not only the default
+  set. A combination that is never built is one that silently stops compiling — or, worse,
+  compiles and misattributes a failure, as when a build with no formats blames the input
+  for vcrd's own missing support.
 
 ## 14. Contribution & Community Structure
 
@@ -1060,6 +1175,15 @@ trying, not the repo's own issue tracker.
 
 ## 15. Glossary
 
+**Terminology policy.** Where a standard vcrd implements defines a term, vcrd uses the
+term in that standard's sense. vcrd does not adopt a bare term that a standard in scope
+defines differently; where standards disagree with one another, the entry below states
+which definition vcrd follows and lists the others. Each standard's terminology is
+checked for such conflicts when the standard comes into scope (§11).
+
+- **Attribution** — which party a finding is attributed to: the input, the caller's
+  policy, vcrd's own limits, or the environment (§6). Determines exit-code precedence
+  (§8).
 - **CBOR** — Concise Binary Object Representation, the binary serialization mdoc/mDL
   credentials use in place of JSON.
 - **COSE** — CBOR Object Signing and Encryption, the CBOR-based analog to JOSE's
@@ -1074,10 +1198,15 @@ trying, not the repo's own issue tracker.
 - **FFI** — Foreign Function Interface, a dependency that crosses a non-Rust language
   boundary.
 - **HSM** — Hardware Security Module.
+- **Inspect** — the second phase (§4): conformance to the data model and securing format,
+  and the validity period, without cryptography or network access. Also the CLI
+  operation that runs the parse and inspect phases (§8).
 - **JOSE** — JSON Object Signing and Encryption, the IETF framework covering JWS/JWK/JWT.
 - **JWK** — JSON Web Key.
 - **JWS** — JSON Web Signature.
 - **JWT** — JSON Web Token.
+- **Key provenance** — where the key vcrd verified with came from, and any key the
+  credential offered about itself (§10).
 - **KMS** — Key Management Service.
 - **mDL** — mobile driver's license.
 - **mdoc** — the ISO 18013-5 "mobile document" CBOR-encoded credential format that mDLs
@@ -1087,6 +1216,9 @@ trying, not the repo's own issue tracker.
 - **OIDC** — OpenID Connect.
 - **OpenID4VCI** — OpenID for Verifiable Credential Issuance.
 - **OpenID4VP** — OpenID for Verifiable Presentations.
+- **Parse** — the first phase (§4): decoding the input into a structure in a format vcrd
+  understands.
+- **Phase** — one of parse, inspect, and verify, run in that order (§4).
 - **PII** — Personally Identifiable Information.
 - **RDF** — Resource Description Framework, the data model JSON-LD credentials are
   canonicalized as.
@@ -1098,52 +1230,58 @@ trying, not the repo's own issue tracker.
 - **SPDX** — Software Package Data Exchange, the license-identifier format used in
   `Cargo.toml`'s `license` field.
 - **SSRF** — Server-Side Request Forgery.
+- **Trust evaluation** — deciding whether a verified credential should be relied upon for
+  a particular use. Outside vcrd's scope (§1, §4). The W3C VC Data Model 2.0 calls this
+  *validation*.
 - **TTY** — teletypewriter, i.e. an interactive terminal.
 - **URDNA2015** — Universal RDF Dataset Normalization Algorithm 2015, RDFC-1.0's
   predecessor.
+- **Validation** — *not used by vcrd*, because standards in scope define it differently:
+  the W3C VC Data Model 2.0 (§2) for assurance that a claim meets a verifier's business
+  requirements for a particular use, which vcrd calls trust evaluation; RFC 7515 (§5.2)
+  for checking a JWS signature or MAC, part of vcrd's verify phase; and RFC 5280 (§6) for
+  certification path checking.
 - **VC** — Verifiable Credential.
 - **VC-API** — the W3C Credentials Community Group's HTTP API specification for VC
   issuance/verification services.
+- **Verify** — the third phase (§4): checking the proof against key material, and whether
+  the securing mechanism is current. As a CLI operation, `verify` runs all three phases,
+  and so covers what the W3C VC Data Model 2.0 (§2) defines as *verification*: whether a
+  credential is an authentic and current statement of its issuer.
 - **VP** — Verifiable Presentation.
 - **WASM** — WebAssembly.
 
 ## 16. Open / Deferred Items
 
-These are deliberately deferred rather than decided now. This document is the durable,
-canonical record of these open items.
+Open questions about vcrd's functionality, deliberately deferred rather than decided now.
+Open and deferred items about implementation, testing, and project setup are tracked in
+[ARCHITECTURE.md](ARCHITECTURE.md) §10. Item numbers are permanent: a resolved item is
+struck through with its resolution, and an item moved to ARCHITECTURE.md is struck through
+with its tag there, so references to either stay valid.
 
-1. **VC-API vector-consumption spike**: build two throwaway branches when implementing
-   JSON-LD/Data Integrity — (a) extract W3C VC-API-shaped test vectors and adapt them into
-   direct calls against `vcrd-core`, versus (b) a minimal local VC-API HTTP shim so the
-   official test harness runs unmodified. Compare the actual working code and the delta
-   from `main` on each, then merge the winner and discard the other.
-2. **Set up `cargo-fuzz` targets** for `vcrd-core`'s untrusted-input parsers, seeded from
-   the same vendored conformance fixtures used in testing (§11).
+1. ~~**VC-API vector-consumption spike**~~ — moved to ARCHITECTURE §10 [T1].
+2. ~~**Set up `cargo-fuzz` targets**~~ — moved to ARCHITECTURE §10 [T2].
 3. ~~**Fable-based review of this document**, with particular attention to security risks —
    threat model completeness, verification-bypass classes, resource-exhaustion surface,
    crypto dependency choices, and any other design-level security gap, before
    implementation starts in earnest.~~
-4. **Research non-flaky test patterns** for `vcrd --version --verbose`-style output, once
-   that feature is actually built — naive tests would be coupled to the exact build
-   environment/commit/timestamp.
-5. **Switch to Conventional Commits and add `CHANGELOG.md`**, gated on "before talking to
-   other people about the project" (§14).
-6. **Wire up `cargo-semver-checks`** in CI before the 1.0 release (§13).
-7. **Add `CONTRIBUTING.md`, issue/PR templates, and `CODE_OF_CONDUCT.md`** to the repo,
-   same gating milestone as item 5 (§14).
-8. **Enable GitHub's "require approval for first-time contributor workflows" setting** —
-   an early-setup item, not gated on going public, since it costs nothing while solo
-   (§12).
-9. **Add a `CODEOWNERS` entry for `.github/workflows/*`** — same early-setup timing as
-   item 8 (§12).
+4. ~~**Research non-flaky test patterns** for `vcrd --version --verbose`-style output~~ —
+   moved to ARCHITECTURE §10 [T3].
+5. ~~**Switch to Conventional Commits and add `CHANGELOG.md`**~~ — moved to ARCHITECTURE
+   §10 [P1].
+6. ~~**Wire up `cargo-semver-checks`**~~ — moved to ARCHITECTURE §10 [T4].
+7. ~~**Add `CONTRIBUTING.md`, issue/PR templates, and `CODE_OF_CONDUCT.md`**~~ — moved to
+   ARCHITECTURE §10 [P2].
+8. ~~**Enable GitHub's "require approval for first-time contributor workflows"
+   setting**~~ — moved to ARCHITECTURE §10 [P3].
+9. ~~**Add a `CODEOWNERS` entry for `.github/workflows/*`**~~ — moved to ARCHITECTURE §10
+   [P4].
 10. **Design `vcrd-core`'s diagnostic/build-info API**, with `vcrd-cli`'s
     `--version --verbose` as one consumer of it rather than a CLI-only feature, and
     resolve the still-open scope question between ordinary bug-report-oriented output and
     a full dependency/SBOM-style manifest (§8).
-11. **Identify a secondary Code of Conduct contact** — someone other than the primary
-    maintainer — before openly and actively inviting outside contributors (§14).
-12. **Set up `cargo-llvm-cov` coverage tracking** with the ratchet (not hard-gate) policy
-    described in §11, and document that policy in `CONTRIBUTING.md`.
+11. ~~**Identify a secondary Code of Conduct contact**~~ — moved to ARCHITECTURE §10 [P5].
+12. ~~**Set up `cargo-llvm-cov` coverage tracking**~~ — moved to ARCHITECTURE §10 [T5].
 13. **Scope the mobile-wallet live-verifier feature's initial OpenID4VP protocol
     coverage** (which request/response variants, response-mode/encryption handling,
     credential-query mechanism) and its CLI verb/subcommand naming for the verifier and
@@ -1179,3 +1317,14 @@ canonical record of these open items.
     path can differ in sensitivity across types; and the hash construction — an unkeyed
     hash is comparable, and therefore linkable, across all callers, while a hash keyed
     with a caller-supplied secret is comparable only within that caller's own runs.
+19. ~~**Derive structural-limit defaults from a real corpus**~~ — moved to ARCHITECTURE
+    §10 [T6].
+20. **Settle the details of when an inspect failure blocks verify** (§4). The rule is
+    fixed — only when verification would be impossible or dangerous — but three details
+    wait for the first case that exercises them: the structure a result uses to report a
+    block and its reason; how to classify a failure whose impossibility depends on what
+    the caller supplied, since a credential without a usable issuer identifier is still
+    verifiable against caller-supplied key material; and how a condition that is dangerous
+    but conforming — a token header telling the verifier where to fetch keys — is
+    reported by inspect so that it can block verify, given that doing so also changes
+    what `vcrd inspect` alone returns.
