@@ -148,11 +148,18 @@ pub enum Severity { Info, Warning, Error }
   than the whole output being discarded. The prototype discarded it (finding 1).
 - **Only error-severity findings fail a phase.** Warnings and informational findings ride
   along on a passed phase, and do not affect the exit code (§6).
-- **`FindingDetail` and `FormatDetail` are `#[non_exhaustive]`.** In the prototype, adding a
-  variant to the format enum broke two irrefutable `let` bindings, one in each crate. With
-  the attribute, every consumer outside core writes one wildcard arm, and later variants
-  stop being breaking changes. Core's own matches still break, which is where a new
-  format is being added anyway (finding 1).
+- **`FindingDetail` and `FormatDetail` are ordinary enums, not `#[non_exhaustive]`.**
+  Adding a variant then fails to compile everywhere it is matched, including in
+  `vcrd-cli`, and that break is the point: the JSON mapping (§6) is where a new variant
+  becomes part of the agent-facing schema, so someone has to decide how it appears.
+  `#[non_exhaustive]` has no effect inside the defining crate, so it would silence exactly
+  the frontend whose mapping matters, leaving the new variant to fall through a wildcard
+  arm and the typed detail REQUIREMENTS §6 requires to vanish at the crate boundary. The
+  cost is that adding a variant breaks consumers outside the repository, which before 1.0
+  is a `0.(x+1).0` change under REQUIREMENTS §13; the prototype measured the break at two
+  irrefutable `let` bindings (finding 1). Whether to revisit this once breaking changes
+  become expensive is §10 [Q5]. The attribute still belongs on enumerations whose
+  consumers are told to expect unknown values, such as the key-provenance `source` (§8).
 - **`NotEvaluated { what, why }`** lists the checks REQUIREMENTS §12 requires a result to
   disclose as not performed — revocation status, context resolution, holder binding,
   replay binding, issuer accreditation, schema conformance — each with a reason: requires
@@ -361,8 +368,9 @@ cryptosuite: the W3C *Data Integrity EdDSA Cryptosuites v1.0* Recommendation has
 the bytes would have to dispatch on cryptosuite name (finding 4).
 
 So `ProofInput` must carry what each kind of suite needs — detached bytes for JOSE, the
-unsecured document and proof options for Data Integrity — and becomes a
-`#[non_exhaustive]` enum. The Data Integrity side is open until that path is designed
+unsecured document and proof options for Data Integrity — and becomes an enum, on the
+same terms as the enums in §3: no `#[non_exhaustive]`, so that adding a kind breaks every
+suite that matches on it. The Data Integrity side is open until that path is designed
 (§10 [Q1]). `ProofInput` does not carry key provenance, which the prototype passed and no suite
 read (finding 4).
 
@@ -379,7 +387,7 @@ The registry behind `vcrd formats` and `vcrd suites` holds `Box<dyn CredentialFo
 `Box<dyn ProofSuite>`, so both traits must be dyn-compatible: no generic methods, no
 associated constants, no methods returning `Self`. Associated types are permitted, but a
 trait object must fix them, which a registry of formats with different output types
-cannot do. Hence per-format output is a closed `#[non_exhaustive]` enum (§3). Methods taking
+cannot do. Hence per-format output is a closed enum (§3). Methods taking
 borrowed inputs such as `ProofInput<'a>` are fine. The prototype confirmed all of this by
 construction (finding 4).
 
@@ -702,6 +710,24 @@ Each becomes a test observed to fail and then to pass (REQUIREMENTS §11):
   disclosed (§3).
 - **[Q4] RSA maximum key size** — the crate rejects moduli over 4096 bits by default; decide
   whether to raise that (§8).
+- **[Q5] Revisit `#[non_exhaustive]` before 1.0.** §3 leaves the result enums exhaustive so
+  that a new variant breaks the JSON mapping and forces a decision. After 1.0, each new
+  variant becomes a major-version change for consumers outside the repository, and this
+  project expects to add formats, suites, and checks continuously. Two ways out, if the
+  cost bites: mark the enums `#[non_exhaustive]` and carry the guarantee in a test that
+  asserts every variant maps to a non-wildcard `type`; or have core present each detail as
+  a name plus typed fields, with the exhaustive match inside core where the attribute has
+  no effect, so no frontend matches per variant at all. The second also removes the
+  per-variant arms the mapping costs today (finding 2).
+- **[Q6] Typed detail for implementations outside this repository.** A proof suite shipped
+  as its own crate — which REQUIREMENTS §5's IP policy contemplates for proprietary code —
+  cannot add a variant to core's `FindingDetail`, and the same holds for a format's
+  `FormatDetail` if one is ever split out under REQUIREMENTS §7. `Finding.code` already
+  lets such an implementation name a condition core does not know, so what is missing is
+  only the typed parameters. Building an escape-hatch variant now would add a
+  weakly-typed path into the agent-facing schema that nothing in the repository exercises,
+  against §7's own reason for keeping formats in-tree. Decide when the first such
+  implementation appears, or when a format is actually split into its own crate.
 
 ### [C] Crates and algorithm coverage
 

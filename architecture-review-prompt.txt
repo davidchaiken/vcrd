@@ -1,0 +1,32 @@
+You're reviewing vcrd, a Rust command-line tool and library for inspecting and verifying
+verifiable credentials, designed primarily for coding agents and CI pipelines. The
+project has finished a throwaway prototype phase and is about to start development; the
+documents are considered good enough to build from, and the purpose of this review is to
+help development start well, not to extend the analysis. Read REQUIREMENTS.md (what vcrd
+must do) and ARCHITECTURE.md (structure, data types, control flow, design decisions, and
+in §10 a tagged list of open and deferred implementation items) at the repository root;
+the prototype's evidence is in prototype/PROTOTYPE-FINDINGS.md on branch spike/vc-jwt,
+cited in ARCHITECTURE as "finding N". Report only major problems: an inconsistency
+between the documents that would lead to building the wrong thing, a gap that would
+force significant rework if found later, or a security or standards-conformance issue
+that is expensive to fix after code exists (check standards claims against their
+normative text, not memory). Apply one test to each candidate issue: would it change what
+gets built in the first phases, or cause substantial rework if discovered later? If not,
+leave it out. Report no wording, style, citation, or minor-consistency issues, and at
+most five findings in total; if you find nothing that meets the bar, say so in one
+sentence. Dependency names staying in REQUIREMENTS, and REQUIREMENTS §16 holding only
+functional open items, are settled.
+
+Most of your answer should be development phases, from a main branch with no code to a
+first release. The approach is decided: build a thin end-to-end slice through the CLI
+first — bytes in, through parse, inspect, and verify, to rendered output and exit codes —
+for a narrow case, then widen it phase by phase, rather than completing the core library
+before the CLI. Plan within that approach. For each phase, give its scope, what it
+delivers that a user or agent can run, its exit criteria, and which ARCHITECTURE §10
+items it closes, by tag (e.g. [S3], [T2]), with the milestone review against the
+standards' normative text (REQUIREMENTS §11) at the end of each phase. Say what the first
+slice should include and exclude, and what you would defer past the first release. Cite
+document and section for each point, prefer classical computer-science terms to
+metaphor, and state which claims you verified and which you inferred. Write your answer
+to ARCHITECTURE-REVIEW.md at the repository root, in two sections — findings, then
+development phases — and do not modify REQUIREMENTS.md or ARCHITECTURE.md.
