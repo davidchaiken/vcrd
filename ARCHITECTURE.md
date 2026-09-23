@@ -764,7 +764,10 @@ Each becomes a test observed to fail and then to pass (REQUIREMENTS §11):
   asserts every variant maps to a non-wildcard `type`; or have core present each detail as
   a name plus typed fields, with the exhaustive match inside core where the attribute has
   no effect, so no frontend matches per variant at all. The second also removes the
-  per-variant arms the mapping costs today (finding 2).
+  per-variant arms the mapping costs today (finding 2). Note: this topic interacts with
+  the goal to support proprietary formats and/or cryptosuites that can not conform to
+  an Apache or MIT license. An important question is how external crates with more
+  restrictive licenses might be able to build on top of vcrd-core.
 - **[Q6] Typed detail for implementations outside this repository.** A proof suite shipped
   as its own crate — which REQUIREMENTS §5's IP policy contemplates for proprietary code —
   cannot add a variant to core's `FindingDetail`, and the same holds for a format's
@@ -773,7 +776,16 @@ Each becomes a test observed to fail and then to pass (REQUIREMENTS §11):
   only the typed parameters. Building an escape-hatch variant now would add a
   weakly-typed path into the agent-facing schema that nothing in the repository exercises,
   against §7's own reason for keeping formats in-tree. Decide when the first such
-  implementation appears, or when a format is actually split into its own crate.
+  implementation appears, or when a format is actually split into its own crate — together
+  with [Q5], since it is the combination that makes an out-of-tree implementation awkward:
+  exhaustive result enums break its build whenever core gains a variant, and without an
+  escape hatch its findings carry a `code` but no typed fields. Note also that the
+  licensing constraint runs one way. vcrd's own dependency policy (REQUIREMENTS §6) keeps
+  restrictive crates out of the shipped graph, while MIT/Apache licensing already lets a
+  proprietary crate depend on `vcrd-core`; so the arrangement §5 contemplates is a third
+  party building their own binary from `vcrd-core` plus their suite, statically linked at
+  their build time, which vcrd never distributes. Rust has no stable ABI, so there is no
+  plugin for vcrd to load, and the extension points are the whole mechanism.
 
 ### [C] Crates and algorithm coverage
 
