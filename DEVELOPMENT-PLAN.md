@@ -1,143 +1,31 @@
-# Architecture review and development plan
+# vcrd Development Plan
 
-Review of [REQUIREMENTS.md](REQUIREMENTS.md) and [ARCHITECTURE.md](ARCHITECTURE.md) at
-commit `a92209e` on branch `spike/vc-jwt`, with
+The order of the work: milestones, what each delivers, its exit criteria, and which
+ARCHITECTURE §10 items it closes. It says when something is built, not what it is —
+[REQUIREMENTS.md](REQUIREMENTS.md) states what vcrd must do and
+[ARCHITECTURE.md](ARCHITECTURE.md) how it is built (ARCHITECTURE §1). This document is
+retired once its milestones are done; ARCHITECTURE §10 is the durable list of open items.
+
+It began as a review of REQUIREMENTS.md and ARCHITECTURE.md at commit `a92209e` on branch
+`spike/vc-jwt`, dated 2026-09-19, with
 [prototype/PROTOTYPE-FINDINGS.md](prototype/PROTOTYPE-FINDINGS.md) on the same branch as
-evidence ("finding *N*" below has ARCHITECTURE's meaning). Date: 2026-09-19.
-
-Two sections. §1 reports only problems that meet the bar set for this review: an
-inconsistency that would build the wrong thing, a gap that would force significant rework
-if found later, or a security or conformance issue that is expensive to fix once code
-exists. §2 is the development plan, from an empty `main` to a first release, within the
-decided approach of a thin end-to-end slice first.
+evidence ("finding *N*" below has ARCHITECTURE's meaning). The two findings that review
+raised are now resolved in ARCHITECTURE: containment in §3, §4 and §6, and the decision
+against `#[non_exhaustive]` on the result enums in §3.
 
 Standards claims were checked against normative text, not memory. Two markers are used
-throughout: **[verified]** means the sentence was read in the standard during this review;
-**[inferred]** means it is this review's reasoning from verified facts. The verification
-record at the end says which texts were read directly, which came through a fetch tool's
-extraction, and what was not verified.
+throughout: **[verified]** means the sentence was read in the standard during that review;
+**[inferred]** means it is reasoning from verified facts. The verification record at the
+end says which texts were read directly, which came through a fetch tool's extraction, and
+what was not verified.
 
-## 1. Findings
-
-Two findings meet the bar. Everything else checked either matched the normative text or is
-a check small enough to belong in a milestone review; those items are placed in the review
-lists of §2 rather than reported here.
-
-### F1. The result type, the `Document` projection, the format trait and the JSON envelope are single-credential; presentations need a tree of results and a contained-credential path through the registry
-
-**What the documents say.** ARCHITECTURE §3 defines `Report` ([ARCHITECTURE.md:112](ARCHITECTURE.md:112))
-as one `input`, one `parse`/`inspect`/`verify` triple and one `not_evaluated` list.
-`ParseOutput` holds one `Document`; `VerifyOutput` is a flat list of `ProofResult`; the
-`Document` projection (§3) carries issuer, subject and validity bounds, which are credential
-properties. `CredentialFormat::parse` ([ARCHITECTURE.md:333](ARCHITECTURE.md:333)) returns
-`PhaseOutcome<ParseOutput>` and has no way to hand back inputs it found inside the
-document. The envelope (§6) has a singular `credential` key and a flat `proofs` list. §4's
-table marks the expected challenge and domain as consumed by "verification of presentations
-(not yet designed)" ([ARCHITECTURE.md:296](ARCHITECTURE.md:296)).
-
-REQUIREMENTS §2 ([REQUIREMENTS.md:85](REQUIREMENTS.md:85)) requires handling
-presentations, defined as checking the holder proof *and* the proof(s) on each contained
-credential. REQUIREMENTS §10 commits presentation support per format as a follow-on PR,
-and puts the expected-challenge and expected-domain parameters into the v1 API precisely
-because "changing the result schema after it's load-bearing would be disruptive"
-([REQUIREMENTS.md:771](REQUIREMENTS.md:771)). REQUIREMENTS §9 makes the JSON output a
-versioned contract that agents parse.
-
-**What the standards say [verified].**
-
-- VC-JOSE-COSE §3.1.2: "Verifiable Credentials secured in verifiable presentations MUST
-  use the Enveloped Verifiable Credential type" and "Credentials in verifiable
-  presentations MUST be secured."
-- VCDM 2.0 §4.13: the `verifiableCredential` value "MUST be one or more verifiable
-  credential and/or enveloped verifiable credential objects"; an
-  `EnvelopedVerifiableCredential`'s `id` "MUST be a data: URL [RFC2397] that expresses a
-  secured verifiable credential using an enveloping security scheme"; an
-  `EnvelopedVerifiablePresentation` is defined the same way, so presentations nest. The
-  spec's own example envelopes an `application/vc+sd-jwt` credential inside a
-  presentation. A presentation has `type` including `VerifiablePresentation` (MUST), an
-  optional `holder`, and no validity period.
-
-**Consequence [inferred].** A presentation contains *N* credentials, each a byte string in
-a format chosen by its issuer, not by the presentation's securing mechanism: a JOSE
-presentation may envelope an SD-JWT credential, and a Data Integrity presentation may embed
-JSON-LD credentials directly (VCDM §4.13, examples 20 and 21). Each contained credential
-must therefore go through format detection, parse, inspect and verify on its own, with its
-own graduated outcomes, findings, key provenance and not-evaluated list. One phase triple
-cannot express "holder proof verified; credential 2 of 3 expired; credential 3 in a format
-vcrd does not implement", which is the answer REQUIREMENTS §6 (graduated success, findings
-accumulate) requires. Presentation support cannot be purely per-format, as REQUIREMENTS §10
-phrases it: the recursion over contained credentials belongs to the phase runner and the
-registry, not to any one `CredentialFormat`.
-
-**Why it meets the bar.** The phase-1 `Report`, `Document`, `ParseOutput`, envelope,
-exit-code function and all three renderers are built on the single-credential shape.
-Changing that in the presentation phase reworks the schema mapping (390 lines in the
-prototype, finding 2), the exit-code rule, the renderers and every consumer written against
-schema version 0. Deciding the shape now costs a few type definitions.
-
-**Change for phase 1.**
-
-1. `Report` becomes a tree: `contained: Vec<Report>`, each with its own `input`, phases,
-   findings, proofs and `not_evaluated`; the outermost report describes the outermost
-   object.
-2. `Document` gains a `kind` (credential or presentation) and a `holder`; issuer and
-   validity bounds are present by kind.
-3. `ParseOutput` gains `contained: Vec<ContainedInput>`: the bytes, the media type from the
-   `data:` URL as a detection hint, and the location (for example
-   `verifiableCredential[1]`). The phase runner, not the format, dispatches each through
-   the registry and recurses.
-4. `Limits` gains a nesting-depth cap and a contained-count cap, checked before recursion
-   (REQUIREMENTS §6).
-5. The envelope mirrors the tree from schema version 0, with `contained: []` for a bare
-   credential.
-6. The exit code is computed over the union of error-severity findings in the tree by the
-   existing attribution-then-phase rule (REQUIREMENTS §8); `status` names the earliest
-   failed phase anywhere in the tree.
-
-Phase 1 emits an empty `contained` list; phase 4 fills it.
-
-### F2. `#[non_exhaustive]` on `FindingDetail` and `FormatDetail` removes the compile-time guarantee the JSON mapping relies on
-
-**What the documents say.** ARCHITECTURE §3 ([ARCHITECTURE.md:151](ARCHITECTURE.md:151))
-marks `FindingDetail` and `FormatDetail` `#[non_exhaustive]` so that "every consumer
-outside core writes one wildcard arm, and later variants stop being breaking changes."
-ARCHITECTURE §6 ([ARCHITECTURE.md:439](ARCHITECTURE.md:439)) has `vcrd-cli` map
-`FindingDetail` to JSON "by one match arm per variant, tagged by a `type` field" and
-relies on that for the contract: "Renaming a field in core therefore breaks the mapping's
-compilation instead of silently changing the schema."
-
-**What the language rule says [verified].** The Rust Reference, *non_exhaustive*: "Within
-the defining crate, `non_exhaustive` has no effect"; outside it, "matching on a variant
-does not contribute towards the exhaustiveness of the arms", so code "cannot match on a
-non-exhaustive enum without including a wildcard arm." `vcrd-cli` is outside `vcrd-core`.
-
-**Consequence [inferred from the rule].** The CLI's match must carry `_ =>`. A new finding
-variant added in core, the routine change on every format and suite, compiles in the CLI
-unchanged and is emitted through the wildcard arm. The schema changes silently, and the
-typed detail that REQUIREMENTS §6's diagnosability principle depends on is dropped at the
-crate boundary. §6's guarantee holds only for renames within an existing variant. The same
-applies to `FormatDetail` and the envelope's `format` key.
-
-**Why it meets the bar.** It is a phase-1 type-definition decision, and the failure it
-permits is silent corruption of the agent-facing contract, invisible until a consumer asks
-why a finding has no detail.
-
-**Recommendation.** Drop `#[non_exhaustive]` from `FindingDetail` and `FormatDetail`.
-Adding a variant then breaks external consumers, which pre-1.0 is a `0.(x+1).0` change under
-REQUIREMENTS §13, and `vcrd-cli` is updated in the same PR; the prototype measured the
-break at two `let` bindings (finding 1), which is the desired signal. Keep the attribute for
-enumerations meant to be open to consumers, such as the key-provenance `source` (§8),
-where the documents already require consumers to accept unknown values. If the attribute
-must stay, add a core-provided complete list of variants and a `vcrd-cli` test asserting
-each maps to a non-wildcard `type`; the test, not the compiler, then carries the guarantee.
-
-## 2. Development milestones
+## Milestones
 
 **Approach (decided).** A thin end-to-end slice through the CLI first, bytes in to exit code
 out, for one narrow case; then widen milestone by milestone. Trunk-based development
 (REQUIREMENTS §13). Every milestone ends with the review REQUIREMENTS §11 prescribes: the
 implementation against the normative text of every standard it implements, each gap a test
-that cites the section, fails, is fixed, and passes. Where this review already found a
+that cites the section, fails, is fixed, and passes. Where the review behind this plan already found a
 normative sentence the design does not yet cover, it is listed under that milestone's review
 as a known input, so the first review starts with a queue rather than a blank page. Tags
 refer to ARCHITECTURE §10. Milestone sizes are unequal: milestones 1 and 5 are the large ones.
@@ -148,7 +36,7 @@ refer to ARCHITECTURE §10. Milestone sizes are unequal: milestones 1 and 5 are 
 | 1 Thin slice | `vcrd inspect`/`verify` on a VC-JOSE-COSE credential, Ed25519, `did:key` | [S3] [S4] [S5] [S6] [S7] [G1] |
 | 2 Keys and algorithms | five algorithms, caller keys, embedded-key precedence, allowlist, full provenance | [S1] [S2] [C1] [C2] [C3] [Q4] |
 | 3 CLI contract | config file, env, designations, `formats`/`suites`, man pages, fuzz, coverage, limits corpus | [Q2] [T2] [T5] [T6] |
-| 4 Presentations | `vp+jwt` with enveloped credentials, challenge/domain | discharges F1 |
+| 4 Presentations | `vp+jwt` with enveloped credentials, challenge/domain | — |
 | 5 Data Integrity | `eddsa-rdfc-2022`, `eddsa-jcs-2022`, pinned contexts, canonicalization budget | [Q1] [T1] |
 | 6 Release 0.1.0 | community files, semver-checks, differential harness, distribution | [P1] [P2] [P5] [T4] [T7] [D1] [D2] |
 
@@ -194,7 +82,8 @@ every other `alg` exercise the by-name rejection path from day one.
   steps 2, 6 and 7 forbid line breaks and extra characters **[verified]**), depth cap by a
   string-aware byte prescan before `serde_json` (ARCHITECTURE §4), `alg` present, `crit`
   handling (below), an embedded `jwk` parsed into a typed JWK (ARCHITECTURE §3), the
-  registry with `No`/`Maybe`/`Yes` detection, and `Report.contained` per F1 (empty).
+  registry with `No`/`Maybe`/`Yes` detection, and `Report.contained` (ARCHITECTURE §3),
+  empty at this milestone.
 - *Inspect.* VCDM 2.0 §4.3 (`@context` first item; subsequent items URLs or objects),
   §4.5 (`type` present; `VerifiableCredential` per the table of objects that MUST have a
   type), §4.7 (issuer present; a URL or an object with an `id` URL), §4.8
@@ -222,7 +111,7 @@ every other `alg` exercise the by-name rejection path from day one.
   exit codes 0–6; `vcrd <file>` and piped input default to `inspect`. Caller faults are
   emitted as the one JSON document: parse arguments with `clap`'s fallible entry point,
   because `clap`'s own usage-error exit status collides with vcrd's code 2 (not verified
-  this review; check `clap::Error::exit` at implementation).
+  that review; check `clap::Error::exit` at implementation).
 - *Fixtures, negative first* (REQUIREMENTS §11): happy Ed25519; tampered signature;
   expired; not yet valid; `validUntil` before `validFrom`; `alg: none`; `alg: ES256`
   (unsupported by name in this slice); embedded `jwk` only (refused); `did:key` encoding
@@ -238,7 +127,8 @@ every other `alg` exercise the by-name rejection path from day one.
 - *[G1]* The debugging guide, executed end to end on this code: REQUIREMENTS §6 says an
   unrun procedure does not count as documented, and milestone 1 is the first time there is
   code to run it on.
-- *F2* resolved in the type definitions.
+- The result enums defined without `#[non_exhaustive]`, so that a later variant breaks
+  the JSON mapping rather than falling through a wildcard arm (ARCHITECTURE §3).
 
 **Exclude** (each has a later milestone): other algorithms; caller-supplied keys; the
 embedded-key opt-in; the algorithm allowlist (meaningless with one algorithm; its `Context`
@@ -345,7 +235,7 @@ VC-JOSE-COSE §4.1–4.2 and §5's "verifiers SHOULD strive to minimize the proc
 untrusted data" during key discovery **[verified]**. Known inputs: the did:key v0.9 table,
 as extracted by the fetch tool, lists codecs `0xe7`, `0xec`, `0xed`, `0x1200` and `0x1201`
 only; `p521-pub` (`0x1202`) and `rsa-pub` (`0x1205`) come from the multicodec registry,
-which this review did not read. Record the source for each codec when it is implemented,
+which that review did not read. Record the source for each codec when it is implemented,
 and treat P-521 `did:key` as an extension beyond the method spec's table.
 
 ### Milestone 3. The CLI contract, configuration and hardening
@@ -383,7 +273,8 @@ non-conformance or a vcrd bug, and the review records which.
 **Scope.** `vp+jwt` per VC-JOSE-COSE §3.1.2. `Document.kind = presentation` and `holder`.
 `EnvelopedVerifiableCredential`: decode the `data:` URL (RFC 2397, base64 or
 percent-encoded), take its media type as a detection hint, and hand each contained input
-to the phase runner, which recurses through the registry (F1). `EnvelopedVerifiablePresentation`
+to the phase runner, which recurses through the registry (ARCHITECTURE §4).
+`EnvelopedVerifiablePresentation`
 nesting under the `Limits` caps. The holder proof: the presentation JWS verified against
 the holder's key from `holder` as a `did:key`, from `cnf` (VC-JOSE-COSE §4.1.3, RECOMMENDED
 **[verified]**), or from caller-supplied material. VCDM 2.0 §4.13's rule that a
@@ -393,7 +284,7 @@ contains no sentence about nonce, audience, challenge or domain **[verified: non
 so for JOSE presentations the binding claims are a protocol convention; adopt OpenID4VP's
 `nonce` and `aud`, say so in the finding, and with no parameters supplied report
 `not_evaluated: replay binding` (REQUIREMENTS §10). Exit code and `status` aggregated over
-the tree (F1). The text renderer for a tree: one block per contained report.
+the tree (ARCHITECTURE §6). The text renderer for a tree: one block per contained report.
 
 **Delivers.** `vcrd verify presentation.jwt` with expected-nonce and expected-audience
 flags (names implementation-time), reporting the holder proof and each contained
@@ -406,9 +297,10 @@ named by media type, attributed to vcrd); wrong nonce (holder proof fails replay
 no parameters (`not_evaluated`); nesting over the cap; a self-asserted credential without
 `holder`.
 
-**Closes.** No §10 tag; discharges F1.
+**Closes.** No §10 tag; implements the containment design (ARCHITECTURE §3, §4, §6).
 
-**Milestone review.** Texts: VCDM 2.0 §4.13 (every MUST quoted in F1), VC-JOSE-COSE
+**Milestone review.** Texts: VCDM 2.0 §4.13 (each MUST for enveloped credentials and
+presentations), VC-JOSE-COSE
 §3.1.2, §4.1.3 and §5.4 ("All claims expected for the typ MUST be present"
 **[verified]**), RFC 2397, RFC 7519 §4.1.3 (`aud`: "Each principal intended to process the
 JWT MUST identify itself with a value in the audience claim" **[verified]**).
@@ -497,7 +389,7 @@ the changelog is generated; every §10 item is closed or carried with its tag.
 candidate, since REQUIREMENTS §11's practice is cumulative, and run the terminology check
 of REQUIREMENTS §15 over every standard now in scope.
 
-### Deferred past the first release
+## Deferred past the first release
 
 - **SD-JWT VC** (REQUIREMENTS §10's near-term roadmap): [Q3] first, since a withheld claim
   is neither present nor absent in `Document`; `cnf` holder binding.
@@ -510,11 +402,14 @@ of REQUIREMENTS §15 over every standard now in scope.
   **AnonCreds/BBS+**; **WASM/browser**.
 - **The diagnostic build-info API** (REQUIREMENTS §16 item 10) and [T3]; plain `--version`
   ships in 0.1.0.
+- **[Q5]**, revisiting `#[non_exhaustive]` on the result enums, which only bites once a
+  breaking change is expensive, and **[Q6]**, typed finding detail for an implementation
+  outside this repository, which waits for the first such implementation.
 - Proof chains; any algorithm deferred in milestone 2; Windows CI; SBOM and reproducible
   builds; a CI differential job beyond the local harness; registration against the W3C
   test suites (REQUIREMENTS §14).
 
-### Verification record
+## Verification record
 
 Read directly from a local text conversion of the published page (fetched 2026-09-19):
 VCDM 2.0 §2, §4.4, §4.5, §4.7–4.9, §4.13, §6.1–6.3, §7.1–7.2; VC-JOSE-COSE §3.1.3, §4, §5.
@@ -532,6 +427,6 @@ order; ARCHITECTURE §8's `none` rule against RFC 7518 §3.6; RFC 7515 §4.1.2 a
 cited for `jku` and `x5u`; REQUIREMENTS §15's reading of VCDM 2.0 §2's *verification* and
 *validation*; the phase model's compatibility with VCDM 2.0 §7.1.
 
-Not verified this review: the multicodec registry values `0x1202` and `0x1205`; RFC 7638;
+Not verified by that review: the multicodec registry values `0x1202` and `0x1205`; RFC 7638;
 RFC 8785; the behavior of any crate named in ARCHITECTURE §2; `clap`'s usage-error exit
-status. Rework-cost and effort statements in F1, F2 and the milestone plan are inferred.
+status. Rework-cost and effort statements in this plan are inferred.
