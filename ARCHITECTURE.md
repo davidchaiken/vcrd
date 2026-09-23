@@ -9,12 +9,15 @@ types, its control and data flow, and the reasons for its design decisions.
 section implements a requirement, it cites the requirement (e.g. "REQUIREMENTS §4") and
 describes only the mechanism.
 
-Three documents divide the work:
+Four documents divide the work:
 
 - **REQUIREMENTS.md** — what vcrd does and must do. It changes only when vcrd's
   functionality changes, not when its implementation does.
 - **This document** — structure, data, flow, and design decisions, together with the open
   and deferred implementation items in §10.
+- **DEVELOPMENT-PLAN.md** — the order of the work: milestones, what each delivers, its
+  exit criteria, and which §10 items it closes. It says when something is built, not what
+  it is, and it is retired once its milestones are done; §10 is the durable list.
 - **rustdoc** — code-level detail, kept beside the code so it cannot drift, and published
   on docs.rs (REQUIREMENTS §13).
 
@@ -115,6 +118,9 @@ pub struct Report {
     pub inspect: PhaseOutcome<InspectOutput>,
     pub verify: PhaseOutcome<VerifyOutput>,
     pub not_evaluated: Vec<NotEvaluated>,
+    /// One complete result per credential found inside this one. Empty for a bare
+    /// credential; a presentation fills it.
+    pub contained: Vec<Report>,
 }
 
 pub enum Phase { Parse, Inspect, Verify }
@@ -160,6 +166,22 @@ pub enum Severity { Info, Warning, Error }
   irrefutable `let` bindings (finding 1). Whether to revisit this once breaking changes
   become expensive is §10 [Q5]. The attribute still belongs on enumerations whose
   consumers are told to expect unknown values, such as the key-provenance `source` (§8).
+- **A contained credential gets its own complete result.** A presentation carries one or
+  more credentials, each secured independently by its issuer, so each needs its own three
+  phase outcomes, findings, key provenance, and not-evaluated list. A flat list of proof
+  results cannot say "holder proof verified, credential 2 of 3 expired, credential 3 in a
+  format vcrd does not implement", which is the answer REQUIREMENTS §6 requires. Hence
+  `Report.contained`, holding whole `Report`s rather than a reduced summary.
+- **Containment is one level deep in practice, and the type is uniform anyway.** VCDM 2.0
+  §4.13 puts credentials and enveloped credentials in a presentation's
+  `verifiableCredential`, not presentations, and an enveloped presentation is a transport
+  wrapper rather than a second level of results; an mdoc device response is one level as
+  well. A recursive `Vec<Report>` is still the better type: one shape for every level, so
+  the schema mapping (§6) and the renderers have one path rather than two, and a
+  consumer parses the same object wherever it appears. The depth the type permits and the
+  formats do not need is bounded by a cap in `Limits` (§4), which is needed regardless
+  because breadth — a presentation enveloping thousands of credentials — is the real
+  exposure.
 - **`NotEvaluated { what, why }`** lists the checks REQUIREMENTS §12 requires a result to
   disclose as not performed — revocation status, context resolution, holder binding,
   replay binding, issuer accreditation, schema conformance — each with a reason: requires
@@ -167,8 +189,11 @@ pub enum Severity { Info, Warning, Error }
 
 ### Per-phase outputs
 
-- **`ParseOutput`** — the format's identifier, the format-neutral `Document`, and a
-  `FormatDetail` variant holding what only that format has (JOSE header fields, profile).
+- **`ParseOutput`** — the format's identifier, the format-neutral `Document`, a
+  `FormatDetail` variant holding what only that format has (JOSE header fields, profile),
+  and `contained: Vec<ContainedInput>`: for each credential found inside, its bytes, the
+  media type from the `data:` URL as a detection hint, and its location, such as
+  `verifiableCredential[1]`. The format hands these back; it does not process them (§4).
 - **`InspectOutput`** — the profile and the validity-period status: current, expired, not
   yet valid, unbounded, or unknown.
 - **`VerifyOutput`** — one `ProofResult` per proof: suite, declared algorithm, outcome, and
@@ -178,11 +203,13 @@ pub enum Severity { Info, Warning, Error }
 
 ### The `Document` projection
 
-A format-neutral view that every frontend renders: issuer, subject, identifier, types,
-contexts, validity bounds, the claims, and the proof descriptors. Claims are flattened to
-dotted leaf paths (`credentialSubject.degree.name`), so claim names stay visible while
-every value is wrapped for redaction (§7). Which fields count as claims and which as
-metadata is each format's decision (REQUIREMENTS §8).
+A format-neutral view that every frontend renders: a `kind` — credential or presentation
+— an identifier, types, contexts, the claims, and the proof descriptors, plus the fields
+that belong to one kind: issuer and validity bounds for a credential, `holder` for a
+presentation. Claims are flattened to dotted leaf paths
+(`credentialSubject.degree.name`), so claim names stay visible while every value is
+wrapped for redaction (§7). Which fields count as claims and which as metadata is each
+format's decision (REQUIREMENTS §8).
 
 Its known limit: it cannot represent a claim that exists but was withheld under selective
 disclosure, which is neither present nor absent (§10 [Q3]).
@@ -200,8 +227,9 @@ disclosure, which is neither present nor absent (§10 [Q3]).
 | `KeyHints` | where key material may be | format's parse | typed; an embedded key is parsed, not kept as raw JSON |
 | `KeyProvenance` | where the key used came from | key resolution | reported whether verification succeeds or fails (§8) |
 | `ProofInput` | what a suite verifies | phase runner | carries no provenance (§5) |
+| `ContainedInput` | a credential found inside another | format's parse | bytes, media-type hint, and location; dispatched by the runner, not the format |
 | `Context` | everything injected | frontend | no default clock |
-| `Limits` | size, depth, and claim-count caps | frontend, via `Context` | applied before JSON parsing (§4) |
+| `Limits` | size, depth, claim-count, containment-depth, and contained-count caps | frontend, via `Context` | applied before the work they bound (§4) |
 | `Registry` | available formats and suites | frontend | trait objects (§5) |
 
 ### The injected `Context`
@@ -268,6 +296,15 @@ In the prototype the corresponding path was traced to the arithmetic: for ES256 
   fixed per finding code: a credential without a usable issuer identifier is unverifiable
   only if the caller also supplied no key material. The result structure for a block is
   REQUIREMENTS §16 item 20.
+- **The runner dispatches contained credentials, and recurses.** For each
+  `ContainedInput` a parse produced, the runner applies the containment caps, runs format
+  detection over its bytes with the media-type hint from the `data:` URL, and runs the
+  same phases on it, appending the result to `Report.contained`. The recursion belongs
+  here rather than to any format, because a contained credential's format is chosen by
+  its issuer, not by the securing mechanism of the thing that carries it: a JOSE-secured
+  presentation may envelope an SD-JWT credential. REQUIREMENTS §10's "presentation
+  support rides along with each credential format" holds for the presentation's own
+  holder proof, not for what it contains.
 
 ### Format detection
 
@@ -287,6 +324,10 @@ REQUIREMENTS §6 requires a limit to run before the work it bounds. For a compac
 4. The segments are parsed. `serde_json`'s own fixed nesting limit of 128 remains as a
    second guard.
 5. The claim-count cap is applied while flattening claims.
+6. Before the runner recurses into contained credentials, the contained-count cap is
+   checked against the number the parse returned, and the containment-depth cap against
+   the current depth. Each contained input then goes through steps 1 to 5 in its own
+   right, so its size and depth are bounded by the same caps.
 
 The prototype parsed both JSON segments before checking depth, so its configurable depth
 cap bounded nothing; it also reported the depth of the *encoded* token, which is always 0
@@ -350,9 +391,10 @@ pub trait ProofSuite {
 Responsibilities:
 
 - **A format** detects its input, parses it into a `Document` and its `FormatDetail`,
-  locates each proof and the key hints for it, performs inspection, defines which of its
-  fields are claims, and supplies the path notation for redaction designations
-  (REQUIREMENTS §16 item 18). It never resolves keys or decides trust.
+  locates each proof and the key hints for it, hands back any credentials it finds inside
+  as `ContainedInput`s, performs inspection, defines which of its fields are claims, and
+  supplies the path notation for redaction designations (REQUIREMENTS §16 item 18). It
+  never resolves keys, dispatches contained credentials, or decides trust.
 - **A suite** applies the algorithm policy, binds the algorithm to the key type, computes
   the bytes the signature covers, and calls the primitives. It never sees key provenance.
 - **The phase runner** — neither trait — resolves keys, records provenance, applies the
@@ -430,6 +472,7 @@ prototype's name where it differs:
 | `proofs` | per proof: suite, declared algorithm, outcome, key provenance — present for failed verification too |
 | `findings` | code, phase, attribution, severity, and typed detail |
 | `not_evaluated` | what was not checked, and why |
+| `contained` | one nested result per credential found inside this one, in the same shape as the enclosing document, each with its own `phases`, `proofs`, `findings` and `not_evaluated`; `[]` for a bare credential |
 
 **Present when applicable:**
 
@@ -437,7 +480,7 @@ prototype's name where it differs:
 |---|---|
 | `error` | a caller fault: code and message |
 | `format` | format identifier, profile, and format-specific header fields |
-| `credential` | the `Document` fields, with claims rendered per §7 |
+| `credential` | the `Document` fields for this object — a credential or a presentation, per its `kind` — with claims rendered per §7 |
 
 Whether inapplicable keys are omitted, as in the prototype, or emitted as `null` is open
 (§10 [Q2]).
@@ -466,9 +509,12 @@ REQUIREMENTS §8.
 | 5 | rejected by caller policy |
 | 6 | not supported by vcrd |
 
-Among error-severity findings: any attributed to vcrd gives 6; otherwise any attributed to
-caller policy gives 5; otherwise the earliest failed phase gives 2, 3, or 4
-(REQUIREMENTS §8). Errors attributed to the environment, such as missing key material,
+The rule runs over the error-severity findings of the whole result, the enclosing document
+and everything in `contained` together: any attributed to vcrd gives 6; otherwise any
+attributed to caller policy gives 5; otherwise the earliest failed phase anywhere in the
+result gives 2, 3, or 4 (REQUIREMENTS §8). `status` names that phase. So a presentation
+whose holder proof verifies but whose second credential is expired exits 3, and the
+per-credential detail is in `contained`. Errors attributed to the environment, such as missing key material,
 take the phase's code. `--verbosity 0` prints nothing, leaving the code as the entire
 answer, which cannot express partial success.
 

@@ -131,18 +131,18 @@ where the documents already require consumers to accept unknown values. If the a
 must stay, add a core-provided complete list of variants and a `vcrd-cli` test asserting
 each maps to a non-wildcard `type`; the test, not the compiler, then carries the guarantee.
 
-## 2. Development phases
+## 2. Development milestones
 
 **Approach (decided).** A thin end-to-end slice through the CLI first, bytes in to exit code
-out, for one narrow case; then widen phase by phase. Trunk-based (REQUIREMENTS §13), each
-phase a milestone. Every phase ends with the review REQUIREMENTS §11 prescribes: the
+out, for one narrow case; then widen milestone by milestone. Trunk-based development
+(REQUIREMENTS §13). Every milestone ends with the review REQUIREMENTS §11 prescribes: the
 implementation against the normative text of every standard it implements, each gap a test
 that cites the section, fails, is fixed, and passes. Where this review already found a
-normative sentence the design does not yet cover, it is listed under that phase's review
+normative sentence the design does not yet cover, it is listed under that milestone's review
 as a known input, so the first review starts with a queue rather than a blank page. Tags
-refer to ARCHITECTURE §10. Phase sizes are unequal: phases 1 and 5 are the large ones.
+refer to ARCHITECTURE §10. Milestone sizes are unequal: milestones 1 and 5 are the large ones.
 
-| Phase | Delivers | Closes |
+| Milestone | Delivers | Closes |
 |---|---|---|
 | 0 Skeleton | buildable workspace, CI, repository hardening | [P3] [P4] |
 | 1 Thin slice | `vcrd inspect`/`verify` on a VC-JOSE-COSE credential, Ed25519, `did:key` | [S3] [S4] [S5] [S6] [S7] [G1] |
@@ -152,7 +152,7 @@ refer to ARCHITECTURE §10. Phase sizes are unequal: phases 1 and 5 are the larg
 | 5 Data Integrity | `eddsa-rdfc-2022`, `eddsa-jcs-2022`, pinned contexts, canonicalization budget | [Q1] [T1] |
 | 6 Release 0.1.0 | community files, semver-checks, differential harness, distribution | [P1] [P2] [P5] [T4] [T7] [D1] [D2] |
 
-### Phase 0. Repository skeleton
+### Milestone 0. Repository skeleton
 
 **Scope.** Cargo workspace per REQUIREMENTS §7: resolver 2, edition 2024,
 `[workspace.package]` inheritance, `license = "MIT OR Apache-2.0"` (§5); `vcrd-core` and
@@ -177,7 +177,7 @@ step rather than a memory.
 **Review.** No standard is implemented. Review against REQUIREMENTS §7, §12's CI list and
 §13's matrix, sentence by sentence.
 
-### Phase 1. Thin slice: one VC-JOSE-COSE credential, Ed25519, `did:key`
+### Milestone 1. Thin slice: one VC-JOSE-COSE credential, Ed25519, `did:key`
 
 The first format is VC-JOSE-COSE over a VCDM 2.0 payload in JWS compact serialization, as
 the prototype decided (finding 7). REQUIREMENTS §10 leaves the exact JWT-based format to
@@ -236,11 +236,11 @@ every other `alg` exercise the by-name rejection path from day one.
 - *The one curated example* (REQUIREMENTS §11): a self-signed Ed25519 credential produced
   by the dev-only signing helper, committed as a static file, pointed at by the README.
 - *[G1]* The debugging guide, executed end to end on this code: REQUIREMENTS §6 says an
-  unrun procedure does not count as documented, and phase 1 is the first time there is
+  unrun procedure does not count as documented, and milestone 1 is the first time there is
   code to run it on.
 - *F2* resolved in the type definitions.
 
-**Exclude** (each has a later phase): other algorithms; caller-supplied keys; the
+**Exclude** (each has a later milestone): other algorithms; caller-supplied keys; the
 embedded-key opt-in; the algorithm allowlist (meaningless with one algorithm; its `Context`
 field and finding code are additive); the configuration file and environment variables;
 per-path redaction designations and hashing; `vcrd formats`/`suites`; man pages and
@@ -308,7 +308,7 @@ RFC 7519 §4.1, §7.2; RFC 8037 §2–3; RFC 8032 as the crate implements it. Kn
    in JSON serialization fails detection by name, attributed to vcrd, rather than as "no
    format matched".
 
-### Phase 2. Key material and the algorithm table
+### Milestone 2. Key material and the algorithm table
 
 **Scope.** ES256, ES512, RS256, HS256 as prototyped (finding 5); a recorded decision on
 ES384, ES256K and the PS and RS384/RS512 families ([C3]), implementing what is decided. A
@@ -348,7 +348,7 @@ only; `p521-pub` (`0x1202`) and `rsa-pub` (`0x1205`) come from the multicodec re
 which this review did not read. Record the source for each codec when it is implemented,
 and treat P-521 `did:key` as an extension beyond the method spec's table.
 
-### Phase 3. The CLI contract, configuration and hardening
+### Milestone 3. The CLI contract, configuration and hardening
 
 **Scope.** The configuration file (TOML in the per-OS directory) and environment variables,
 with the precedence flag > env > config > default resolved per path for designations
@@ -374,11 +374,11 @@ panic; limit defaults documented with the measuring command and the corpus.
 **Closes.** [Q2], [T2], [T5], [T6].
 
 **Milestone review.** No new standard. Review the CLI against REQUIREMENTS §8 and §9
-sentence by sentence, each requirement a black-box test. Re-run phases 1 and 2's review
+sentence by sentence, each requirement a black-box test. Re-run milestones 1 and 2's review
 lists over the corpus: a corpus credential that fails inspect is either a real
 non-conformance or a vcrd bug, and the review records which.
 
-### Phase 4. Presentations for VC-JOSE-COSE
+### Milestone 4. Presentations for VC-JOSE-COSE
 
 **Scope.** `vp+jwt` per VC-JOSE-COSE §3.1.2. `Document.kind = presentation` and `holder`.
 `EnvelopedVerifiableCredential`: decode the `data:` URL (RFC 2397, base64 or
@@ -413,11 +413,11 @@ no parameters (`not_evaluated`); nesting over the cap; a self-asserted credentia
 **[verified]**), RFC 2397, RFC 7519 §4.1.3 (`aud`: "Each principal intended to process the
 JWT MUST identify itself with a value in the audience claim" **[verified]**).
 
-### Phase 5. JSON-LD with Data Integrity
+### Milestone 5. JSON-LD with Data Integrity
 
-**Gating decision, before the phase starts.** ARCHITECTURE §2 lists dependencies for the
+**Gating decision, before the milestone starts.** ARCHITECTURE §2 lists dependencies for the
 JOSE path only, and [Q1] covers the `ProofInput` boundary only; the components that
-dominate this phase's cost are not yet decided. Apply REQUIREMENTS §6's case-by-case rule
+dominate this milestone's cost are not yet decided. Apply REQUIREMENTS §6's case-by-case rule
 for domain-specific spec logic and record the result in ARCHITECTURE §2 and §10:
 
 - JSON-LD 1.1 expansion and deserialization to RDF, which `eddsa-rdfc-2022` requires:
@@ -470,7 +470,7 @@ decision); RDFC-1.0; RFC 8785; JSON-LD 1.1 and its API (expansion, to-RDF); Cont
 Identifiers 1.0 (Multikey); VCDM 2.0 §5.13 and §6.1 ("JSON-LD compacted document form MUST
 be used" **[verified]**).
 
-### Phase 6. First release, 0.1.0
+### Milestone 6. First release, 0.1.0
 
 **Scope.** [P1] Conventional Commits and a generated `CHANGELOG.md`; [P2]
 `CONTRIBUTING.md` (build and test commands, the trait on-ramp, the coverage policy, the
@@ -493,7 +493,7 @@ the changelog is generated; every §10 item is closed or carried with its tag.
 
 **Closes.** [P1], [P2], [P5], [T4], [T7], [D1], [D2].
 
-**Milestone review.** Re-run every prior phase's review list against the release
+**Milestone review.** Re-run every prior milestone's review list against the release
 candidate, since REQUIREMENTS §11's practice is cumulative, and run the terminology check
 of REQUIREMENTS §15 over every standard now in scope.
 
@@ -510,7 +510,7 @@ of REQUIREMENTS §15 over every standard now in scope.
   **AnonCreds/BBS+**; **WASM/browser**.
 - **The diagnostic build-info API** (REQUIREMENTS §16 item 10) and [T3]; plain `--version`
   ships in 0.1.0.
-- Proof chains; any algorithm deferred in phase 2; Windows CI; SBOM and reproducible
+- Proof chains; any algorithm deferred in milestone 2; Windows CI; SBOM and reproducible
   builds; a CI differential job beyond the local harness; registration against the W3C
   test suites (REQUIREMENTS §14).
 
@@ -526,7 +526,7 @@ RFC 7518 §3.1–3.4, §3.6; RFC 7519 §4.1.1, §4.1.3–4.1.6, §7.2; did:key v
 algorithm, key table); the Rust Reference on `non_exhaustive`.
 
 Claims checked and found consistent with the text (so not reported): [S1]–[S5] as cited;
-[S6] and [S7] as cited, with the severity corrections in phase 1's review list;
+[S6] and [S7] as cited, with the severity corrections in milestone 1's review list;
 ARCHITECTURE §5's citation of EdDSA cryptosuites §3.2.3 and §3.3.3 and finding 4's hash
 order; ARCHITECTURE §8's `none` rule against RFC 7518 §3.6; RFC 7515 §4.1.2 and §4.1.5 as
 cited for `jku` and `x5u`; REQUIREMENTS §15's reading of VCDM 2.0 §2's *verification* and
@@ -534,4 +534,4 @@ cited for `jku` and `x5u`; REQUIREMENTS §15's reading of VCDM 2.0 §2's *verifi
 
 Not verified this review: the multicodec registry values `0x1202` and `0x1205`; RFC 7638;
 RFC 8785; the behavior of any crate named in ARCHITECTURE §2; `clap`'s usage-error exit
-status. Rework-cost and effort statements in F1, F2 and the phase plan are inferred.
+status. Rework-cost and effort statements in F1, F2 and the milestone plan are inferred.
