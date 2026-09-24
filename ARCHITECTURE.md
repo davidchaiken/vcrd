@@ -823,8 +823,7 @@ Each becomes a test observed to fail and then to pass (REQUIREMENTS §11):
   (REQUIREMENTS §12; formerly §16 item 9).~~
   Resolved in milestone 0: `.github/CODEOWNERS` covers all of `.github/` and the files
   that set lint, toolchain, dependency and supply-chain policy, and the `main` branch
-  ruleset requires code-owner review. Enforcement is checked after the milestone merges
-  (`docs/reviews/milestone-0.md`).
+  ruleset requires code-owner review. Whether that review is enforced is [P7].
 - **[P5] Identify a secondary Code of Conduct contact** — someone other than the primary
   maintainer — before actively inviting outside contributors (REQUIREMENTS §14; formerly
   §16 item 11).
@@ -835,3 +834,16 @@ Each becomes a test observed to fail and then to pass (REQUIREMENTS §11):
   an edit to the file. The team must be visible and have write access to the repository.
   The move changes the repository's URL: update `repository` in `Cargo.toml`, the links
   in `SECURITY.md`, and the git remotes (REQUIREMENTS §12, §14).
+- **[P7] Establish whether the `main` ruleset enforces code-owner review.** It requires
+  code-owner review with zero required approvals, yet pull request #7, which changed
+  code-owned files and was authored by the only code owner, merged with no review and no
+  bypass. Either zero required approvals leaves nothing to enforce, or GitHub exempts a
+  pull request's author from the code owners it waits for; the documentation says
+  neither. The first Dependabot pull request that updates an action in
+  `.github/workflows/` decides it: if merging it needs a code owner's approval or the
+  bypass, the author is exempt and the rule protects against every other author; if it
+  merges freely, the rule enforces nothing at zero approvals, and the choice is between
+  requiring one approval (with the bypass for the maintainer's own pull requests) and
+  accepting CODEOWNERS as review requests only. Either way, a pull request the maintainer
+  authors, including one carrying an agent's changes, is not held by this rule
+  (REQUIREMENTS §12; `docs/reviews/milestone-0.md`).
