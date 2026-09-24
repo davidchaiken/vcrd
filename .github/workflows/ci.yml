@@ -1,0 +1,134 @@
+# Continuous integration (REQUIREMENTS §12, §13; DEVELOPMENT-PLAN.md, milestone 0).
+#
+# Rules for this file (REQUIREMENTS §12):
+# - No pull_request_target trigger. Code from a pull request runs only under
+#   pull_request, with a read-only token and no secrets.
+# - The token is read-only (permissions below), and actions/checkout does not
+#   store it in the checkout, where dependency build scripts could read it.
+# - GitHub-owned actions only, each pinned to a full commit SHA. Dependabot
+#   proposes updates to the pins.
+# - Every job runs a target from the Makefile, which holds the commands and the
+#   tool versions. `make <job>` reproduces a job locally, and `make ci-ok` runs
+#   the jobs ci-ok requires.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly, so that a new RustSec advisory against an unchanged Cargo.lock is
+    # noticed without waiting for the next pull request.
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the toolchain named in rust-toolchain.toml
+        run: rustup toolchain install --no-self-update && cargo --version
+      - run: make fmt
+
+  test:
+    # The required toolchain: rust-toolchain.toml's, equal to rust-version.
+    name: test (${{ matrix.os }}, pinned)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the toolchain named in rust-toolchain.toml
+        run: rustup toolchain install --no-self-update && cargo --version
+      - name: Clippy and tests over every feature combination
+        run: make test
+
+  lints-fire:
+    name: lints fire
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the toolchain named in rust-toolchain.toml
+        run: rustup toolchain install --no-self-update && cargo --version
+      - name: Check that the lint policy fires
+        run: make lints-fire
+
+  supply-chain:
+    name: supply chain
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the toolchain named in rust-toolchain.toml
+        run: rustup toolchain install --no-self-update && cargo --version
+      - name: Build cargo-deny and cargo-audit from crates.io
+        run: make tools
+      - name: cargo deny check (deny.toml) and cargo audit
+        run: make supply-chain
+
+  test-latest-stable:
+    # Early warning for the next Rust release: its new lints and breakage show
+    # here first. ci-ok does not wait for it, so it never blocks a merge
+    # (REQUIREMENTS §13).
+    name: test (${{ matrix.os }}, latest stable)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the latest stable toolchain
+        run: rustup toolchain install stable --profile minimal --component clippy --no-self-update && cargo --version
+      - name: Clippy and tests over every feature combination
+        run: make latest-stable
+
+  ci-ok:
+    # The one status check the main ruleset requires. GitHub reports a job that
+    # was skipped because a job it needs failed as successful, which would let a
+    # required check pass; hence if: always() and a test of every result.
+    # `make ci-ok` is the local equivalent; keep its prerequisites equal to needs.
+    name: ci-ok
+    if: always()
+    needs: [fmt, test, lints-fire, supply-chain]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every required job succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for result in $RESULTS; do
+            [ "$result" = success ] || exit 1
+          done

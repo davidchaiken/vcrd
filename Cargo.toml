@@ -1,0 +1,45 @@
+[workspace]
+# Resolver 3 is edition 2024's default: it prefers dependency versions whose
+# `rust-version` fits ours (REQUIREMENTS §7, §13).
+resolver = "3"
+members = ["vcrd-core", "vcrd-cli"]
+
+# Crate roots scripts/check-lints-fire.sh plants its canaries in: one per lib or
+# bin target. The script fails if a member is missing.
+[workspace.metadata.lints-fire]
+roots = ["vcrd-core/src/lib.rs", "vcrd-cli/src/main.rs"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+# Keep equal to the channel in rust-toolchain.toml (REQUIREMENTS §13).
+rust-version = "1.98.1"
+license = "MIT OR Apache-2.0"
+authors = ["David Chaiken <chaiken+vcrd@gmail.com>"]
+repository = "https://github.com/davidchaiken/vcrd"
+# Nothing is published before milestone 6 (DEVELOPMENT-PLAN.md).
+publish = false
+
+# Every dependency is declared here, so adding one changes this file, which
+# CODEOWNERS covers (REQUIREMENTS §12).
+[workspace.dependencies]
+vcrd-core = { path = "vcrd-core", version = "0.0.0", default-features = false }
+clap = { version = "4.6", features = ["derive"] }
+
+[workspace.lints.rust]
+# Also `#![forbid(unsafe_code)]` in each crate root; this copy reaches new crates
+# (REQUIREMENTS §6).
+unsafe_code = "forbid"
+
+# No panics on untrusted input (REQUIREMENTS §6, §7). Test code is exempted by
+# clippy.toml where clippy allows it. scripts/check-lints-fire.sh confirms that
+# each of these fires.
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+string_slice = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"

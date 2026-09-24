@@ -425,7 +425,7 @@ specifically because vcrd is meant to be consumed by more than one kind of front
 
 ## 7. Architecture / Workspace Layout
 
-A single Cargo workspace (resolver `"2"`, Rust 2024 edition), with `[workspace.package]`
+A single Cargo workspace (resolver `"3"`, Rust 2024 edition), with `[workspace.package]`
 inheritance for `version`, `edition`, `license`, `authors`, and `repository` so member
 crates don't repeat this metadata.
 
@@ -460,7 +460,7 @@ crates don't repeat this metadata.
   than duplicated inside `vcrd-live-verify`, keeping crypto logic centralized in core.
 
 **Format and proof-suite implementations live as feature-gated modules inside
-`vcrd-core`** (e.g. `jsonld`, `jwt-vc` Cargo features), not as separate per-format crates.
+`vcrd-core`** (e.g. `jsonld`, `vc-jose` Cargo features), not as separate per-format crates.
 This was a deliberate choice to avoid premature architecture: splitting a module out into
 its own crate later, if an external contributor wants to ship one independently, doesn't
 require breaking the trait contract that already exists. The trait boundary is what
@@ -1109,13 +1109,15 @@ after an incident) is far more painful than starting clean:
   short-lived branches for PRs and experiments, no long-lived release branches, until
   there's a concrete need to maintain more than one release line at once (e.g.
   backporting a security fix to an old major version).
-- **CI Rust versions**: CI runs on latest stable, plus a second job pinned to the declared
-  MSRV, to actually verify the MSRV policy holds (it's easy to accidentally use a newer
-  API without noticing on a stable-only CI matrix). MSRV policy is **current stable minus
-  two releases (N-2)**, stated as prose rather than heavily automated — the goal is
-  avoiding a treadmill of updating a hard-pinned number every ~6-week stable release, with
-  the option to move to a time-based policy later being a documentation change, not a
-  structural one. Nightly is reserved for the future `cargo-fuzz` job (needs nightly for
+- **CI Rust versions**: the declared MSRV and the toolchain vcrd is built with are one
+  pinned release. During active development it is the **latest stable release**, bumped
+  when each new one ships; that treadmill is accepted while development is active. If
+  upgrades become difficult, or development goes dormant, the policy moves to **current
+  stable minus two releases (N-2)** — a documentation change and a version bump, not a
+  structural one. The CI jobs that must pass before a merge run the pinned release, so
+  every change is built and tested at the MSRV. A further job runs the latest stable
+  release, as early warning of a new release's lints and incompatibilities, and does not
+  block a merge. Nightly is reserved for the future `cargo-fuzz` job (needs nightly for
   `libfuzzer-sys`), not part of normal CI.
 - **CI platforms**: Linux and macOS initially. Windows CI is deliberately left as an open
   community-contribution opportunity, consistent with §1's stance on platform support.

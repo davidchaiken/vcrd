@@ -813,11 +813,25 @@ Each becomes a test observed to fail and then to pass (REQUIREMENTS §11):
 - **[P2] Add `CONTRIBUTING.md`, issue and pull-request templates, and
   `CODE_OF_CONDUCT.md`**, at the same milestone as [P1] (REQUIREMENTS §14; formerly §16
   item 7).
-- **[P3] Enable GitHub's "require approval for first-time contributor workflows"
+- ~~**[P3] Enable GitHub's "require approval for first-time contributor workflows"
   setting.** Early setup, not gated on going public, since it costs nothing while the
-  project is solo-maintained (REQUIREMENTS §12; formerly §16 item 8).
-- **[P4] Add a `CODEOWNERS` entry for `.github/workflows/*`**, at the same time as [P3]
-  (REQUIREMENTS §12; formerly §16 item 9).
+  project is solo-maintained (REQUIREMENTS §12; formerly §16 item 8).~~
+  Resolved 2026-09-22: set to "Require approval for all external contributors", stricter
+  than asked (Settings → Actions → General). A repository setting leaves no file to cite;
+  the setting is recorded in `docs/reviews/milestone-0.md`.
+- ~~**[P4] Add a `CODEOWNERS` entry for `.github/workflows/*`**, at the same time as [P3]
+  (REQUIREMENTS §12; formerly §16 item 9).~~
+  Resolved in milestone 0: `.github/CODEOWNERS` covers all of `.github/` and the files
+  that set lint, toolchain, dependency and supply-chain policy, and the `main` branch
+  ruleset requires code-owner review. Enforcement is checked after the milestone merges
+  (`docs/reviews/milestone-0.md`).
 - **[P5] Identify a secondary Code of Conduct contact** — someone other than the primary
   maintainer — before actively inviting outside contributors (REQUIREMENTS §14; formerly
   §16 item 11).
+- **[P6] Move the repository to a GitHub organization, and switch `.github/CODEOWNERS`
+  from `@davidchaiken` to `@vcrd-dev/maintainers`**, before inviting more contributors.
+  CODEOWNERS names users, teams or email addresses, never roles, and teams exist only in
+  organizations; with a team, a change of maintainers is a membership change rather than
+  an edit to the file. The team must be visible and have write access to the repository.
+  The move changes the repository's URL: update `repository` in `Cargo.toml`, the links
+  in `SECURITY.md`, and the git remotes (REQUIREMENTS §12, §14).
