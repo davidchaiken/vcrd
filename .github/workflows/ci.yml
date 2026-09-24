@@ -86,8 +86,26 @@ jobs:
           persist-credentials: false
       - name: Install the toolchain named in rust-toolchain.toml
         run: rustup toolchain install --no-self-update && cargo --version
-      - name: Build cargo-deny and cargo-audit from crates.io
+      # Building the two tools takes minutes, so the result is cached. The key
+      # changes with the Makefile (which pins their versions) and the toolchain,
+      # forcing a rebuild. A pull request can read the cache runs on main write,
+      # but what it writes is scoped to that pull request.
+      - name: Restore cargo-deny and cargo-audit built by an earlier run
+        id: tools-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/tools
+          key: tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile', 'rust-toolchain.toml') }}
+      - name: Build cargo-deny and cargo-audit from crates.io, unless restored
         run: make tools
+      # Saved before the checks run, so that a failing check (a new advisory,
+      # say) does not discard a fresh build.
+      - name: Save the built tools
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/tools
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
       - name: cargo deny check (deny.toml) and cargo audit
         run: make supply-chain
 
