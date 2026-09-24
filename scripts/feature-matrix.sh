@@ -30,7 +30,8 @@ done
 
 echo "==> -p vcrd-cli --no-default-features (must fail)"
 set +e
-out=$(cargo build -p vcrd-cli --no-default-features --locked 2>&1)
+# --color never: the message is searched below, whatever CARGO_TERM_COLOR says.
+out=$(cargo build --color never -p vcrd-cli --no-default-features --locked 2>&1)
 status=$?
 set -e
 if [ $status -eq 0 ]; then

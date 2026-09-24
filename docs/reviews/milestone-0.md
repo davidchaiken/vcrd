@@ -6,9 +6,10 @@ CI paragraphs, sentence by sentence. No standard is implemented yet, so no norma
 specification text is reviewed here. The sentences of §5 and §6 that the milestone's scope
 names are included.
 
-**Where checked.** Branch `milestone-0`, based on `main` at `d570cc9`. Toolchain 1.98.1
-(clippy 0.1.98). Locally on macOS 26.6.2, aarch64. CI on Linux and macOS is pending the
-pull request's first run; rows that depend on it say so.
+**Where checked.** Branch `milestone-0`, based on `main` at `d570cc9` and merged as pull
+request #6 (`bddc899`); fixes found by CI on branch `milestone-0-followup`. Toolchain
+1.98.1 (clippy 0.1.98). Locally on macOS 26.6.2, aarch64, and in CI on Linux and macOS:
+each run is listed under [CI runs](#ci-runs).
 
 **Reproduce.** From the repository root, `make ci-ok` runs the four jobs CI's `ci-ok`
 requires, in order: `cargo fmt --all --check`, `scripts/feature-matrix.sh`,
@@ -46,7 +47,7 @@ milestone is subject to the sentence.
 
 | Line | Sentence (abridged) | Mechanism | Check | Status |
 |---|---|---|---|---|
-| 1031 | `cargo-audit` and `cargo-deny` run in CI, checking dependencies against the RustSec advisory database and enforcing license compliance. | CI job `supply chain`; `deny.toml` | `cargo deny --locked check`: "advisories ok, bans ok, licenses ok, sources ok"; `cargo audit --deny warnings`: exit 0; faults D1, D2, A1, A2 | Met locally. CI: Open (first run) |
+| 1031 | `cargo-audit` and `cargo-deny` run in CI, checking dependencies against the RustSec advisory database and enforcing license compliance. | CI job `supply chain`, with the built tools cached by `actions/cache`; `deny.toml` | `cargo deny --locked check`: "advisories ok, bans ok, licenses ok, sources ok"; `cargo audit --deny warnings`: exit 0; faults D1, D2, A1, A2 | Met, locally and in CI (manual run on `main`) |
 | 1032 | `Cargo.lock` is committed and tagged at every release. | `Cargo.lock` committed; every cargo command in `scripts/` and CI passes `--locked` | By inspection | Committed: Met. Tagged: Later (milestone 6) |
 | 1035 | SBOM per release, build metadata in the binary, signed and reproducible releases. | — | — | Later (after 0.1.0) |
 | 1040 | Crypto dependency selection criterion. | No cryptographic dependency yet | — | Later (milestone 1) |
@@ -58,7 +59,7 @@ milestone is subject to the sentence.
 | 1062 | Untrusted PR code never runs with secrets or write access; building and testing PR code uses plain `pull_request`. | Triggers: `pull_request`, `push` to `main`, weekly `schedule`, `workflow_dispatch`; no secrets referenced | `grep -n 'pull_request_target\|secrets\.' .github/workflows/ci.yml` finds only the file's comment | Met |
 | 1066 | Privileged follow-up work runs as a separate `workflow_run` workflow that only reads artifacts. | Nothing privileged exists | — | Not applicable |
 | 1070 | `GITHUB_TOKEN` permissions default to `read-all` (or narrower) at the workflow level. | `permissions: contents: read`; repository default read-only; `persist-credentials: false` on every checkout | By inspection; setting reported 2026-09-22 | Met |
-| 1072 | Third-party Actions are pinned to a full commit SHA; SHA updates are proposed as reviewable PRs. | Only `actions/checkout`, GitHub-owned, pinned to `3d3c42e5…` (v7.0.1); the repository allows only GitHub-owned actions and requires full-SHA pins; `dependabot.yml` updates Actions weekly | By inspection; settings reported 2026-09-22 | Met |
+| 1072 | Third-party Actions are pinned to a full commit SHA; SHA updates are proposed as reviewable PRs. | Only GitHub-owned actions: `actions/checkout` pinned to `3d3c42e5…` (v7.0.1), and `actions/cache/restore` and `actions/cache/save` pinned to `55cc8345…` (v6.1.0); the repository allows only GitHub-owned actions and requires full-SHA pins; `dependabot.yml` updates Actions weekly | By inspection; the setting was refused before it was saved (see [CI runs](#ci-runs)) | Met |
 | 1075 | Require approval for first-time contributors' workflow runs. | "Require approval for all external contributors" | Setting reported 2026-09-22 | Met ([P3]) |
 | 1079 | Publishing credentials never touch PR-triggered workflows; Trusted Publishing preferred. | No publishing exists | — | Later (milestone 6) |
 | 1083 | A `CODEOWNERS` entry requiring maintainer review on `.github/workflows/*`. | `.github/CODEOWNERS` covers `/.github/`, `/Cargo.toml`, `/Makefile`, `/clippy.toml`, `/deny.toml`, `/rust-toolchain.toml`, `/.cargo/`, `/scripts/`; the `main` ruleset requires code-owner review | — | Open: enforcement is checked after merge (below) |
@@ -68,21 +69,30 @@ milestone is subject to the sentence.
 | Line | Sentence (abridged) | Mechanism | Check | Status |
 |---|---|---|---|---|
 | 1112 | The declared MSRV and the toolchain vcrd is built with are one pinned release, the latest stable during active development. | `rust-toolchain.toml` channel 1.98.1 equals `rust-version` | `rustup show active-toolchain`: "1.98.1-aarch64-apple-darwin (overridden by …/rust-toolchain.toml)" | Amended: the N-2 policy became the latest stable release. Met |
-| 1117 | The CI jobs that must pass before a merge run the pinned release. | Jobs `fmt`, `test`, `lints fire` and `supply chain` install the toolchain named in `rust-toolchain.toml`; `ci-ok` needs exactly these | By inspection | Met. CI: Open (first run) |
-| 1118 | A further job runs the latest stable release and does not block a merge. | Job `test (…, latest stable)` with `RUSTUP_TOOLCHAIN: stable`; not in `ci-ok`'s `needs` | By inspection | Met. CI: Open (first run) |
+| 1117 | The CI jobs that must pass before a merge run the pinned release. | Jobs `fmt`, `test`, `lints fire` and `supply chain` install the toolchain named in `rust-toolchain.toml`; `ci-ok` needs exactly these | By inspection; the manual run's logs show 1.98.1 "overridden by …/rust-toolchain.toml" | Met |
+| 1118 | A further job runs the latest stable release and does not block a merge. | Job `test (…, latest stable)` with `RUSTUP_TOOLCHAIN: stable`; not in `ci-ok`'s `needs` | By inspection; ran and passed on Linux and macOS in the manual run | Met |
 | 1120 | Nightly is reserved for the future `cargo-fuzz` job. | No nightly toolchain in CI | By inspection | Met |
-| 1122 | CI platforms: Linux and macOS initially; Windows left open. | `os: [ubuntu-latest, macos-latest]` | macOS locally | macOS: Met. Linux: Open (first run) |
-| 1124 | CI builds and tests each supported combination of features, not only the default set. | `scripts/feature-matrix.sh`: vcrd-core with every combination of `vc-jose` and `std-clock`, vcrd-cli default, and vcrd-cli with no format, which must fail with the `compile_error!` message | Local run: "Every feature combination passed."; fault M6 | Met. CI: Open (first run) |
+| 1122 | CI platforms: Linux and macOS initially; Windows left open. | `os: [ubuntu-latest, macos-latest]` | `test (ubuntu-latest, pinned)` and `test (macos-latest, pinned)` passed in the manual run | Met |
+| 1124 | CI builds and tests each supported combination of features, not only the default set. | `scripts/feature-matrix.sh`: vcrd-core with every combination of `vc-jose` and `std-clock`, vcrd-cli default, and vcrd-cli with no format, which must fail with the `compile_error!` message | Local run: "Every feature combination passed."; fault M6; both `test` jobs in the manual run | Met |
 
 ## DEVELOPMENT-PLAN milestone 0
 
 | Item | Check | Status |
 |---|---|---|
-| `vcrd --help` and `vcrd --version` build on both platforms. | `feature-matrix.sh`; `vcrd --version` prints `vcrd 0.0.0` | macOS: Met. Linux: Open (first run) |
+| `vcrd --help` and `vcrd --version` build on both platforms. | `feature-matrix.sh`; `vcrd --version` prints `vcrd 0.0.0`; both `test` jobs in the manual run | Met |
 | `cargo test --workspace` green with no tests. | `cargo test --workspace --locked` | Met |
 | `cargo clippy --all-targets` clean, with the lint confirmed to fire. | `feature-matrix.sh`; `check-lints-fire.sh` | Met |
-| CI green on every matrix cell. | The pull request's checks | Open (first run) |
+| CI green on every matrix cell. | [CI runs](#ci-runs) | Open: the manual run failed at `lints fire` (gap 5); the follow-up pull request's run is pending |
 | The lint-fires check recorded as a CI step rather than a memory. | CI job `lints fire` | Met |
+
+## CI runs
+
+| Run | Commit | Result |
+|---|---|---|
+| #1, pull request #6 | `43a6cea` | Startup failure, no job ran: "The action actions/checkout@3d3c42e5… is not allowed in davidchaiken/vcrd because all actions must be from a repository owned by davidchaiken and pinned to a full-length commit SHA." (gap 6) |
+| #2, push of the merge to `main` | `bddc899` | Startup failure, the same message |
+| Manual run on `main` (`workflow_dispatch`), after the setting was saved | `bddc899` | `fmt`, `test (ubuntu-latest, pinned)`, `test (macos-latest, pinned)`, `supply chain` (4 min 46 s, nearly all building the two tools) and both latest-stable jobs passed. `lints fire` failed (gap 5), so `ci-ok` failed |
+| Pull request from `milestone-0-followup` | — | Pending: the fix for gap 5, and the tools cache |
 
 ## The checks shown to fail
 
@@ -124,15 +134,30 @@ failed; then against the unmodified copy, and passed. The working tree was not m
    there, and passed for the wrong reason; in a copy with no `target/debug` it failed with
    "target/debug/vcrd: No such file or directory". Fixed by asking `cargo metadata` for
    the target directory; the same copy then passed.
+5. **`lints fire` failed in CI, where colour is forced.** Found by the manual run. The
+   workflow sets `CARGO_TERM_COLOR=always`, and the compiler then prints the location
+   arrow as `ESC[1m ESC[94m --> ESC[0m` followed by the path, so the script's search for
+   `--> vcrd-core/src/lib.rs:` found nothing, although clippy had flagged the planted
+   `unwrap()`. Reproduced on macOS with
+   `CARGO_TERM_COLOR=always scripts/check-lints-fire.sh`, which failed the same way. Fixed
+   by `--color never` on the cargo commands whose output the scripts search; the same
+   command then passed, and faults M1 and M4 still failed with colour forced.
+6. **The Actions permissions change of 2026-09-22 had not been saved.** Found by runs #1
+   and #2, which refused `actions/checkout` under the earlier owner-only policy. Each
+   section of Settings → Actions → General has its own Save button; this one was saved
+   on 2026-09-24. The settings below are as the maintainer reported them; for the Actions
+   permissions, the CI runs are the only independent evidence.
 
 ## Open after merge
 
-1. Record the first CI run's result for each job in this document.
-2. Reconfirm the `main` ruleset, and add `ci-ok` as its required status check. The
-   ruleset's check picker lists only checks that have run.
-3. Open a throwaway pull request that changes only a file under `.github/`, and confirm
-   that merging it requires the bypass. Whether "Require review from Code Owners" demands
-   an owner's approval when zero approvals are required is not yet verified.
+1. Record each CI run's result in this document: done for runs to date, under
+   [CI runs](#ci-runs); the follow-up pull request's run remains.
+2. Reconfirm the `main` ruleset, and add `ci-ok` as its required status check once it has
+   passed. The ruleset's check picker lists only checks that have run.
+3. Confirm that code-owner review is enforced. The follow-up pull request changes
+   `.github/workflows/ci.yml` and `scripts/`, both code-owned, so merging it should
+   require the bypass. Whether "Require review from Code Owners" demands an owner's
+   approval when zero approvals are required is not yet verified.
 
 ## Repository settings
 
@@ -141,10 +166,11 @@ as reported by the maintainer on 2026-09-22:
 
 - **Actions permissions:** actions and reusable workflows from davidchaiken and selected
   others; actions created by GitHub allowed; Marketplace verified creators not allowed;
-  actions must be pinned to a full-length commit SHA.
-- **Fork pull request workflows:** require approval for all external contributors.
+  actions must be pinned to a full-length commit SHA. Saved 2026-09-24 (gap 6).
+- **Fork pull request workflows:** require approval for all external contributors. Not
+  yet reconfirmed as saved after gap 6.
 - **Workflow permissions:** read repository contents and packages; GitHub Actions may not
-  create or approve pull requests.
+  create or approve pull requests. Not yet reconfirmed as saved after gap 6.
 - **Security:** private vulnerability reporting enabled; Dependabot alerts, malware
   alerts, security updates and grouped security updates enabled.
 - **`main` ruleset:** created 2026-09-23; reconfirmed after merge (open item 2).

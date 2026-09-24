@@ -64,11 +64,13 @@ done
 
 for i in "${!roots[@]}"; do cp "${roots[$i]}" "$orig/$i"; done
 
+# --color never: the checks below search clippy's output, and colour codes
+# (CARGO_TERM_COLOR=always, as CI sets) split `--> file` into pieces.
 clippy_out=""
 run_clippy() {
   local status
   set +e
-  clippy_out=$(cargo clippy --workspace --all-targets --all-features --locked -- -D warnings 2>&1)
+  clippy_out=$(cargo clippy --color never --workspace --all-targets --all-features --locked -- -D warnings 2>&1)
   status=$?
   set -e
   return $status
