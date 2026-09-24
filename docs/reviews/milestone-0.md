@@ -62,7 +62,7 @@ milestone is subject to the sentence.
 | 1072 | Third-party Actions are pinned to a full commit SHA; SHA updates are proposed as reviewable PRs. | Only GitHub-owned actions: `actions/checkout` pinned to `3d3c42e5…` (v7.0.1), and `actions/cache/restore` and `actions/cache/save` pinned to `55cc8345…` (v6.1.0); the repository allows only GitHub-owned actions and requires full-SHA pins; `dependabot.yml` updates Actions weekly | By inspection; the setting was refused before it was saved (see [CI runs](#ci-runs)) | Met |
 | 1075 | Require approval for first-time contributors' workflow runs. | "Require approval for all external contributors" | Setting reported 2026-09-22 | Met ([P3]) |
 | 1079 | Publishing credentials never touch PR-triggered workflows; Trusted Publishing preferred. | No publishing exists | — | Later (milestone 6) |
-| 1083 | A `CODEOWNERS` entry requiring maintainer review on `.github/workflows/*`. | `.github/CODEOWNERS` covers `/.github/`, `/Cargo.toml`, `/Makefile`, `/clippy.toml`, `/deny.toml`, `/rust-toolchain.toml`, `/.cargo/`, `/scripts/`; the `main` ruleset requires code-owner review | — | Open: enforcement is checked after merge (below) |
+| 1083 | A `CODEOWNERS` entry requiring maintainer review on `.github/workflows/*`. | `.github/CODEOWNERS` covers `/.github/`, `/Cargo.toml`, `/Makefile`, `/clippy.toml`, `/deny.toml`, `/rust-toolchain.toml`, `/.cargo/`, `/scripts/`; the `main` ruleset requires code-owner review | `GET /repos/davidchaiken/vcrd/codeowners/errors`: no errors; the ruleset's `pull_request` rule has `require_code_owner_review: true`; pull request #7, authored by the only code owner, merged with no review and no bypass (gap 7) | Entry: Met. Enforcement: Open, ARCHITECTURE §10 [P7] |
 
 ## REQUIREMENTS §13
 
@@ -82,7 +82,7 @@ milestone is subject to the sentence.
 | `vcrd --help` and `vcrd --version` build on both platforms. | `feature-matrix.sh`; `vcrd --version` prints `vcrd 0.0.0`; both `test` jobs in the manual run | Met |
 | `cargo test --workspace` green with no tests. | `cargo test --workspace --locked` | Met |
 | `cargo clippy --all-targets` clean, with the lint confirmed to fire. | `feature-matrix.sh`; `check-lints-fire.sh` | Met |
-| CI green on every matrix cell. | [CI runs](#ci-runs) | Open: the manual run failed at `lints fire` (gap 5); the follow-up pull request's run is pending |
+| CI green on every matrix cell. | [CI runs](#ci-runs) | Met: pull request #7 and the runs after it. The manual run before it failed at `lints fire` (gap 5) |
 | The lint-fires check recorded as a CI step rather than a memory. | CI job `lints fire` | Met |
 
 ## CI runs
@@ -92,7 +92,7 @@ milestone is subject to the sentence.
 | #1, pull request #6 | `43a6cea` | Startup failure, no job ran: "The action actions/checkout@3d3c42e5… is not allowed in davidchaiken/vcrd because all actions must be from a repository owned by davidchaiken and pinned to a full-length commit SHA." (gap 6) |
 | #2, push of the merge to `main` | `bddc899` | Startup failure, the same message |
 | Manual run on `main` (`workflow_dispatch`), after the setting was saved | `bddc899` | `fmt`, `test (ubuntu-latest, pinned)`, `test (macos-latest, pinned)`, `supply chain` (4 min 46 s, nearly all building the two tools) and both latest-stable jobs passed. `lints fire` failed (gap 5), so `ci-ok` failed |
-| Pull request from `milestone-0-followup` | — | Pending: the fix for gap 5, and the tools cache |
+| Pull request #7 (`milestone-0-followup`: the fix for gap 5 and the tools cache), then `main` after its merge as `a451d7f` | — | Every job passed. `supply chain` took 3 min on its first run, building the tools with an empty cache, then 26 s and 22 s on the next two, restoring them. Actions → Caches then held two 12 MB entries under the same key, one scoped to `main` and one to the pull request, since a run on `main` cannot read a pull request's cache |
 
 ## The checks shown to fail
 
@@ -147,17 +147,22 @@ failed; then against the unmodified copy, and passed. The working tree was not m
    section of Settings → Actions → General has its own Save button; this one was saved
    on 2026-09-24. The settings below are as the maintainer reported them; for the Actions
    permissions, the CI runs are the only independent evidence.
+7. **Code-owner review did not hold pull request #7.** It changed three code-owned files,
+   `.github/workflows/ci.yml` and both scripts (its fourth file, this record, has no code
+   owner), and the ruleset requires code-owner review, yet it merged with no review, no review
+   request and no bypass (`GET /repos/davidchaiken/vcrd/issues/7/timeline`: merged,
+   closed, head ref deleted). Its author is the only code owner. Either zero required
+   approvals leaves the rule nothing to enforce, or GitHub exempts the author; the
+   documentation says neither. Carried as ARCHITECTURE §10 [P7], which the first
+   Dependabot pull request updating an action will decide.
 
 ## Open after merge
 
-1. Record each CI run's result in this document: done for runs to date, under
-   [CI runs](#ci-runs); the follow-up pull request's run remains.
-2. Reconfirm the `main` ruleset, and add `ci-ok` as its required status check once it has
-   passed. The ruleset's check picker lists only checks that have run.
-3. Confirm that code-owner review is enforced. The follow-up pull request changes
-   `.github/workflows/ci.yml` and `scripts/`, both code-owned, so merging it should
-   require the bypass. Whether "Require review from Code Owners" demands an owner's
-   approval when zero approvals are required is not yet verified.
+1. ~~Record each CI run's result in this document.~~ Done: [CI runs](#ci-runs).
+2. ~~Reconfirm the `main` ruleset, and add `ci-ok` as its required status check.~~ Done
+   2026-09-24; see [Repository settings](#repository-settings).
+3. ~~Confirm that code-owner review is enforced.~~ Not confirmed (gap 7); carried as
+   ARCHITECTURE §10 [P7].
 
 ## Repository settings
 
@@ -167,10 +172,16 @@ as reported by the maintainer on 2026-09-22:
 - **Actions permissions:** actions and reusable workflows from davidchaiken and selected
   others; actions created by GitHub allowed; Marketplace verified creators not allowed;
   actions must be pinned to a full-length commit SHA. Saved 2026-09-24 (gap 6).
-- **Fork pull request workflows:** require approval for all external contributors. Not
-  yet reconfirmed as saved after gap 6.
+- **Fork pull request workflows:** require approval for all external contributors.
+  Reconfirmed as saved 2026-09-24.
 - **Workflow permissions:** read repository contents and packages; GitHub Actions may not
-  create or approve pull requests. Not yet reconfirmed as saved after gap 6.
+  create or approve pull requests. Reconfirmed as saved 2026-09-24.
 - **Security:** private vulnerability reporting enabled; Dependabot alerts, malware
   alerts, security updates and grouped security updates enabled.
-- **`main` ruleset:** created 2026-09-23; reconfirmed after merge (open item 2).
+- **`main` ruleset**, created 2026-09-23 and completed 2026-09-24. Its rules as the public
+  API reports them (`GET /repos/davidchaiken/vcrd/rules/branches/main`): ruleset "main",
+  enforcement active; deletion and force pushes blocked; pull request required, with
+  zero approvals, stale approvals dismissed on push, and code-owner review required
+  (gap 7); status check `ci-ok` required from GitHub Actions (integration 15368), with
+  branches required to be up to date and no exemption on creation. The bypass list is not
+  visible through that endpoint.
