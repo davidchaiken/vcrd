@@ -1,0 +1,41 @@
+# cargo-deny policy (REQUIREMENTS §12). Run: cargo deny --locked check
+
+[graph]
+# Check the dependencies of every feature, not only the default ones.
+all-features = true
+
+[advisories]
+# Every RustSec advisory fails the check, including unmaintained crates anywhere
+# in the graph. An exception is added to `ignore` with its reason, never silently.
+unmaintained = "all"
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Permissive licences only. MPL-2.0, the GPL family and non-open-source licences
+# are excluded. Any licence not listed fails the check and is discussed case by
+# case before it is added.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.93
+# The list is the policy, not an inventory of what is in use today.
+unused-allowed-license = "allow"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

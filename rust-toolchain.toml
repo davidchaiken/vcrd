@@ -1,0 +1,6 @@
+# The toolchain for local builds and every required CI job. Keep the channel
+# equal to `rust-version` in Cargo.toml (REQUIREMENTS §13).
+[toolchain]
+channel = "1.98.1"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

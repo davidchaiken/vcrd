@@ -1,0 +1,27 @@
+[package]
+name = "vcrd-cli"
+description = "The vcrd command: parse, inspect and verify verifiable credentials"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "vcrd"
+path = "src/main.rs"
+
+[features]
+# At least one format must be enabled; src/main.rs refuses to build otherwise.
+default = ["vc-jose"]
+vc-jose = ["vcrd-core/vc-jose"]
+
+[dependencies]
+# The CLI always has a clock (ARCHITECTURE §2).
+vcrd-core = { workspace = true, features = ["std-clock"] }
+clap.workspace = true
+
+[lints]
+workspace = true

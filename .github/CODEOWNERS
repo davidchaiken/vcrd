@@ -1,0 +1,13 @@
+# Changes to CI, supply-chain policy, lint policy, the toolchain and the
+# dependency list need the maintainer's review (REQUIREMENTS §12; ARCHITECTURE
+# §10 [P4]). The main branch ruleset requires code-owner review, so a pull
+# request touching these paths merges only with that review or an explicit
+# bypass. /.github/ covers this file too.
+/.github/            @davidchaiken
+/Cargo.toml          @davidchaiken
+/Makefile            @davidchaiken
+/clippy.toml         @davidchaiken
+/deny.toml           @davidchaiken
+/rust-toolchain.toml @davidchaiken
+/.cargo/             @davidchaiken
+/scripts/            @davidchaiken

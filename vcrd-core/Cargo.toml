@@ -1,0 +1,21 @@
+[package]
+name = "vcrd-core"
+description = "Parse, inspect and verify verifiable credentials"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+default = ["vc-jose"]
+# VC-JOSE-COSE: a VCDM 2.0 credential secured as a compact JWS.
+vc-jose = []
+# A system clock. Off by default, so that core reads the system clock only when
+# a frontend asks for it (ARCHITECTURE §2).
+std-clock = []
+
+[lints]
+workspace = true

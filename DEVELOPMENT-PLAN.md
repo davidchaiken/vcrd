@@ -38,20 +38,21 @@ refer to ARCHITECTURE §10. Milestone sizes are unequal: milestones 1 and 5 are 
 | 3 CLI contract | config file, env, designations, `formats`/`suites`, man pages, fuzz, coverage, limits corpus | [Q2] [T2] [T5] [T6] |
 | 4 Presentations | `vp+jwt` with enveloped credentials, challenge/domain | — |
 | 5 Data Integrity | `eddsa-rdfc-2022`, `eddsa-jcs-2022`, pinned contexts, canonicalization budget | [Q1] [T1] |
-| 6 Release 0.1.0 | community files, semver-checks, differential harness, distribution | [P1] [P2] [P5] [T4] [T7] [D1] [D2] |
+| 6 Release 0.1.0 | community files, semver-checks, differential harness, distribution | [P1] [P2] [P5] [P6] [T4] [T7] [D1] [D2] |
 
 ### Milestone 0. Repository skeleton
 
-**Scope.** Cargo workspace per REQUIREMENTS §7: resolver 2, edition 2024,
+**Scope.** Cargo workspace per REQUIREMENTS §7: resolver 3, edition 2024,
 `[workspace.package]` inheritance, `license = "MIT OR Apache-2.0"` (§5); `vcrd-core` and
 `vcrd-cli`; workspace clippy lints denying `unwrap_used`, `expect_used` and
 `indexing_slicing` outside tests; `#![forbid(unsafe_code)]` in both crates; features
-`std-clock` and the first format feature; `compile_error!` in `vcrd-cli` with no format
-(ARCHITECTURE §2). CI per REQUIREMENTS §13: Linux and macOS, stable plus MSRV N-2, `fmt`,
-`clippy`, `test`, and the feature matrix (core with no format, core with each format, CLI
-default). Supply chain per REQUIREMENTS §12: `cargo-deny`, `cargo-audit`, committed
-`Cargo.lock`, `pull_request` triggers only, `read-all` token, SHA-pinned actions with
-Dependabot, `SECURITY.md`, [P3] and [P4].
+`std-clock` and the first format feature, `vc-jose`; `compile_error!` in `vcrd-cli` with no
+format (ARCHITECTURE §2). CI per REQUIREMENTS §13: Linux and macOS, the pinned MSRV
+toolchain plus a non-blocking latest-stable job, `fmt`, `clippy`, `test`, and the feature
+matrix (core with every combination of its features, CLI default, and CLI with no format,
+which must fail to build). Supply chain per REQUIREMENTS §12: `cargo-deny`, `cargo-audit`,
+committed `Cargo.lock`, no `pull_request_target` trigger, a read-only token, SHA-pinned
+actions with Dependabot, `SECURITY.md`, [P3] and [P4].
 
 **Delivers.** `vcrd --help` and `vcrd --version` build on both platforms;
 `cargo test --workspace` green with no tests; `cargo clippy --all-targets` clean, with the
@@ -104,6 +105,12 @@ every other `alg` exercise the by-name rejection path from day one.
   `exp` and `iat` in the verify phase (below), which means `VerifyOutput` carries a
   securing-mechanism validity status and the suite consults the clock, extending
   ARCHITECTURE §4's table.
+- *Features.* A Cargo feature for the first proof suite, EdDSA over JWS, beside
+  `vc-jose` (ARCHITECTURE §2: one feature per format and per proof suite), its name
+  decided at implementation. `vcrd-cli` forwards it, and `scripts/feature-matrix.sh` adds
+  it, building `vcrd-core` in every combination of its three features (REQUIREMENTS §13).
+  Decide whether `vcrd-cli` also refuses to build with no suite, as it does with no
+  format: a binary that can parse and inspect but not verify still does part of its job.
 - *Output.* The JSON envelope with every always-present key of ARCHITECTURE §6,
   `schema_version: 0`, `contained: []`; `text` via `tabled`; `plain`; every claim value
   masked by default; `--unsafe` with the stderr banner and the `reveals` list;
@@ -352,7 +359,7 @@ severity with the prominence REQUIREMENTS §12 demands.
 
 **Exit criteria.** RDFC-1.0 vectors pass; Appendix B vectors verify; a poison-graph fixture
 trips the budget and fails closed; the feature matrix includes `jsonld` alone and with
-`jwt-vc`; the review is complete.
+`vc-jose`; the review is complete.
 
 **Closes.** [Q1], [T1]; provides the first case for REQUIREMENTS §16 item 20.
 
@@ -364,7 +371,9 @@ be used" **[verified]**).
 
 ### Milestone 6. First release, 0.1.0
 
-**Scope.** [P1] Conventional Commits and a generated `CHANGELOG.md`; [P2]
+**Scope.** [P6] first: the move to a GitHub organization, with CODEOWNERS naming its
+maintainers team, since Trusted Publishing and the release URLs below name the repository's
+owner. [P1] Conventional Commits and a generated `CHANGELOG.md`; [P2]
 `CONTRIBUTING.md` (build and test commands, the trait on-ramp, the coverage policy, the
 versioning-split intent of REQUIREMENTS §7, the debugging guide), issue and PR templates,
 `CODE_OF_CONDUCT.md` with a project contact alias and [P5]. [T4] `cargo-semver-checks`,
@@ -383,7 +392,7 @@ consumers have used it (REQUIREMENTS §9).
 **Exit criteria.** The release pipeline runs from a tag; a semver-checks baseline exists;
 the changelog is generated; every §10 item is closed or carried with its tag.
 
-**Closes.** [P1], [P2], [P5], [T4], [T7], [D1], [D2].
+**Closes.** [P1], [P2], [P5], [P6], [T4], [T7], [D1], [D2].
 
 **Milestone review.** Re-run every prior milestone's review list against the release
 candidate, since REQUIREMENTS §11's practice is cumulative, and run the terminology check

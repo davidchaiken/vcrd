@@ -1,0 +1,28 @@
+# Dependabot version updates (REQUIREMENTS §12). Security updates are turned on
+# in the repository settings, and cooldown does not delay them.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # Wait a week after a release before proposing it: a compromised release is
+    # usually caught and withdrawn within days.
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    # Update Cargo.lock within the requirements Cargo.toml already states. A new
+    # major version needs a Cargo.toml change, made by hand under its code owner.
+    versioning-strategy: lockfile-only
+    cooldown:
+      default-days: 7
+    groups:
+      cargo:
+        patterns: ["*"]

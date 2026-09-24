@@ -1,0 +1,8 @@
+# Test code may unwrap, expect, index and panic: there a panic is a failed test,
+# not a crash on untrusted input (REQUIREMENTS §6, §7). Clippy has no such
+# setting for todo, unimplemented, unreachable or string_slice, so those stay
+# denied in tests too. scripts/check-lints-fire.sh checks both halves.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-indexing-slicing-in-tests = true
+allow-panic-in-tests = true
