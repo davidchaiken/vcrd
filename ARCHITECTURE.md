@@ -46,7 +46,7 @@ flowchart TB
     cli --> clidep["clap · tabled · serde<br/>(REQUIREMENTS §8)"]
     core --> sig["signature primitives<br/>ed25519-dalek · p256 · p521 · rsa · hmac"]
     core --> hash["sha2"]
-    core --> enc["encoding<br/>base64 · multibase · unsigned-varint · serde_json"]
+    core --> enc["encoding<br/>base64 · bs58 · unsigned-varint · serde_json"]
     core --> time["time"]
 ```
 
@@ -61,13 +61,18 @@ ones it does not. `vcrd-core` depends on:
 | MAC | `hmac` | HS256 |
 | Digest | `sha2` | SHA-256 and SHA-512 for every algorithm above |
 | JWS encoding | `base64` | base64url segments of the compact serialization |
-| `did:key` | `multibase`, `unsigned-varint` | multibase decoding and the multicodec key-type prefix |
+| `did:key` | `bs58`, `unsigned-varint` | base58btc, the multibase encoding `did:key` identifiers use (prefix `z`), and the multicodec key-type prefix |
 | JSON | `serde_json` | parsing untrusted input |
 | Time | `time` | RFC 3339 timestamps in the validity period |
 
 That set verified all five algorithms end to end in the prototype (finding 5), and its
 crates perform all of the hashing and arithmetic; vcrd's own code ends at the call into
 each crate's verifier.
+
+Milestone 1 changed two things from the prototype's set. It took the newer RustCrypto
+generation, `ed25519-dalek` 3 with `sha2` 0.11, and it replaced `multibase` with `bs58`:
+`did:key` needs base58btc alone, and `multibase` 0.9.3 brought eight more crates, for
+encodings vcrd does not read. `base64` is built without its default `simd-unsafe` feature.
 
 **No JOSE library.** REQUIREMENTS §10 has vcrd implement the JWS layer itself, so the
 graph contains no JOSE crate: vcrd's own code does algorithm policy, by-name rejection, and
@@ -89,9 +94,11 @@ lockfile). RSA padding checks are also constant-time
 - **`std-clock`** provides a system-clock implementation. `vcrd-core` does not enable it by
   default and `vcrd-cli` does, so "core never reads the system clock" (REQUIREMENTS §6)
   holds for core's default build rather than by convention.
-- **`vcrd-cli` refuses to build with no format enabled**, through a `compile_error!`. A
-  `vcrd` binary that can read no credential cannot do its job, and a build error is a
-  better answer than a runtime finding.
+- **`vcrd-cli` refuses to build with no format or no proof suite enabled**, through a
+  `compile_error!` for each. A `vcrd` binary that can read no credential, or verify no
+  proof, cannot do its job, and a build error is a better answer than a runtime finding.
+  The first suite is `jws`: one suite whose algorithm table grows by rows, not one
+  feature per algorithm.
 - **`vcrd-core` may build with no format enabled.** REQUIREMENTS §7 anticipates format
   implementations shipping from outside this repository, and a consumer that registers its
   own format needs a core built without the in-tree ones.
@@ -127,9 +134,16 @@ pub enum Phase { Parse, Inspect, Verify }
 
 pub enum PhaseOutcome<T> {
     NotRequested,
-    NotReached { blocked_by: Phase /* plus reason and responsible findings: REQUIREMENTS §16 item 20 */ },
+    NotReached(Blocked),
     Failed { output: T, findings: Vec<Finding> },
     Passed { output: T, findings: Vec<Finding> },
+}
+
+/// REQUIREMENTS §16 item 20: the structure that reports a block and its reason.
+pub struct Blocked {
+    pub by: Phase,
+    pub reason: BlockReason,          // Impossible | Dangerous (REQUIREMENTS §4)
+    pub findings: Vec<&'static str>,  // codes of the findings responsible
 }
 
 pub struct Finding {
@@ -538,9 +552,12 @@ pub struct ClaimValue(/* one scalar leaf */);   // no Serialize; Debug prints on
 - This tightens the prototype, where a frontend obtained plaintext by constructing a
   public capability token and set the reveal marker separately, in a different function,
   with nothing requiring the two to agree (finding 3).
-- **Everything derived from credential content is a `ClaimValue`**, including values the
-  `Document` surfaces as named fields. The prototype held the subject identifier as a plain
-  string and printed it in cleartext while masking the identical claim (finding 3).
+- **Everything derived from credential content is a `ClaimValue`.** The `Document` holds
+  every scalar as a leaf, and the format classes each leaf as a claim, masked by
+  default, or as metadata, always shown. The `Document`'s named plain fields — issuer,
+  types, validity bounds — hold metadata only; a claim never becomes one. The prototype
+  held the subject identifier as a plain string and printed it in cleartext while
+  masking the identical claim (finding 3).
 - A masked value renders as its type; a hashed value as a truncated digest whose
   construction is open (REQUIREMENTS §16 item 18).
 
@@ -796,7 +813,9 @@ Each becomes a test observed to fail and then to pass (REQUIREMENTS §11):
   and no RFC 6979 support (finding 5).
 - **[C2] Choose the elliptic-curve crate generation.** The prototype used the 0.13 line so
   that `p256` and `p521` share one generation of their common traits; a 0.14 line exists
-  and may fix the `p521` issues in [C1].
+  and may fix the `p521` issues in [C1]. Milestone 1 took `ed25519-dalek` 3 with `sha2`
+  0.11 (§2). `p256` and `p521` 0.14 are published; check that they use the same `sha2`
+  when adding them, and whether `p521` 0.14 fixes [C1].
 - **[C3] Extend algorithm coverage.** REQUIREMENTS §10 asks for coverage as broad as
   practical. The prototype verified EdDSA, ES256, ES512, RS256, and HS256; ES384, the PS
   family, and RS384/RS512 remain, and ES256K needs a decision.
@@ -805,6 +824,10 @@ Each becomes a test observed to fail and then to pass (REQUIREMENTS §11):
 
 - **[G1] Write a debugging guide.** REQUIREMENTS §6 requires a documented debugger
   configuration known to work. The prototype's `DEBUGGING.md` is the starting point.
+- **[G2] Run the debugging guide on Linux**, before a Linux-only failure needs it. [G1]
+  runs it on macOS only. Includes choosing the Linux environment, a virtual machine or
+  a container on the maintainer's machine; when the work happens is the maintainer's
+  decision (DEVELOPMENT-PLAN.md, milestone 2).
 
 ### [P] Project and repository setup
 

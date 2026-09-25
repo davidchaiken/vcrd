@@ -34,7 +34,7 @@ refer to ARCHITECTURE §10. Milestone sizes are unequal: milestones 1 and 5 are 
 |---|---|---|
 | 0 Skeleton | buildable workspace, CI, repository hardening | [P3] [P4] |
 | 1 Thin slice | `vcrd inspect`/`verify` on a VC-JOSE-COSE credential, Ed25519, `did:key` | [S3] [S4] [S5] [S6] [S7] [G1] |
-| 2 Keys and algorithms | five algorithms, caller keys, embedded-key precedence, allowlist, full provenance | [S1] [S2] [C1] [C2] [C3] [Q4] |
+| 2 Keys and algorithms | five algorithms, caller keys, embedded-key precedence, allowlist, full provenance, Linux debugging | [S1] [S2] [C1] [C2] [C3] [Q4] [G2] |
 | 3 CLI contract | config file, env, designations, `formats`/`suites`, man pages, fuzz, coverage, limits corpus | [Q2] [T2] [T5] [T6] |
 | 4 Presentations | `vp+jwt` with enveloped credentials, challenge/domain | — |
 | 5 Data Integrity | `eddsa-rdfc-2022`, `eddsa-jcs-2022`, pinned contexts, canonicalization budget | [Q1] [T1] |
@@ -84,7 +84,12 @@ every other `alg` exercise the by-name rejection path from day one.
   string-aware byte prescan before `serde_json` (ARCHITECTURE §4), `alg` present, `crit`
   handling (below), an embedded `jwk` parsed into a typed JWK (ARCHITECTURE §3), the
   registry with `No`/`Maybe`/`Yes` detection, and `Report.contained` (ARCHITECTURE §3),
-  empty at this milestone.
+  empty at this milestone. Decided 2026-09-24: parse reports what it finds without
+  stopping later phases wherever the input can still be read. Duplicate member names
+  keep the lexically last value and are recorded, and inspect reports each as an error
+  (exit 3) while verify still runs (known input 1). A malformed `crit` is an inspect
+  error attributed to the input (exit 3); a well-formed `crit` naming an extension vcrd
+  does not implement fails verify, named and attributed to vcrd (exit 6).
 - *Inspect.* VCDM 2.0 §4.3 (`@context` first item; subsequent items URLs or objects),
   §4.5 (`type` present; `VerifiableCredential` per the table of objects that MUST have a
   type), §4.7 (issuer present; a URL or an object with an `id` URL), §4.8
@@ -94,23 +99,26 @@ every other `alg` exercise the by-name rejection path from day one.
   SHOULD be `vc` (warnings); §3.1.3 `vc`/`vp` MUST NOT be present (error; the VCDM 1.1
   mapping detected, named, attributed to vcrd, exit 6, as in finding 7); §4.1.2 `iss`, if
   present, MUST match `issuer` or `issuer.id` (error); `jti`/`id` and
-  `sub`/`credentialSubject.id` SHOULD agree (warnings). All **[verified]**.
+  `sub`/`credentialSubject.id` SHOULD agree (warnings). All **[verified]**. `kid` checked
+  against `<did>#<multibase>` here, not in verify: it is a conformance check, so a
+  missing or foreign `kid` fails inspect (exit 3) while verify reports the signature
+  (decided 2026-09-24; known input 4).
 - *Verify.* EdDSA/Ed25519 via `verify_strict`, `is_weak` at resolution (ARCHITECTURE §8);
   `none` rejected; every other `alg` unsupported by name (attribution vcrd, exit 6). Key
   resolution from the credential's `issuer` (the VCDM-normative identifier; `iss` is a
   JWT convenience checked at inspect) when it is a `did:key` with codec `0xed`; other
   codecs named and attributed to vcrd; an embedded `jwk` refused with its own finding
-  (REQUIREMENTS §10, rule 5); `kid` checked against `<did>#<multibase>` (below);
+  (REQUIREMENTS §10, rule 5);
   provenance `source: issuer_identifier` with thumbprint. The signature's own currency:
   `exp` and `iat` in the verify phase (below), which means `VerifyOutput` carries a
   securing-mechanism validity status and the suite consults the clock, extending
   ARCHITECTURE §4's table.
 - *Features.* A Cargo feature for the first proof suite, EdDSA over JWS, beside
-  `vc-jose` (ARCHITECTURE §2: one feature per format and per proof suite), its name
-  decided at implementation. `vcrd-cli` forwards it, and `scripts/feature-matrix.sh` adds
-  it, building `vcrd-core` in every combination of its three features (REQUIREMENTS §13).
-  Decide whether `vcrd-cli` also refuses to build with no suite, as it does with no
-  format: a binary that can parse and inspect but not verify still does part of its job.
+  `vc-jose` (ARCHITECTURE §2: one feature per format and per proof suite).
+  `vcrd-cli` forwards it, and `scripts/feature-matrix.sh` adds it, building `vcrd-core`
+  in every combination of its three features (REQUIREMENTS §13). Decided 2026-09-24: the
+  feature is `jws`, one suite whose algorithm table milestone 2 extends; and `vcrd-cli`
+  refuses to build with no suite, as with no format, which the feature matrix checks.
 - *Output.* The JSON envelope with every always-present key of ARCHITECTURE §6,
   `schema_version: 0`, `contained: []`; `text` via `tabled`; `plain`; every claim value
   masked by default; `--unsafe` with the stderr banner and the `reveals` list;
@@ -219,7 +227,8 @@ modulus of at least 2048 bits (RFC 7518 §3.3 **[verified]**), HS256 key of at l
 bits (RFC 7518 §3.2 **[verified]**), the EC identity point, Ed25519 `is_weak`. [Q4].
 `did:key` decoding for `p256-pub` and `p521-pub`; `p384-pub`, `secp256k1-pub` and
 `rsa-pub` named only. [C1] the audit-status table; [C2] the elliptic-curve crate
-generation.
+generation. [G2] the debugging guide run on Linux, at a time the maintainer chooses
+within the milestone, so that it is ready before a Linux-only failure needs it.
 
 **Delivers.** `vcrd verify` for five algorithms, with caller keys, the embedded-key opt-in
 and the allowlist; provenance for every row of ARCHITECTURE §8's situation table.
@@ -233,7 +242,7 @@ and HS256 128-bit keys (weak-key findings); a P-384 `did:key` (named, exit 6); E
 happy path, the EUDI evidence point of REQUIREMENTS §10.
 
 **Closes.** [S1], [S2], [C1], [C2], [C3] (decision recorded; anything left out is a named
-follow-on), [Q4].
+follow-on), [Q4], [G2].
 
 **Milestone review.** Texts: RFC 7518 §3.1–3.6, including §3.4's `R || S` encoding at 64,
 96 and 132 octets **[verified]** and §3.6's "MUST NOT accept Unsecured JWSs by default"

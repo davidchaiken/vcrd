@@ -20,11 +20,24 @@ repository = "https://github.com/davidchaiken/vcrd"
 # Nothing is published before milestone 6 (DEVELOPMENT-PLAN.md).
 publish = false
 
-# Every dependency is declared here, so adding one changes this file, which
-# CODEOWNERS covers (REQUIREMENTS §12).
+# Every dependency is declared here. CODEOWNERS covers this file, the member
+# manifests and Cargo.lock (REQUIREMENTS §12).
 [workspace.dependencies]
 vcrd-core = { path = "vcrd-core", version = "0.0.0", default-features = false }
+# JWS segments. default-features = false drops the default `simd-unsafe` feature.
+base64 = { version = "0.23", default-features = false, features = ["std"] }
+# did:key identifiers: base58btc only (the multibase `z` prefix).
+bs58 = "0.5"
 clap = { version = "4.6", features = ["derive"] }
+ed25519-dalek = "3.0"
+serde = "1.0"
+serde_json = "1.0"
+sha2 = "0.11"
+time = { version = "0.3", features = ["parsing", "formatting"] }
+unsigned-varint = "0.8"
+# Test-only (REQUIREMENTS §11).
+assert_cmd = "2.2"
+predicates = "3.1"
 
 [workspace.lints.rust]
 # Also `#![forbid(unsafe_code)]` in each crate root; this copy reaches new crates

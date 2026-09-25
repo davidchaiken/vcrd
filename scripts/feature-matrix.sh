@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Lints and tests every supported feature combination (REQUIREMENTS §13;
-# DEVELOPMENT-PLAN.md, milestone 0), then checks that vcrd-cli refuses to build
-# with no format and that the built `vcrd` answers --help and --version.
+# DEVELOPMENT-PLAN.md, milestones 0 and 1): vcrd-core in every combination of its
+# three features, and vcrd-cli with its defaults. Then checks that vcrd-cli refuses
+# to build with no format or no proof suite, and that the built `vcrd` answers
+# --help and --version.
 #
 # Each combination is its own cargo invocation with -p, not --workspace: cargo
 # merges the features of every package selected in one invocation, so a
@@ -12,11 +14,16 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
+# vcrd-core's features: vc-jose (a format), jws (a proof suite) and std-clock.
 combinations=(
   "-p vcrd-core --no-default-features"
   "-p vcrd-core --no-default-features --features std-clock"
-  "-p vcrd-core"
-  "-p vcrd-core --features std-clock"
+  "-p vcrd-core --no-default-features --features vc-jose"
+  "-p vcrd-core --no-default-features --features vc-jose,std-clock"
+  "-p vcrd-core --no-default-features --features jws"
+  "-p vcrd-core --no-default-features --features jws,std-clock"
+  "-p vcrd-core --no-default-features --features vc-jose,jws"
+  "-p vcrd-core --no-default-features --features vc-jose,jws,std-clock"
   "-p vcrd-cli"
 )
 
@@ -28,21 +35,29 @@ for combination in "${combinations[@]}"; do
   cargo test $combination --locked
 done
 
-echo "==> -p vcrd-cli --no-default-features (must fail)"
-set +e
-# --color never: the message is searched below, whatever CARGO_TERM_COLOR says.
-out=$(cargo build --color never -p vcrd-cli --no-default-features --locked 2>&1)
-status=$?
-set -e
-if [ $status -eq 0 ]; then
-  echo "FAIL: vcrd-cli built with no format feature" >&2
-  exit 1
-fi
-if ! grep -q -F "vcrd-cli needs at least one credential format feature" <<<"$out"; then
-  printf 'FAIL: vcrd-cli failed to build for a reason other than its compile_error!\n%s\n' "$out" >&2
-  exit 1
-fi
-echo "ok: refused to build, with the compile_error! message"
+# must_fail <features> <message>: vcrd-cli must refuse to build with only these
+# features, and for the reason its compile_error! gives.
+must_fail() {
+  local features=$1 message=$2 out status
+  echo "==> -p vcrd-cli --no-default-features${features:+ --features $features} (must fail)"
+  set +e
+  # --color never: the message is searched below, whatever CARGO_TERM_COLOR says.
+  out=$(cargo build --color never -p vcrd-cli --no-default-features ${features:+--features "$features"} --locked 2>&1)
+  status=$?
+  set -e
+  if [ $status -eq 0 ]; then
+    echo "FAIL: vcrd-cli built with features '$features'" >&2
+    exit 1
+  fi
+  if ! grep -q -F "$message" <<<"$out"; then
+    printf 'FAIL: vcrd-cli failed to build for a reason other than its compile_error!\n%s\n' "$out" >&2
+    exit 1
+  fi
+  echo "ok: refused to build, with the compile_error! message"
+}
+
+must_fail "" "vcrd-cli needs at least one credential format feature"
+must_fail "vc-jose" "vcrd-cli needs at least one proof suite feature"
 
 echo "==> vcrd --help and vcrd --version"
 cargo build -p vcrd-cli --locked
