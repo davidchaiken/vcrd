@@ -14,14 +14,24 @@ name = "vcrd"
 path = "src/main.rs"
 
 [features]
-# At least one format must be enabled; src/main.rs refuses to build otherwise.
-default = ["vc-jose"]
+# At least one format and one proof suite must be enabled; src/main.rs refuses to
+# build otherwise.
+default = ["vc-jose", "jws"]
 vc-jose = ["vcrd-core/vc-jose"]
+jws = ["vcrd-core/jws"]
 
 [dependencies]
 # The CLI always has a clock (ARCHITECTURE §2).
 vcrd-core = { workspace = true, features = ["std-clock"] }
 clap.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+time.workspace = true
+
+[dev-dependencies]
+assert_cmd.workspace = true
+predicates.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

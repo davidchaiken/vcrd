@@ -33,6 +33,19 @@ unused-allowed-license = "allow"
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Known duplicate versions, each with why it exists and when it goes. The Makefile
+# runs cargo-deny with `-D unmatched-skip`, so an entry that no longer matches fails
+# CI: the pull request that removes a duplicate (usually a Dependabot lockfile
+# update) must remove its entry too. Entries name a major version, not an exact one,
+# so that patch releases do not fail CI.
+skip = [
+  # syn 2 and 3, both build-time only: procedural-macro dependencies, not linked into
+  # vcrd. syn 2 comes from curve25519-dalek-derive 0.1.1 (the latest release, which
+  # requires syn 2), used by curve25519-dalek 5 on x86_64 for its SIMD backend. syn 3
+  # comes from clap_derive and serde_derive. Remove this entry when
+  # curve25519-dalek-derive moves to syn 3.
+  { crate = "syn@2", reason = "curve25519-dalek-derive 0.1.1 requires syn 2; build-time only" },
+]
 
 [sources]
 unknown-registry = "deny"

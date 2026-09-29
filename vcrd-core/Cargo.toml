@@ -10,12 +10,33 @@ repository.workspace = true
 publish.workspace = true
 
 [features]
-default = ["vc-jose"]
+default = ["vc-jose", "jws"]
 # VC-JOSE-COSE: a VCDM 2.0 credential secured as a compact JWS.
 vc-jose = []
+# The JWS proof suite: verifies a JWS signature. Its algorithm table has one
+# row, EdDSA over Ed25519, in milestone 1.
+jws = []
 # A system clock. Off by default, so that core reads the system clock only when
 # a frontend asks for it (ARCHITECTURE §2).
 std-clock = []
 
+[dependencies]
+base64.workspace = true
+ed25519-dalek.workspace = true
+bs58.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+time.workspace = true
+unsigned-varint.workspace = true
+
 [lints]
 workspace = true
+
+[dev-dependencies]
+time = { workspace = true, features = ["macros"] }
+
+# Needs a format and a suite; skipped in the feature combinations without them.
+[[test]]
+name = "example"
+required-features = ["vc-jose", "jws"]

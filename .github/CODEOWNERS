@@ -5,6 +5,10 @@
 # bypass. /.github/ covers this file too.
 /.github/            @davidchaiken
 /Cargo.toml          @davidchaiken
+# A member manifest can declare a dependency directly, and a lockfile-only update
+# (Dependabot's, for one) can add crates without touching any manifest.
+/Cargo.lock          @davidchaiken
+/vcrd-*/Cargo.toml   @davidchaiken
 /Makefile            @davidchaiken
 /clippy.toml         @davidchaiken
 /deny.toml           @davidchaiken

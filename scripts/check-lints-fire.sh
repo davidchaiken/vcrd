@@ -9,13 +9,13 @@
 #   2. In the non-test code of every crate root, each denied clippy lint fails
 #      the build, and so does an `unsafe` block.
 #   3. In test code, the lints clippy.toml exempts pass, and the others still
-#      fail.
+#      fail. A helper function beside the test functions in tests/*.rs is held to
+#      the non-test rules (clippy 0.1.98) unless it is inside a #[cfg(test)]
+#      module, which is where this repository's test helpers go
+#      (docs/reviews/milestone-0.md, gap 1).
 #   4. Each crate root carries #![forbid(unsafe_code)] and Cargo.toml forbids
 #      unsafe_code. Case 2 passes while either one remains, so it cannot see one
 #      of them removed.
-#
-# Not covered: a helper function in tests/*.rs, outside any #[test] function,
-# gets no exemption from clippy (0.1.98), so it is held to the non-test rules.
 #
 # The working tree is never modified. Needs bash (3.2 or later), git, tar, jq
 # and cargo.
@@ -181,6 +181,24 @@ for root in "${roots[@]}"; do
     plant "$root" "$(test_module "${not_exempt_body[$i]}")"
     expect_fail "${not_exempt[$i]}" "$root" "${not_exempt[$i]} still denied in tests in $root"
   done
+done
+
+helper='fn helper(v: &[u8]) -> u8 {
+        v[0]
+    }'
+helper_test='#[test]
+fn lint_canary() {
+    assert_eq!(helper(&[1]), 1);
+}'
+for root in "${roots[@]}"; do
+  canary="${root%%/src/*}/tests/lint_canary.rs"
+  restore
+  mkdir -p "${canary%/*}"
+  printf '%s\n\n%s\n' "$helper" "$helper_test" >"$canary"
+  expect_fail indexing_slicing "$canary" "a bare helper in tests/*.rs held to the non-test rules in $canary"
+  restore
+  printf '#[cfg(test)]\nmod support {\n    pub %s\n}\nuse support::helper;\n\n%s\n' "$helper" "$helper_test" >"$canary"
+  expect_pass "a helper in a #[cfg(test)] module in tests/*.rs exempt in $canary"
 done
 restore
 
