@@ -108,7 +108,28 @@ lockfile). RSA padding checks are also constant-time
   came from. The prototype got this wrong: built with no formats, it blamed the input
   ("Answered as a side effect" in the findings).
 
-Which combinations CI builds is specified in REQUIREMENTS §13.
+**Supported feature builds.** REQUIREMENTS §13 has CI build and test each supported
+combination of features. Four rules keep that set linear in the number of features
+rather than exponential:
+
+- **Features are additive and independent.** A feature adds modules and registry entries
+  and changes nothing else. No code depends on two features at once: no `cfg` names two
+  features inside `all(...)`. `any(...)` is allowed, since the code under it compiles the
+  same whichever feature is on. `scripts/feature-matrix.sh` rejects a `cfg` that combines
+  features with `all(...)` on one line.
+- **Formats and suites meet only at runtime, through the `Registry`.** A format whose
+  suite is not built gets `verify.suite_unavailable`, attributed to vcrd. Tests cover a
+  subset of formats and suites by building a registry with only that subset, in the full
+  build, rather than by building the feature combination.
+- **`vcrd-core` supports** no features (for formats and suites from outside the
+  repository), each feature alone, the default set, and all features. CI builds these on
+  every change, as cargo-hack's `--each-feature` computes them from `Cargo.toml`. Other
+  combinations should work under the first rule but are not promised.
+- **`vcrd-cli` supports its default features.** The builds with no format and with no
+  proof suite must fail, and CI checks that they do.
+
+Every combination of `vcrd-core`'s features runs weekly and on demand (`make
+test-powerset`), as the check that these rules hold; it does not block a merge.
 
 ## 3. Data structures
 
@@ -456,7 +477,8 @@ construction (finding 4).
 5. Review against the format's normative text, with each gap a test seen to fail and then
    to pass (REQUIREMENTS §11).
 6. Check the format's terminology against the glossary (REQUIREMENTS §15).
-7. Add the feature combination to CI (REQUIREMENTS §13).
+7. Nothing to add to CI: the new feature joins the supported builds, which cargo-hack
+   reads from `Cargo.toml` (§2). Keep it within §2's rules.
 
 ### Adding a proof suite
 

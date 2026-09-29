@@ -110,6 +110,34 @@ fn an_empty_registry_is_vcrds_limit() {
     assert!(matches!(report.inspect, PhaseOutcome::NotReached(_)));
 }
 
+/// A format registered without the suite its proofs need: parse and inspect pass,
+/// and verify fails, attributed to vcrd, with the key's provenance still reported.
+/// Tests cover a subset of formats and suites this way, at runtime, rather than by
+/// building that feature combination (ARCHITECTURE §2).
+#[test]
+fn a_format_without_its_suite_is_vcrds_limit() {
+    let mut registry = Registry::empty();
+    registry.register_format(Box::new(vcrd_core::formats::vc_jose::VcJose));
+    let report = verify(&example(), &at(datetime!(2026-10-01 0:00 UTC)), &registry);
+    assert!(
+        matches!(report.inspect, PhaseOutcome::Passed { .. }),
+        "{report:?}"
+    );
+    let PhaseOutcome::Failed { output, findings } = &report.verify else {
+        panic!("{report:?}")
+    };
+    assert_eq!(findings[0].code, "verify.suite_unavailable");
+    assert_eq!(findings[0].attribution, vcrd_core::Attribution::Vcrd);
+    let [proof] = output.proofs.as_slice() else {
+        panic!("one proof")
+    };
+    assert!(matches!(proof.outcome, ProofOutcome::NotAttempted));
+    assert_eq!(
+        proof.key_provenance.source,
+        Some(KeySource::IssuerIdentifier)
+    );
+}
+
 /// The claims are masked in every `Debug` rendering of the report (ARCHITECTURE §7).
 #[test]
 fn debug_output_masks_every_claim() {

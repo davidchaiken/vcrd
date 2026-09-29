@@ -1,76 +1,96 @@
 #!/usr/bin/env bash
-# Lints and tests every supported feature combination (REQUIREMENTS §13;
-# DEVELOPMENT-PLAN.md, milestones 0 and 1): vcrd-core in every combination of its
-# three features, and vcrd-cli with its defaults. Then checks that vcrd-cli refuses
-# to build with no format or no proof suite, and that the built `vcrd` answers
-# --help and --version.
+# Lints, checks and tests the supported feature builds (ARCHITECTURE §2;
+# REQUIREMENTS §13), then checks that vcrd-cli refuses to build with no format or
+# no proof suite. With --powerset, vcrd-core runs in every combination of its
+# features instead: the weekly check that ARCHITECTURE §2's rules hold.
 #
-# Each combination is its own cargo invocation with -p, not --workspace: cargo
-# merges the features of every package selected in one invocation, so a
-# workspace build would turn vc-jose on in vcrd-core through vcrd-cli.
+# vcrd-core's builds come from cargo-hack, which reads the features from
+# vcrd-core/Cargo.toml. --each-feature is: no features, each feature alone, the
+# default set, and all features. cargo-hack prints each build's cargo command
+# before running it; that is the command to rerun one build on its own, with a
+# test name added to narrow it further. Every step runs even when an earlier one
+# fails, and the failures are listed at the end.
+#
+# Each build selects one package (cargo-hack passes vcrd-core's manifest path;
+# the vcrd-cli steps pass -p), never the workspace: cargo merges the features of
+# every package selected in one invocation, so a workspace build would turn vc-jose
+# on in vcrd-core through vcrd-cli.
 #
 # Runs with whatever toolchain rustup selects: rust-toolchain.toml's, or
-# RUSTUP_TOOLCHAIN's when set. Needs bash (3.2 or later), git, jq and cargo.
+# RUSTUP_TOOLCHAIN's when set. Needs bash (3.2 or later), git, and cargo-hack in
+# target/tools (`make tools-hack`).
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
+export PATH="$PWD/target/tools/bin:$PATH"
 
-# vcrd-core's features: vc-jose (a format), jws (a proof suite) and std-clock.
-combinations=(
-  "-p vcrd-core --no-default-features"
-  "-p vcrd-core --no-default-features --features std-clock"
-  "-p vcrd-core --no-default-features --features vc-jose"
-  "-p vcrd-core --no-default-features --features vc-jose,std-clock"
-  "-p vcrd-core --no-default-features --features jws"
-  "-p vcrd-core --no-default-features --features jws,std-clock"
-  "-p vcrd-core --no-default-features --features vc-jose,jws"
-  "-p vcrd-core --no-default-features --features vc-jose,jws,std-clock"
-  "-p vcrd-cli"
-)
+case "${1-}" in
+  "") builds=(--each-feature) ;;
+  # `default` is a feature to cargo-hack; excluding it leaves the 2^n combinations
+  # of the others, without duplicates.
+  --powerset) builds=(--feature-powerset --exclude-features default) ;;
+  *)
+    echo "usage: $0 [--powerset]" >&2
+    exit 2
+    ;;
+esac
 
-for combination in "${combinations[@]}"; do
-  echo "==> $combination"
-  # shellcheck disable=SC2086 # each combination is several arguments
-  cargo clippy $combination --all-targets --locked -- -D warnings
-  # shellcheck disable=SC2086
-  cargo test $combination --locked
-done
+failed=()
 
-# must_fail <features> <message>: vcrd-cli must refuse to build with only these
+# step NAME COMMAND...: runs COMMAND, and records NAME if it fails.
+step() {
+  local name=$1
+  shift
+  echo "==> $name"
+  if ! "$@"; then failed+=("$name"); fi
+}
+
+# must_fail FEATURES MESSAGE: vcrd-cli must refuse to build with only these
 # features, and for the reason its compile_error! gives.
 must_fail() {
-  local features=$1 message=$2 out status
-  echo "==> -p vcrd-cli --no-default-features${features:+ --features $features} (must fail)"
-  set +e
-  # --color never: the message is searched below, whatever CARGO_TERM_COLOR says.
-  out=$(cargo build --color never -p vcrd-cli --no-default-features ${features:+--features "$features"} --locked 2>&1)
-  status=$?
-  set -e
-  if [ $status -eq 0 ]; then
+  local features=$1 message=$2 out
+  # --color never: the message is searched, whatever CARGO_TERM_COLOR says.
+  if out=$(cargo build --color never -p vcrd-cli --no-default-features ${features:+--features "$features"} --locked 2>&1); then
     echo "FAIL: vcrd-cli built with features '$features'" >&2
-    exit 1
+    return 1
   fi
   if ! grep -q -F "$message" <<<"$out"; then
     printf 'FAIL: vcrd-cli failed to build for a reason other than its compile_error!\n%s\n' "$out" >&2
-    exit 1
+    return 1
   fi
   echo "ok: refused to build, with the compile_error! message"
 }
 
-must_fail "" "vcrd-cli needs at least one credential format feature"
-must_fail "vc-jose" "vcrd-cli needs at least one proof suite feature"
+# No code may depend on two features at once (ARCHITECTURE §2). This finds a cfg
+# that names two features inside all(...) on one line; `any` is allowed. A cfg
+# wrapped across lines escapes it.
+no_combined_cfg() {
+  if git grep --untracked -n -E 'cfg(_attr)?\(.*all\(.*feature.*feature' -- '*.rs'; then
+    echo "FAIL: the cfg above combines features with all(...)" >&2
+    return 1
+  fi
+  echo "ok: no cfg combines features with all(...)"
+}
 
-echo "==> vcrd --help and vcrd --version"
-cargo build -p vcrd-cli --locked
-# Ask cargo where it built the binary, which CARGO_TARGET_DIR can move.
-metadata=$(cargo metadata --no-deps --format-version 1 --locked)
-vcrd="$(jq -r .target_directory <<<"$metadata")/debug/vcrd"
-"$vcrd" --help >/dev/null
-version=$("$vcrd" --version)
-expected="vcrd $(jq -r '.packages[] | select(.name == "vcrd-cli") | .version' <<<"$metadata")"
-if [ "$version" != "$expected" ]; then
-  echo "FAIL: vcrd --version printed '$version', expected '$expected'" >&2
+hack=(cargo hack -p vcrd-core "${builds[@]}" --keep-going)
+
+step "no cfg combines features" no_combined_cfg
+step "vcrd-core: clippy" "${hack[@]}" clippy --all-targets --locked -- -D warnings
+# The library alone, so that dev-dependencies' features are off: resolver 3 turns
+# them on for tests, examples and --all-targets, which is every step above and
+# below, so a library that relied on one of them would pass those.
+step "vcrd-core: library without dev-dependency features" "${hack[@]}" check --lib --locked
+step "vcrd-core: tests" "${hack[@]}" test --locked --no-fail-fast
+step "vcrd-cli: clippy" cargo clippy -p vcrd-cli --all-targets --locked -- -D warnings
+step "vcrd-cli: tests" cargo test -p vcrd-cli --locked --no-fail-fast
+step "vcrd-cli with no format (must fail)" \
+  must_fail "" "vcrd-cli needs at least one credential format feature"
+step "vcrd-cli with no proof suite (must fail)" \
+  must_fail "vc-jose" "vcrd-cli needs at least one proof suite feature"
+
+if [ ${#failed[@]} -gt 0 ]; then
+  echo >&2
+  echo "FAILED:" >&2
+  printf '  %s\n' "${failed[@]}" >&2
   exit 1
 fi
-echo "ok: $version"
-
-echo "Every feature combination passed."
+echo "Every build passed."

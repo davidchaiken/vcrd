@@ -18,7 +18,8 @@ on:
     branches: [main]
   schedule:
     # Weekly, so that a new RustSec advisory against an unchanged Cargo.lock is
-    # noticed without waiting for the next pull request.
+    # noticed without waiting for the next pull request, and to run the
+    # test-powerset job. A failure is emailed to whoever last changed this line.
     - cron: "23 6 * * 1"
   workflow_dispatch:
 
@@ -60,7 +61,22 @@ jobs:
           persist-credentials: false
       - name: Install the toolchain named in rust-toolchain.toml
         run: rustup toolchain install --no-self-update && cargo --version
-      - name: Clippy and tests over every feature combination
+      # cargo-hack is cached as cargo-deny and cargo-audit are; see supply-chain.
+      - name: Restore cargo-hack built by an earlier run
+        id: hack-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/tools
+          key: cargo-hack-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile', 'rust-toolchain.toml') }}
+      - name: Build cargo-hack from crates.io, unless restored
+        run: make tools-hack
+      - name: Save cargo-hack
+        if: steps.hack-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/tools
+          key: ${{ steps.hack-cache.outputs.cache-primary-key }}
+      - name: Clippy and tests over the supported feature builds
         run: make test
 
   lints-fire:
@@ -95,9 +111,9 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target/tools
-          key: tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile', 'rust-toolchain.toml') }}
+          key: supply-chain-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile', 'rust-toolchain.toml') }}
       - name: Build cargo-deny and cargo-audit from crates.io, unless restored
-        run: make tools
+        run: make tools-supply-chain
       # Saved before the checks run, so that a failing check (a new advisory,
       # say) does not discard a fresh build.
       - name: Save the built tools
@@ -120,16 +136,47 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
-    env:
-      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install the latest stable toolchain
-        run: rustup toolchain install stable --profile minimal --component clippy --no-self-update && cargo --version
-      - name: Clippy and tests over every feature combination
+      # The pinned toolchain builds cargo-hack, so that the test job's cache fits;
+      # `make latest-stable` runs the builds themselves on stable.
+      - name: Install the pinned and the latest stable toolchains
+        run: |
+          rustup toolchain install --no-self-update
+          rustup toolchain install stable --profile minimal --component clippy --no-self-update
+          RUSTUP_TOOLCHAIN=stable cargo --version
+      - name: Restore cargo-hack built by the test job
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/tools
+          key: cargo-hack-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile', 'rust-toolchain.toml') }}
+      - name: Clippy and tests over the supported feature builds
         run: make latest-stable
+
+  test-powerset:
+    # Every combination of vcrd-core's features, weekly and on demand: the check
+    # that ARCHITECTURE §2's rules hold, which lets every change test only the
+    # supported builds. Linux only, to keep the weekly cost down; macOS runs the
+    # supported builds on every change. ci-ok does not wait for it.
+    name: test (every feature combination)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the toolchain named in rust-toolchain.toml
+        run: rustup toolchain install --no-self-update && cargo --version
+      - name: Restore cargo-hack built by the test job
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/tools
+          key: cargo-hack-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile', 'rust-toolchain.toml') }}
+      - name: Clippy and tests over every combination of vcrd-core's features
+        run: make test-powerset
 
   ci-ok:
     # The one status check the main ruleset requires. GitHub reports a job that

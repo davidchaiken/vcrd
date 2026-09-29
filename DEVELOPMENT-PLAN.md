@@ -115,10 +115,11 @@ every other `alg` exercise the by-name rejection path from day one.
   ARCHITECTURE §4's table.
 - *Features.* A Cargo feature for the first proof suite, EdDSA over JWS, beside
   `vc-jose` (ARCHITECTURE §2: one feature per format and per proof suite).
-  `vcrd-cli` forwards it, and `scripts/feature-matrix.sh` adds it, building `vcrd-core`
-  in every combination of its three features (REQUIREMENTS §13). Decided 2026-09-24: the
-  feature is `jws`, one suite whose algorithm table milestone 2 extends; and `vcrd-cli`
-  refuses to build with no suite, as with no format, which the feature matrix checks.
+  `vcrd-cli` forwards it, and `scripts/feature-matrix.sh` builds it (REQUIREMENTS §13).
+  Decided 2026-09-24: the feature is `jws`, one suite whose algorithm table milestone 2
+  extends; and `vcrd-cli` refuses to build with no suite, as with no format, which the
+  feature matrix checks. Decided 2026-09-27: CI builds the supported feature builds of
+  ARCHITECTURE §2 on every change, through cargo-hack, and every combination weekly.
 - *Output.* The JSON envelope with every always-present key of ARCHITECTURE §6,
   `schema_version: 0`, `contained: []`; `text` via `tabled`; `plain`; every claim value
   masked by default; `--unsafe` with the stderr banner and the `reveals` list;
@@ -367,8 +368,8 @@ directly onto REQUIREMENTS §10's expected domain and challenge **[verified]**.
 severity with the prominence REQUIREMENTS §12 demands.
 
 **Exit criteria.** RDFC-1.0 vectors pass; Appendix B vectors verify; a poison-graph fixture
-trips the budget and fails closed; the feature matrix includes `jsonld` alone and with
-`vc-jose`; the review is complete.
+trips the budget and fails closed; `jsonld` builds alone and within
+the full set, under ARCHITECTURE §2's rules; the review is complete.
 
 **Closes.** [Q1], [T1]; provides the first case for REQUIREMENTS §16 item 20.
 
