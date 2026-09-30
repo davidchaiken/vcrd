@@ -74,12 +74,14 @@ tools-supply-chain:
 clean:
 	cargo clean -p vcrd-core -p vcrd-cli
 
-# The dev and release profiles, the docs, and the target directory
-# scripts/check-lints-fire.sh builds in.
+# The dev and release profiles, the docs, the scratch directory cargo gives
+# integration tests (CARGO_TARGET_TMPDIR, the target directory's tmp/), and the
+# target directory scripts/check-lints-fire.sh builds in.
 clean-build:
 	cargo clean --profile dev
 	cargo clean --release
 	cargo clean --doc
+	rm -rf "$${CARGO_TARGET_DIR:-target}/tmp"
 	CARGO_TARGET_DIR=target/lints-fire cargo clean
 
 clean-all: clean-build

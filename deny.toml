@@ -40,11 +40,14 @@ wildcards = "deny"
 # so that patch releases do not fail CI.
 skip = [
   # syn 2 and 3, both build-time only: procedural-macro dependencies, not linked into
-  # vcrd. syn 2 comes from curve25519-dalek-derive 0.1.1 (the latest release, which
-  # requires syn 2), used by curve25519-dalek 5 on x86_64 for its SIMD backend. syn 3
-  # comes from clap_derive and serde_derive. Remove this entry when
-  # curve25519-dalek-derive moves to syn 3.
-  { crate = "syn@2", reason = "curve25519-dalek-derive 0.1.1 requires syn 2; build-time only" },
+  # vcrd. syn 3 comes from clap_derive and serde_derive. syn 2 comes from two crates:
+  # - curve25519-dalek-derive 0.1.1 (the latest release, which requires syn 2), used
+  #   by curve25519-dalek 5 on x86_64 for its SIMD backend;
+  # - zerocopy-derive 0.8, in Cargo.lock but never built: zerocopy declares it under
+  #   `cfg(any())`, a condition that is never true, to keep their versions in step.
+  #   zerocopy comes from proptest, a dev-dependency, through rand_chacha.
+  # Remove this entry when both have moved to syn 3.
+  { crate = "syn@2", reason = "curve25519-dalek-derive 0.1.1 and zerocopy-derive 0.8 require syn 2; build-time only" },
 ]
 
 [sources]

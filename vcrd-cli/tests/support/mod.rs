@@ -11,6 +11,11 @@ use serde_json::Value;
 /// The curated example (REQUIREMENTS §11).
 pub const EXAMPLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../examples/ed25519.jwt");
 
+/// A negative fixture, by file name (vcrd-core/tests/fixtures.rs generates them).
+pub fn fixture(name: &str) -> String {
+    format!("{}/../fixtures/{name}", env!("CARGO_MANIFEST_DIR"))
+}
+
 /// Inside the example's validity period.
 pub const NOW: &str = "2026-10-01T00:00:00Z";
 

@@ -30,10 +30,10 @@ pub use document::{
     ProofDescriptor, ProofMaterial, Timestamp,
 };
 pub use finding::{
-    Attribution, DateField, DidKeyProblem, Finding, FindingDetail, JwsSegment, KeySourceKind,
-    Severity,
+    Attribution, DateField, DidKeyProblem, Finding, FindingDetail, JwsJsonSyntax, JwsSegment,
+    KeySourceKind, Severity,
 };
-pub use json::{Json, Member};
+pub use json::{DuplicateName, Json, Member, nesting_depth};
 pub use keys::{CredentialKey, KeyProvenance, KeySource, PublicKey};
 pub use redact::{
     ClaimValue, Designations, Rendered, RenderedLeaf, Reveal, Revealed, Treatment, ValueKind,
