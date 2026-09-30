@@ -38,6 +38,9 @@ unsigned-varint = "0.8"
 # Test-only (REQUIREMENTS §11).
 assert_cmd = "2.2"
 predicates = "3.1"
+# Without the default fork, timeout and bit-set features, which bring tempfile and
+# rusty-fork.
+proptest = { version = "1.11", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
 # Also `#![forbid(unsafe_code)]` in each crate root; this copy reaches new crates

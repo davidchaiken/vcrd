@@ -40,14 +40,6 @@ fn main() -> ExitCode {
     let verbosity = cli.options.verbosity;
     let (operation, file) = cli.operation();
 
-    let bytes = match read_input(file) {
-        Ok(bytes) => bytes,
-        Err((code, message)) => {
-            eprintln_unless_quiet(verbosity, &message);
-            return emit(&view::fault(code, message), format, verbosity);
-        }
-    };
-
     let skew = Duration::from_secs(cli.options.clock_skew);
     let designations = Designations::mask_claims();
     let ctx = match cli.options.now {
@@ -57,12 +49,25 @@ fn main() -> ExitCode {
     .clock_skew(skew)
     .designations(designations)
     .build();
+
+    let input = match read_input(file, ctx.limits().max_bytes) {
+        Ok(input) => input,
+        Err((code, message)) => {
+            eprintln_unless_quiet(verbosity, &message);
+            return emit(&view::fault(code, message), format, verbosity);
+        }
+    };
+    let bytes = input.bytes;
     let registry = Registry::builtin();
     let report = match operation {
         Operation::Inspect => vcrd_core::inspect(&bytes, &ctx, &registry),
         Operation::Verify => vcrd_core::verify(&bytes, &ctx, &registry),
     };
-    emit(&view::envelope(&report, &ctx), format, verbosity)
+    emit(
+        &view::envelope(&report, &ctx, input.size),
+        format,
+        verbosity,
+    )
 }
 
 /// `--help` and `--version` are answered as clap renders them, and exit 0. Any other
@@ -88,13 +93,35 @@ fn usage_error(error: &clap::Error, raw: &[OsString]) -> ExitCode {
     )
 }
 
-/// Reads the file, or standard input when there is none. Never waits on a terminal
-/// for input that is not coming (REQUIREMENTS §6).
-fn read_input(file: Option<&std::path::PathBuf>) -> Result<Vec<u8>, (&'static str, String)> {
+struct Input {
+    /// At most one byte more than the size limit.
+    bytes: Vec<u8>,
+    /// The file's size, when the input is a regular file.
+    size: Option<u64>,
+}
+
+/// Reads the file, or standard input when there is none, stopping one byte past
+/// `limit`: that byte is enough for core to report the input too large, and a huge
+/// file or an endless pipe is never read whole (ARCHITECTURE §4). Never waits on a
+/// terminal for input that is not coming (REQUIREMENTS §6).
+fn read_input(
+    file: Option<&std::path::PathBuf>,
+    limit: usize,
+) -> Result<Input, (&'static str, String)> {
+    let cap = u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1);
     let mut bytes = Vec::new();
-    match file {
+    let size = match file {
         Some(path) => {
-            bytes = std::fs::read(path).map_err(|e| unreadable(path, &e))?;
+            let file = std::fs::File::open(path).map_err(|e| unreadable(path, &e))?;
+            let size = file
+                .metadata()
+                .ok()
+                .filter(|m| m.is_file())
+                .map(|m| m.len());
+            file.take(cap)
+                .read_to_end(&mut bytes)
+                .map_err(|e| unreadable(path, &e))?;
+            size
         }
         None => {
             let stdin = std::io::stdin();
@@ -106,11 +133,13 @@ fn read_input(file: Option<&std::path::PathBuf>) -> Result<Vec<u8>, (&'static st
             }
             stdin
                 .lock()
+                .take(cap)
                 .read_to_end(&mut bytes)
                 .map_err(|e| unreadable(Path::new("-"), &e))?;
+            None
         }
-    }
-    Ok(bytes)
+    };
+    Ok(Input { bytes, size })
 }
 
 fn unreadable(path: &Path, error: &std::io::Error) -> (&'static str, String) {

@@ -351,11 +351,15 @@ registry is empty (§2).
 
 REQUIREMENTS §6 requires a limit to run before the work it bounds. For a compact JWS:
 
-1. The size cap is checked against the encoded input before anything else.
+1. The size cap is checked against the encoded input before anything else, format
+   detection included. A frontend reading a file or a pipe stops one byte past the cap,
+   which is enough for core to report it, so that an input is never read whole to be
+   rejected; `vcrd-cli` reports a file's real size from its metadata.
 2. The segments are base64url-decoded. Decoding is linear and its output is bounded by the
    size cap, so it may precede the depth check.
 3. The depth cap is checked on each decoded JSON segment by a string-aware byte scan,
-   before any JSON is parsed.
+   before any JSON is parsed. Depth counts nested arrays and objects: `{}` is 1. The
+   input's reported depth is the greater of the header's and the payload's.
 4. The segments are parsed. `serde_json`'s own fixed nesting limit of 128 remains as a
    second guard.
 5. The claim-count cap is applied while flattening claims.
@@ -363,6 +367,18 @@ REQUIREMENTS §6 requires a limit to run before the work it bounds. For a compac
    checked against the number the parse returned, and the containment-depth cap against
    the current depth. Each contained input then goes through steps 1 to 5 in its own
    right, so its size and depth are bounded by the same caps.
+
+An input over a cap is attributed to the caller's policy, exit 5 (§6): the input is not
+malformed, since the standards set no such limits, and vcrd could process it; a setting
+the caller controls rejected it, and the finding names the limit, its value and what was
+found (decided 2026-09-29).
+
+Parsing reports what it can around a failure rather than stopping at the first
+(REQUIREMENTS §6). Each segment is decoded and parsed on its own, so a bad payload does
+not hide the header. Trailing ASCII whitespace after a compact JWS, which RFC 7515 §7.1
+does not provide for but a file usually ends with, is ignored and reported as an
+informational finding; leading whitespace is not. An input in JWS JSON serialization
+(RFC 7515 §7.2) is recognized and named, attributed to vcrd, until [F1].
 
 The prototype parsed both JSON segments before checking depth, so its configurable depth
 cap bounded nothing; it also reported the depth of the *encoded* token, which is always 0
@@ -850,6 +866,16 @@ Each becomes a test observed to fail and then to pass (REQUIREMENTS §11):
   runs it on macOS only. Includes choosing the Linux environment, a virtual machine or
   a container on the maintainer's machine; when the work happens is the maintainer's
   decision (DEVELOPMENT-PLAN.md, milestone 2).
+
+### [F] Format coverage
+
+- **[F1] Read JWS JSON serialization** (RFC 7515 §7.2), general and flattened: parse,
+  inspect and verify it as the compact form is, with a warning that VC-JOSE-COSE §3.1.1
+  does not recommend it. One proof result per signature; a finding for each header member
+  outside the signature's protection (the unprotected `header`), since the signature does
+  not cover it; and a conformance finding when protected and unprotected names are not
+  disjoint (§7.2.1). Until then it is rejected by name, attributed to vcrd
+  (DEVELOPMENT-PLAN.md, milestone 4).
 
 ### [P] Project and repository setup
 

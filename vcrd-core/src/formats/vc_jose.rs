@@ -6,13 +6,15 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use crate::context::Context;
+use crate::context::{Context, Limits};
 use crate::document::{
     ContextEntry, Document, DocumentKind, KeyHints, Leaf, LeafClass, ProofDescriptor,
     ProofMaterial, Timestamp,
 };
-use crate::finding::{Attribution, DateField, Finding, FindingDetail, JwsSegment};
-use crate::json::Json;
+use crate::finding::{
+    Attribution, DateField, Finding, FindingDetail, JwsJsonSyntax, JwsSegment, Severity,
+};
+use crate::json::{Json, Step, nesting_depth, path_string};
 use crate::registry::{CredentialFormat, Detection, FormatId, ProfileId};
 use crate::report::{FormatDetail, InspectOutput, ParseOutput, Phase, PhaseOutcome, Validity};
 
@@ -25,12 +27,12 @@ pub const ID: FormatId = FormatId("vc-jose");
 /// VCDM 2.0 as the JWT payload (VC-JOSE-COSE §3.1.1).
 pub const PROFILE: ProfileId = ProfileId("vc-jose-cose");
 
-/// What only this format has.
+/// What only this format has. A failed parse keeps whichever segments decoded.
 #[derive(Clone, Debug)]
 pub struct VcJoseDetail {
-    pub header: JoseHeader,
+    pub header: Option<JoseHeader>,
     /// The payload as parsed, every member kept.
-    pub payload: Json,
+    pub payload: Option<Json>,
 }
 
 /// The JOSE header members vcrd reads (RFC 7515 §4.1). Header values are metadata,
@@ -49,33 +51,41 @@ pub struct JoseHeader {
     pub parsed: Json,
 }
 
+impl JoseHeader {
+    fn new(parsed: Json) -> Self {
+        JoseHeader {
+            alg: string(parsed.get("alg")),
+            kid: string(parsed.get("kid")),
+            typ: string(parsed.get("typ")),
+            cty: string(parsed.get("cty")),
+            parsed,
+        }
+    }
+}
+
 impl CredentialFormat for VcJose {
     fn id(&self) -> FormatId {
         ID
     }
 
-    /// Base64url segments separated by dots look like a JOSE compact serialization;
-    /// parsing says what is wrong with one that is not a VC-JOSE-COSE credential.
+    /// Recognizes the shapes of both JWS serializations, so that parsing can say what
+    /// is wrong with an input rather than detection failing on it.
     fn detect(&self, bytes: &[u8]) -> Detection {
-        let jose_shaped = bytes.contains(&b'.')
-            && bytes
-                .iter()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
-        if jose_shaped {
+        if compact_shaped(bytes.trim_ascii_end()) || json_serialization_shaped(bytes) {
             Detection::Maybe
         } else {
             Detection::No
         }
     }
 
-    fn parse(&self, bytes: &[u8], _ctx: &Context) -> PhaseOutcome<ParseOutput> {
-        match parse_jws(bytes) {
-            Ok(output) => PhaseOutcome::from_findings(output, Vec::new()),
-            Err(finding) => PhaseOutcome::Failed {
-                output: ParseOutput::default(),
-                findings: vec![finding],
-            },
-        }
+    fn parse(&self, bytes: &[u8], ctx: &Context) -> PhaseOutcome<ParseOutput> {
+        let mut findings = Vec::new();
+        let output = if bytes.trim_ascii_start().first() == Some(&b'{') {
+            parse_json_serialization(bytes, ctx.limits(), &mut findings)
+        } else {
+            parse_compact(bytes, ctx.limits(), &mut findings)
+        };
+        PhaseOutcome::from_findings(output, findings)
     }
 
     fn inspect(&self, parsed: &ParseOutput, ctx: &Context) -> PhaseOutcome<InspectOutput> {
@@ -94,37 +104,147 @@ impl CredentialFormat for VcJose {
     }
 }
 
+/// Printable ASCII with a dot in it, not starting with `{`. Deliberately loose: a
+/// segment in standard base64, or with padding, is still recognized, so that parsing
+/// can name the offending byte instead of detection failing on it. The `{` keeps
+/// minified JSON, whose URLs have dots, from being taken for a compact JWS.
+fn compact_shaped(bytes: &[u8]) -> bool {
+    bytes.first() != Some(&b'{') && bytes.contains(&b'.') && bytes.iter().all(u8::is_ascii_graphic)
+}
+
+/// A JSON object that names `payload` and a signature. A byte search rather than a
+/// parse, because detection has no limits to parse under.
+fn json_serialization_shaped(bytes: &[u8]) -> bool {
+    let contains = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    bytes.trim_ascii_start().first() == Some(&b'{')
+        && contains(b"\"payload\"")
+        && contains(b"\"signature")
+}
+
 fn parse_error(detail: FindingDetail) -> Finding {
     Finding::error(Phase::Parse, Attribution::Input, detail)
 }
 
-fn parse_jws(bytes: &[u8]) -> Result<ParseOutput, Finding> {
-    let segments: Vec<&[u8]> = bytes.split(|b| *b == b'.').collect();
+/// A structural limit exceeded: the caller's policy, which the caller can change
+/// (ARCHITECTURE §4).
+fn limit_exceeded(detail: FindingDetail) -> Finding {
+    Finding::error(Phase::Parse, Attribution::Policy, detail)
+}
+
+fn parse_compact(bytes: &[u8], limits: &Limits, findings: &mut Vec<Finding>) -> ParseOutput {
+    // A file often ends with a newline, which RFC 7515 §7.1 does not provide for.
+    let trimmed = bytes.trim_ascii_end();
+    let trailing = bytes.len().saturating_sub(trimmed.len());
+    if trailing > 0 {
+        findings.push(Finding::new(
+            Phase::Parse,
+            Attribution::Input,
+            Severity::Info,
+            FindingDetail::TrailingWhitespace { bytes: trailing },
+        ));
+    }
+    let segments: Vec<&[u8]> = trimmed.split(|b| *b == b'.').collect();
     let &[header_b64, payload_b64, signature_b64] = segments.as_slice() else {
-        return Err(parse_error(FindingDetail::NotCompactJws {
+        findings.push(parse_error(FindingDetail::NotCompactJws {
             segments: segments.len(),
         }));
+        return ParseOutput::default();
     };
-    let header = decode_object(header_b64, JwsSegment::Header)?;
-    let payload = decode_object(payload_b64, JwsSegment::Payload)?;
-    let signature = decode(signature_b64, JwsSegment::Signature)?;
 
-    let header = JoseHeader {
-        alg: string(header.get("alg")),
-        kid: string(header.get("kid")),
-        typ: string(header.get("typ")),
-        cty: string(header.get("cty")),
-        parsed: header,
+    // Each segment is decoded on its own, so that one bad segment does not hide what
+    // the others hold (REQUIREMENTS §6, graduated results).
+    let mut depth = None;
+    let header = decode_object(header_b64, JwsSegment::Header, limits, &mut depth, findings)
+        .map(JoseHeader::new);
+    let payload = decode_object(
+        payload_b64,
+        JwsSegment::Payload,
+        limits,
+        &mut depth,
+        findings,
+    );
+    let signature = match decode(signature_b64, JwsSegment::Signature) {
+        Ok(signature) => Some(signature),
+        Err(finding) => {
+            findings.push(finding);
+            None
+        }
     };
-    // The signing input is the two encoded segments as they arrived (RFC 7515 §5.1).
-    let signing_input = [header_b64, b".", payload_b64].concat();
-    let document = document(&payload, &header, signing_input, signature);
-    Ok(ParseOutput {
-        document: Some(document),
+
+    let mut document = payload.as_ref().map(|p| document(p, limits, findings));
+    if let (Some(document), Some(header), Some(signature)) =
+        (document.as_mut(), header.as_ref(), signature)
+    {
+        document.proofs.push(ProofDescriptor {
+            suite: crate::suites::JWS,
+            algorithm: header.alg.clone(),
+            key_hints: KeyHints {
+                issuer: document.issuer.clone(),
+                kid: header.kid.clone(),
+            },
+            // The two encoded segments as they arrived (RFC 7515 §5.1).
+            material: ProofMaterial::Jws {
+                signing_input: [header_b64, b".", payload_b64].concat(),
+                signature,
+            },
+        });
+    }
+    ParseOutput {
+        document,
         detail: Some(FormatDetail::VcJose(VcJoseDetail { header, payload })),
-        depth: None,
+        depth,
         contained: Vec::new(),
-    })
+    }
+}
+
+/// RFC 7515 §7.2. Recognized and named, not yet read (ARCHITECTURE §10 [F1]).
+fn parse_json_serialization(
+    bytes: &[u8],
+    limits: &Limits,
+    findings: &mut Vec<Finding>,
+) -> ParseOutput {
+    let found = nesting_depth(bytes);
+    let output = ParseOutput {
+        depth: Some(found),
+        ..ParseOutput::default()
+    };
+    if found > limits.max_depth {
+        findings.push(limit_exceeded(FindingDetail::NestingTooDeep {
+            segment: None,
+            limit: limits.max_depth,
+            found,
+        }));
+        return output;
+    }
+    let json = match Json::parse(bytes) {
+        Ok(json) => json,
+        Err(e) => {
+            findings.push(parse_error(FindingDetail::JsonInvalid {
+                segment: None,
+                line: e.line(),
+                column: e.column(),
+            }));
+            return output;
+        }
+    };
+    let syntax = match (
+        json.get("payload"),
+        json.get("signatures"),
+        json.get("signature"),
+    ) {
+        (Some(_), Some(_), _) => Some(JwsJsonSyntax::General),
+        (Some(_), None, Some(_)) => Some(JwsJsonSyntax::Flattened),
+        _ => None,
+    };
+    findings.push(match syntax {
+        Some(syntax) => Finding::error(
+            Phase::Parse,
+            Attribution::Vcrd,
+            FindingDetail::JwsJsonSerialization { syntax },
+        ),
+        None => parse_error(FindingDetail::JsonNotJws),
+    });
+    output
 }
 
 /// Strict base64url: no padding, no characters outside the alphabet, and no
@@ -143,18 +263,45 @@ fn decode(segment: &[u8], which: JwsSegment) -> Result<Vec<u8>, Finding> {
     })
 }
 
-fn decode_object(segment: &[u8], which: JwsSegment) -> Result<Json, Finding> {
-    let json = Json::parse(&decode(segment, which)?).map_err(|e| {
-        parse_error(FindingDetail::JsonInvalid {
-            segment: which,
-            line: e.line(),
-            column: e.column(),
-        })
-    })?;
-    match json {
-        Json::Object(_) => Ok(json),
-        Json::Scalar(_) | Json::Array(_) => {
-            Err(parse_error(FindingDetail::JsonNotObject { segment: which }))
+/// Decodes a segment and parses it as a JSON object, checking its depth first
+/// (ARCHITECTURE §4). Records the depth, and a finding for anything wrong.
+fn decode_object(
+    segment: &[u8],
+    which: JwsSegment,
+    limits: &Limits,
+    depth: &mut Option<usize>,
+    findings: &mut Vec<Finding>,
+) -> Option<Json> {
+    let decoded = match decode(segment, which) {
+        Ok(decoded) => decoded,
+        Err(finding) => {
+            findings.push(finding);
+            return None;
+        }
+    };
+    let found = nesting_depth(&decoded);
+    *depth = Some(depth.map_or(found, |d| d.max(found)));
+    if found > limits.max_depth {
+        findings.push(limit_exceeded(FindingDetail::NestingTooDeep {
+            segment: Some(which),
+            limit: limits.max_depth,
+            found,
+        }));
+        return None;
+    }
+    match Json::parse(&decoded) {
+        Ok(json @ Json::Object(_)) => Some(json),
+        Ok(Json::Scalar(_) | Json::Array(_)) => {
+            findings.push(parse_error(FindingDetail::JsonNotObject { segment: which }));
+            None
+        }
+        Err(e) => {
+            findings.push(parse_error(FindingDetail::JsonInvalid {
+                segment: Some(which),
+                line: e.line(),
+                column: e.column(),
+            }));
+            None
         }
     }
 }
@@ -163,39 +310,29 @@ fn string(json: Option<&Json>) -> Option<String> {
     json.and_then(Json::as_str).map(str::to_owned)
 }
 
-fn document(
-    payload: &Json,
-    header: &JoseHeader,
-    signing_input: Vec<u8>,
-    signature: Vec<u8>,
-) -> Document {
+/// The payload's projection. Its proof is added by the caller, once the header and
+/// signature have decoded too.
+fn document(payload: &Json, limits: &Limits, findings: &mut Vec<Finding>) -> Document {
     // A URL, or an object whose `id` is one (VCDM 2.0 §4.7).
     let issuer = match payload.get("issuer") {
         Some(object @ Json::Object(_)) => string(object.get("id")),
         other => string(other),
     };
     let mut leaves = Vec::new();
-    flatten(payload, &mut Vec::new(), &mut leaves);
+    if !flatten(payload, &mut Vec::new(), &mut leaves, limits.max_claims) {
+        findings.push(limit_exceeded(FindingDetail::TooManyClaims {
+            limit: limits.max_claims,
+        }));
+    }
     Document {
         kind: DocumentKind::Credential,
         contexts: contexts(payload.get("@context")),
         types: strings(payload.get("type")),
-        issuer: issuer.clone(),
+        issuer,
         valid_from: timestamp(payload.get("validFrom")),
         valid_until: timestamp(payload.get("validUntil")),
         leaves,
-        proofs: vec![ProofDescriptor {
-            suite: crate::suites::JWS,
-            algorithm: header.alg.clone(),
-            key_hints: KeyHints {
-                issuer,
-                kid: header.kid.clone(),
-            },
-            material: ProofMaterial::Jws {
-                signing_input,
-                signature,
-            },
-        }],
+        proofs: Vec::new(),
     }
 }
 
@@ -247,15 +384,10 @@ const METADATA: &[&str] = &[
     "exp",
 ];
 
-enum Segment<'a> {
-    Name(&'a str),
-    Index(usize),
-}
-
-fn classify(path: &[Segment<'_>]) -> LeafClass {
+fn classify(path: &[Step<'_>]) -> LeafClass {
     let mut names = path.iter().filter_map(|s| match s {
-        Segment::Name(name) => Some(*name),
-        Segment::Index(_) => None,
+        Step::Name(name) => Some(*name),
+        Step::Index(_) => None,
     });
     match names.next() {
         Some(first) if METADATA.contains(&first) => LeafClass::Metadata,
@@ -267,71 +399,40 @@ fn classify(path: &[Segment<'_>]) -> LeafClass {
     }
 }
 
-fn flatten<'a>(json: &'a Json, path: &mut Vec<Segment<'a>>, leaves: &mut Vec<Leaf>) {
+/// Appends every scalar in `json` to `leaves`, stopping at `limit` leaves in all,
+/// the claim-count limit applied while flattening (ARCHITECTURE §4). Returns
+/// whether it finished.
+fn flatten<'a>(
+    json: &'a Json,
+    path: &mut Vec<Step<'a>>,
+    leaves: &mut Vec<Leaf>,
+    limit: usize,
+) -> bool {
     match json {
-        Json::Scalar(value) => leaves.push(Leaf {
-            path: path_string(path),
-            class: classify(path),
-            value: value.clone(),
+        Json::Scalar(value) => {
+            if leaves.len() >= limit {
+                return false;
+            }
+            leaves.push(Leaf {
+                path: path_string(path),
+                class: classify(path),
+                value: value.clone(),
+            });
+            true
+        }
+        Json::Array(items) => items.iter().enumerate().all(|(index, item)| {
+            path.push(Step::Index(index));
+            let finished = flatten(item, path, leaves, limit);
+            path.pop();
+            finished
         }),
-        Json::Array(items) => {
-            for (index, item) in items.iter().enumerate() {
-                path.push(Segment::Index(index));
-                flatten(item, path, leaves);
-                path.pop();
-            }
-        }
-        Json::Object(members) => {
-            for member in members {
-                path.push(Segment::Name(&member.name));
-                flatten(&member.value, path, leaves);
-                path.pop();
-            }
-        }
+        Json::Object(members) => members.iter().all(|member| {
+            path.push(Step::Name(&member.name));
+            let finished = flatten(&member.value, path, leaves, limit);
+            path.pop();
+            finished
+        }),
     }
-}
-
-/// `credentialSubject.degree.name`, `type[1]`; a name that is not a plain identifier
-/// is quoted as a JSON string: `a["b.c"]`.
-fn path_string(path: &[Segment<'_>]) -> String {
-    let mut out = String::new();
-    for segment in path {
-        match segment {
-            Segment::Index(index) => out.push_str(&format!("[{index}]")),
-            Segment::Name(name) if is_plain(name) => {
-                if !out.is_empty() {
-                    out.push('.');
-                }
-                out.push_str(name);
-            }
-            Segment::Name(name) => {
-                out.push('[');
-                push_json_string(&mut out, name);
-                out.push(']');
-            }
-        }
-    }
-    out
-}
-
-fn is_plain(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '@' | '$'))
-}
-
-fn push_json_string(out: &mut String, s: &str) {
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            c if c.is_control() => out.push_str(&format!("\\u{:04x}", u32::from(c))),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
 }
 
 /// The validity period against the clock and skew (VCDM 2.0 §4.9).
@@ -404,7 +505,7 @@ mod tests {
     fn leaves(payload: &str) -> Vec<(String, LeafClass)> {
         let json = Json::parse(payload.as_bytes()).unwrap();
         let mut leaves = Vec::new();
-        flatten(&json, &mut Vec::new(), &mut leaves);
+        assert!(flatten(&json, &mut Vec::new(), &mut leaves, usize::MAX));
         leaves.into_iter().map(|l| (l.path, l.class)).collect()
     }
 
@@ -440,6 +541,60 @@ mod tests {
     fn quotes_names_that_are_not_plain() {
         let got = leaves(r#"{"a.b": {"c\"d": 1}}"#);
         assert_eq!(got[0].0, r#"["a.b"]["c\"d"]"#);
+    }
+
+    use proptest::strategy::Strategy as _;
+
+    /// The base64url alphabet (RFC 4648 §5).
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+    proptest::proptest! {
+        #[test]
+        fn base64url_round_trips(bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..64)) {
+            let encoded = URL_SAFE_NO_PAD.encode(&bytes);
+            proptest::prop_assert_eq!(decode(encoded.as_bytes(), JwsSegment::Payload).ok(), Some(bytes));
+        }
+
+        /// A byte outside the alphabet, anywhere, is rejected; `=` is one.
+        #[test]
+        fn rejects_a_byte_outside_the_alphabet(
+            bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..64),
+            at in proptest::prelude::any::<proptest::sample::Index>(),
+            bad in proptest::prelude::any::<u8>().prop_filter("outside the alphabet", |b| !ALPHABET.contains(b)),
+        ) {
+            let mut encoded = URL_SAFE_NO_PAD.encode(&bytes).into_bytes();
+            let at = at.index(encoded.len() + 1);
+            encoded.insert(at, bad);
+            proptest::prop_assert!(decode(&encoded, JwsSegment::Payload).is_err());
+        }
+
+        /// Padding is rejected: base64url in JWS has none (RFC 7515 §2).
+        #[test]
+        fn rejects_padding(bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..64)) {
+            proptest::prop_assume!(bytes.len() % 3 != 0);
+            let padded = base64::engine::general_purpose::URL_SAFE.encode(&bytes);
+            proptest::prop_assert!(padded.ends_with('='));
+            proptest::prop_assert!(decode(padded.as_bytes(), JwsSegment::Payload).is_err());
+        }
+
+        /// When the input is not a multiple of three bytes, the last character carries
+        /// bits the decoder discards (four or two of them). A canonical encoding has
+        /// them zero; any other is rejected.
+        #[test]
+        fn rejects_non_zero_discarded_bits(
+            bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 1..64),
+            noise in 1u8..16,
+        ) {
+            proptest::prop_assume!(bytes.len() % 3 != 0);
+            let discarded = if bytes.len() % 3 == 1 { 4 } else { 2 };
+            let noise = noise & ((1 << discarded) - 1);
+            proptest::prop_assume!(noise != 0);
+            let mut encoded = URL_SAFE_NO_PAD.encode(&bytes).into_bytes();
+            let last = encoded.last_mut().unwrap();
+            let value = ALPHABET.iter().position(|a| a == last).unwrap() as u8;
+            *last = ALPHABET[usize::from(value | noise)];
+            proptest::prop_assert!(decode(&encoded, JwsSegment::Payload).is_err());
+        }
     }
 
     #[test]

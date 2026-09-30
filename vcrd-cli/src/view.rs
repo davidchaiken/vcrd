@@ -10,8 +10,9 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use vcrd_core::{
     Attribution, BlockReason, Check, Context, DateField, DidKeyProblem, Document, DocumentKind,
-    Finding, FindingDetail, FormatDetail, JwsSegment, KeySourceKind, LeafClass, NotEvaluatedReason,
-    Phase, PhaseOutcome, ProofOutcome, Rendered, Report, Revealed, Severity, Validity, render,
+    Finding, FindingDetail, FormatDetail, JwsJsonSyntax, JwsSegment, KeySourceKind, LeafClass,
+    NotEvaluatedReason, Phase, PhaseOutcome, ProofOutcome, Rendered, Report, Revealed, Severity,
+    Validity, render,
 };
 
 /// `0` until the schema is declared stable (REQUIREMENTS §9).
@@ -174,8 +175,9 @@ pub struct LeafView {
     pub value: Option<Value>,
 }
 
-/// The envelope for a report.
-pub fn envelope(report: &Report, ctx: &Context) -> Envelope {
+/// The envelope for a report. `size` is the input file's size, when the frontend
+/// knows it; it may exceed what core was given (ARCHITECTURE §4).
+pub fn envelope(report: &Report, ctx: &Context, size: Option<u64>) -> Envelope {
     let (exit_code, status) = crate::exit::exit_code(report);
     let rendered = report
         .parse
@@ -197,7 +199,7 @@ pub fn envelope(report: &Report, ctx: &Context) -> Envelope {
         exit_code,
         reveals,
         error: None,
-        result: result(report, rendered.as_ref()),
+        result: result(report, rendered.as_ref(), size),
     }
 }
 
@@ -235,7 +237,11 @@ pub fn fault(code: &'static str, message: String) -> Envelope {
     }
 }
 
-fn result(report: &Report, rendered: Option<&(&Document, Rendered)>) -> ResultView {
+fn result(
+    report: &Report,
+    rendered: Option<&(&Document, Rendered)>,
+    size: Option<u64>,
+) -> ResultView {
     let validity = report.inspect.output().map(|i| i.validity);
     ResultView {
         input: InputView {
@@ -249,7 +255,7 @@ fn result(report: &Report, rendered: Option<&(&Document, Rendered)>) -> ResultVi
             verify: phase(&report.verify),
         },
         proofs: proofs(report),
-        findings: report.findings().map(finding).collect(),
+        findings: report.findings().map(|f| finding(f, size)).collect(),
         not_evaluated: report
             .not_evaluated
             .iter()
@@ -260,7 +266,11 @@ fn result(report: &Report, rendered: Option<&(&Document, Rendered)>) -> ResultVi
             .collect(),
         // A contained credential's claims are rendered with its own result, once
         // presentations exist (DEVELOPMENT-PLAN.md, milestone 4).
-        contained: report.contained.iter().map(|c| result(c, None)).collect(),
+        contained: report
+            .contained
+            .iter()
+            .map(|c| result(c, None, None))
+            .collect(),
         format: format(report),
         credential: rendered.map(|(document, rendered)| credential(document, rendered, validity)),
     }
@@ -356,7 +366,7 @@ fn proofs(report: &Report) -> Vec<ProofView> {
     })
 }
 
-fn finding(f: &Finding) -> FindingView {
+fn finding(f: &Finding, size: Option<u64>) -> FindingView {
     FindingView {
         code: f.code,
         phase: phase_name(f.phase),
@@ -371,13 +381,46 @@ fn finding(f: &Finding) -> FindingView {
             Severity::Warning => "warning",
             Severity::Error => "error",
         },
-        detail: detail(&f.detail),
+        detail: detail(&f.detail, size),
     }
 }
 
-/// One arm per variant, tagged by `type` (ARCHITECTURE §6).
-fn detail(detail: &FindingDetail) -> Value {
+/// One arm per variant, tagged by `type` (ARCHITECTURE §6). A `segment` of `null`
+/// means the input as a whole.
+fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
     match detail {
+        // `read` is what core was given; `size` is the file's size, `null` when the
+        // input is not a file, which means more than `limit`.
+        FindingDetail::InputTooLarge { limit, found } => json!({
+            "type": "input_too_large",
+            "limit": limit,
+            "read": found,
+            "size": size,
+        }),
+        FindingDetail::NestingTooDeep {
+            segment,
+            limit,
+            found,
+        } => json!({
+            "type": "nesting_too_deep",
+            "segment": segment.map(jws_segment),
+            "limit": limit,
+            "found": found,
+        }),
+        FindingDetail::TooManyClaims { limit } => {
+            json!({"type": "too_many_claims", "limit": limit})
+        }
+        FindingDetail::TrailingWhitespace { bytes } => {
+            json!({"type": "trailing_whitespace", "bytes": bytes})
+        }
+        FindingDetail::JwsJsonSerialization { syntax } => json!({
+            "type": "jws_json_serialization",
+            "syntax": match syntax {
+                JwsJsonSyntax::General => "general",
+                JwsJsonSyntax::Flattened => "flattened",
+            },
+        }),
+        FindingDetail::JsonNotJws => json!({"type": "json_not_jws"}),
         FindingDetail::NoFormatMatched { registered } => json!({
             "type": "no_format_matched",
             "registered": registered.iter().map(|f| f.0).collect::<Vec<_>>(),
@@ -396,7 +439,7 @@ fn detail(detail: &FindingDetail) -> Value {
             column,
         } => json!({
             "type": "json_invalid",
-            "segment": jws_segment(*segment),
+            "segment": segment.map(jws_segment),
             "line": line,
             "column": column,
         }),
@@ -540,12 +583,11 @@ fn format(report: &Report) -> Option<FormatView> {
     let header = match report.parse.output().and_then(|p| p.detail.as_ref()) {
         None => Value::Null,
         #[cfg(feature = "vc-jose")]
-        Some(FormatDetail::VcJose(detail)) => json!({
-            "alg": detail.header.alg,
-            "kid": detail.header.kid,
-            "typ": detail.header.typ,
-            "cty": detail.header.cty,
-        }),
+        // `null` when the header did not decode.
+        Some(FormatDetail::VcJose(detail)) => detail.header.as_ref().map_or(
+            Value::Null,
+            |h| json!({"alg": h.alg, "kid": h.kid, "typ": h.typ, "cty": h.cty}),
+        ),
     };
     Some(FormatView {
         id,

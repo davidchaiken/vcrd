@@ -68,20 +68,45 @@ pub enum Severity {
 #[derive(Clone, Debug)]
 pub enum FindingDetail {
     // Parse.
+    /// The input is larger than the size limit, checked before anything else. `found`
+    /// is the number of bytes core was given; a frontend that stops reading at the
+    /// limit passes one more than it (ARCHITECTURE §4). Attributed to caller policy.
+    InputTooLarge { limit: usize, found: usize },
+    /// A JSON document nests deeper than the depth limit, found by a scan before any
+    /// JSON is parsed (ARCHITECTURE §4). `segment` is `None` when the input as a whole
+    /// is the JSON document. Attributed to caller policy.
+    NestingTooDeep {
+        segment: Option<JwsSegment>,
+        limit: usize,
+        found: usize,
+    },
+    /// More scalar values than the claim-count limit; flattening stopped at the limit.
+    /// Attributed to caller policy.
+    TooManyClaims { limit: usize },
+    /// Whitespace after the last segment, which a compact JWS does not have (RFC 7515
+    /// §7.1) but a file often ends with. Ignored, and reported for information.
+    TrailingWhitespace { bytes: usize },
     /// No registered format recognized the input. With an empty registry, this is
     /// attributed to vcrd; otherwise to the input (ARCHITECTURE §2).
     NoFormatMatched { registered: Vec<FormatId> },
     /// A compact JWS has three segments separated by dots (RFC 7515 §7.1).
     NotCompactJws { segments: usize },
+    /// A JWS in JSON serialization (RFC 7515 §7.2), which vcrd does not read yet
+    /// (ARCHITECTURE §10 [F1]). Attributed to vcrd.
+    JwsJsonSerialization { syntax: JwsJsonSyntax },
+    /// A JSON object that is not a JWS in JSON serialization: it lacks `payload`, or
+    /// both `signature` and `signatures`.
+    JsonNotJws,
     /// A segment is not strict base64url (RFC 7515 §2, §5.2). `offset` is the first
     /// offending byte within the segment, when the decoder names one.
     Base64urlInvalid {
         segment: JwsSegment,
         offset: Option<usize>,
     },
-    /// A decoded segment is not JSON.
+    /// A JSON document is not valid JSON. `segment` is `None` when the input as a
+    /// whole is the JSON document.
     JsonInvalid {
-        segment: JwsSegment,
+        segment: Option<JwsSegment>,
         line: usize,
         column: usize,
     },
@@ -145,8 +170,14 @@ impl FindingDetail {
     /// The stable code for this condition.
     pub fn code(&self) -> &'static str {
         match self {
+            FindingDetail::InputTooLarge { .. } => "parse.input_too_large",
+            FindingDetail::NestingTooDeep { .. } => "parse.nesting_too_deep",
+            FindingDetail::TooManyClaims { .. } => "parse.too_many_claims",
+            FindingDetail::TrailingWhitespace { .. } => "parse.trailing_whitespace",
             FindingDetail::NoFormatMatched { .. } => "parse.no_format_matched",
             FindingDetail::NotCompactJws { .. } => "parse.not_compact_jws",
+            FindingDetail::JwsJsonSerialization { .. } => "parse.jws_json_serialization",
+            FindingDetail::JsonNotJws => "parse.json_not_jws",
             FindingDetail::Base64urlInvalid { .. } => "parse.base64url_invalid",
             FindingDetail::JsonInvalid { .. } => "parse.json_invalid",
             FindingDetail::JsonNotObject { .. } => "parse.json_not_object",
@@ -175,6 +206,15 @@ pub enum JwsSegment {
     Header,
     Payload,
     Signature,
+}
+
+/// The two syntaxes of JWS JSON serialization (RFC 7515 §7.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JwsJsonSyntax {
+    /// A `signatures` array: one or more signatures (§7.2.1).
+    General,
+    /// `signature` beside `payload`: exactly one (§7.2.2).
+    Flattened,
 }
 
 /// The validity bounds of VCDM 2.0 §4.9.

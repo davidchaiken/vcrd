@@ -12,9 +12,27 @@ use crate::report::{
 };
 
 pub(crate) fn run(bytes: &[u8], ctx: &Context, registry: &Registry, last: Phase) -> Report {
-    let format = detect(registry, bytes);
+    // The size limit comes before anything else, detection included (ARCHITECTURE §4).
+    let limit = ctx.limits().max_bytes;
+    let too_large = bytes.len() > limit;
+    let format = if too_large {
+        None
+    } else {
+        detect(registry, bytes)
+    };
     let parse = match format {
         Some(format) => format.parse(bytes, ctx),
+        None if too_large => PhaseOutcome::Failed {
+            output: ParseOutput::default(),
+            findings: vec![Finding::error(
+                Phase::Parse,
+                Attribution::Policy,
+                FindingDetail::InputTooLarge {
+                    limit,
+                    found: bytes.len(),
+                },
+            )],
+        },
         None => {
             // An empty registry is vcrd's limit; a non-empty one that matched
             // nothing is the input's (ARCHITECTURE §2).

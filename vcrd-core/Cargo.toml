@@ -34,9 +34,15 @@ unsigned-varint.workspace = true
 workspace = true
 
 [dev-dependencies]
+proptest.workspace = true
 time = { workspace = true, features = ["macros"] }
 
 # Needs a format and a suite; skipped in the feature combinations without them.
 [[test]]
 name = "example"
 required-features = ["vc-jose", "jws"]
+
+# Needs a format.
+[[test]]
+name = "parse"
+required-features = ["vc-jose"]

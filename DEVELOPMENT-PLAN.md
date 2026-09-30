@@ -36,7 +36,7 @@ refer to ARCHITECTURE §10. Milestone sizes are unequal: milestones 1 and 5 are 
 | 1 Thin slice | `vcrd inspect`/`verify` on a VC-JOSE-COSE credential, Ed25519, `did:key` | [S3] [S4] [S5] [S6] [S7] [G1] |
 | 2 Keys and algorithms | five algorithms, caller keys, embedded-key precedence, allowlist, full provenance, Linux debugging | [S1] [S2] [C1] [C2] [C3] [Q4] [G2] |
 | 3 CLI contract | config file, env, designations, `formats`/`suites`, man pages, fuzz, coverage, limits corpus | [Q2] [T2] [T5] [T6] |
-| 4 Presentations | `vp+jwt` with enveloped credentials, challenge/domain | — |
+| 4 Presentations | `vp+jwt` with enveloped credentials, challenge/domain; JWS JSON serialization | [F1] |
 | 5 Data Integrity | `eddsa-rdfc-2022`, `eddsa-jcs-2022`, pinned contexts, canonicalization budget | [Q1] [T1] |
 | 6 Release 0.1.0 | community files, semver-checks, differential harness, distribution | [P1] [P2] [P5] [P6] [T4] [T7] [D1] [D2] |
 
@@ -89,7 +89,10 @@ every other `alg` exercise the by-name rejection path from day one.
   keep the lexically last value and are recorded, and inspect reports each as an error
   (exit 3) while verify still runs (known input 1). A malformed `crit` is an inspect
   error attributed to the input (exit 3); a well-formed `crit` naming an extension vcrd
-  does not implement fails verify, named and attributed to vcrd (exit 6).
+  does not implement fails verify, named and attributed to vcrd (exit 6). Decided
+  2026-09-29: an input over a structural limit is attributed to caller policy (exit 5);
+  trailing ASCII whitespace is ignored and reported for information; the CLI reads at
+  most one byte past the size limit (ARCHITECTURE §4).
 - *Inspect.* VCDM 2.0 §4.3 (`@context` first item; subsequent items URLs or objects),
   §4.5 (`type` present; `VerifiableCredential` per the table of objects that MUST have a
   type), §4.7 (issuer present; a URL or an object with an `id` URL), §4.8
@@ -128,7 +131,8 @@ every other `alg` exercise the by-name rejection path from day one.
   emitted as the one JSON document: parse arguments with `clap`'s fallible entry point,
   because `clap`'s own usage-error exit status collides with vcrd's code 2 (not verified
   that review; check `clap::Error::exit` at implementation).
-- *Fixtures, negative first* (REQUIREMENTS §11): happy Ed25519; tampered signature;
+- *Fixtures, negative first* (REQUIREMENTS §11), committed under `fixtures/` except the
+  over-size input, which its test generates: happy Ed25519; tampered signature;
   expired; not yet valid; `validUntil` before `validFrom`; `alg: none`; `alg: ES256`
   (unsupported by name in this slice); embedded `jwk` only (refused); `did:key` encoding
   the identity point (weak-key finding); small-order `R` under an ordinary key; the VCDM
@@ -212,7 +216,8 @@ RFC 7519 §4.1, §7.2; RFC 8037 §2–3; RFC 8032 as the crate implements it. Kn
    (REQUIREMENTS §15) should say so at the terminology check.
 9. VC-JOSE-COSE §3.1.1: JSON serialization is NOT RECOMMENDED and compact is MUST; an input
    in JSON serialization fails detection by name, attributed to vcrd, rather than as "no
-   format matched".
+   format matched". Decided 2026-09-29: reading it, with a warning that it is not
+   recommended, is ARCHITECTURE §10 [F1], in milestone 4.
 
 ### Milestone 2. Key material and the algorithm table
 
@@ -302,6 +307,8 @@ so for JOSE presentations the binding claims are a protocol convention; adopt Op
 `nonce` and `aud`, say so in the finding, and with no parameters supplied report
 `not_evaluated: replay binding` (REQUIREMENTS §10). Exit code and `status` aggregated over
 the tree (ARCHITECTURE §6). The text renderer for a tree: one block per contained report.
+[F1]: JWS JSON serialization read for credentials and presentations, with its warning and
+per-signature results.
 
 **Delivers.** `vcrd verify presentation.jwt` with expected-nonce and expected-audience
 flags (names implementation-time), reporting the holder proof and each contained
@@ -314,7 +321,7 @@ named by media type, attributed to vcrd); wrong nonce (holder proof fails replay
 no parameters (`not_evaluated`); nesting over the cap; a self-asserted credential without
 `holder`.
 
-**Closes.** No §10 tag; implements the containment design (ARCHITECTURE §3, §4, §6).
+**Closes.** [F1]; and implements the containment design (ARCHITECTURE §3, §4, §6).
 
 **Milestone review.** Texts: VCDM 2.0 §4.13 (each MUST for enveloped credentials and
 presentations), VC-JOSE-COSE
