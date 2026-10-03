@@ -1,7 +1,7 @@
 //! The result of an operation (ARCHITECTURE §3).
 
 use crate::document::{ContainedInput, Document};
-use crate::finding::{Finding, Severity};
+use crate::finding::{Finding, KeySourceKind, Severity};
 use crate::keys::KeyProvenance;
 use crate::registry::{FormatId, ProfileId, SuiteId};
 
@@ -94,22 +94,30 @@ impl<T> PhaseOutcome<T> {
 /// Why a requested phase did not run (REQUIREMENTS §4; §16 item 20).
 #[derive(Clone, Debug)]
 pub struct Blocked {
-    /// The phase whose findings prevented this one.
+    /// The phase whose findings prevented this one; they are that phase's own.
     pub by: Phase,
     pub reason: BlockReason,
-    /// The codes of the findings responsible.
-    pub findings: Vec<&'static str>,
 }
 
 /// The two reasons REQUIREMENTS §4 allows for one phase to stop the next.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BlockReason {
-    /// The materials the phase needs are not available: nothing was parsed, or no
-    /// key material can be found.
-    Impossible,
+    /// The materials the phase needs are not available; `missing` says which.
+    Impossible { missing: Missing },
     /// Running the phase could expose vcrd to an exploit, or would fetch material
     /// such as a key from a suspicious source.
     Dangerous,
+}
+
+/// What an impossible phase lacks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Missing {
+    /// Nothing was parsed, so there is nothing to work on.
+    Document,
+    /// No source of key material remains. `consulted` lists the sources considered:
+    /// in milestone 1, the issuer identifier alone, which an inspect finding showed
+    /// to be absent or malformed (ARCHITECTURE §4).
+    KeyMaterial { consulted: Vec<KeySourceKind> },
 }
 
 /// What is known about the input before and during parsing.
@@ -152,6 +160,13 @@ pub struct InspectOutput {
     pub profile: Option<ProfileId>,
     /// The validity period against the injected clock.
     pub validity: Validity,
+    /// Checks the format did not perform, for the runner to add to
+    /// [`Report::not_evaluated`].
+    pub not_evaluated: Vec<NotEvaluated>,
+    /// Whether an error finding showed that the input names no usable issuer
+    /// identifier. The runner decides whether that blocks verify, with the caller's
+    /// key material in hand (ARCHITECTURE §4).
+    pub no_issuer_identifier: bool,
 }
 
 /// Where the injected clock falls relative to a validity period.

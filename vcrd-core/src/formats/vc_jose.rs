@@ -3,20 +3,23 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 use crate::context::{Context, Limits};
 use crate::document::{
-    ContextEntry, Document, DocumentKind, KeyHints, Leaf, LeafClass, ProofDescriptor,
-    ProofMaterial, Timestamp,
+    ContextEntry, DateTimeProblem, Document, DocumentKind, KeyHints, Leaf, LeafClass,
+    ProofDescriptor, ProofMaterial, Timestamp,
 };
 use crate::finding::{
-    Attribution, DateField, Finding, FindingDetail, JwsJsonSyntax, JwsSegment, Severity,
+    Attribution, Base64urlProblem, CritProblem, Finding, FindingDetail, IssLocation, JwsJsonSyntax,
+    JwsSegment, Severity,
 };
 use crate::json::{Json, Step, nesting_depth, path_string};
 use crate::registry::{CredentialFormat, Detection, FormatId, ProfileId};
-use crate::report::{FormatDetail, InspectOutput, ParseOutput, Phase, PhaseOutcome, Validity};
+use crate::report::{
+    Check, FormatDetail, InspectOutput, NotEvaluated, NotEvaluatedReason, ParseOutput, Phase,
+    PhaseOutcome, Validity,
+};
+use crate::vcdm;
 
 /// The format.
 #[derive(Clone, Copy, Debug, Default)]
@@ -88,21 +91,277 @@ impl CredentialFormat for VcJose {
         PhaseOutcome::from_findings(output, findings)
     }
 
+    /// VCDM 2.0's checks on the payload, then VC-JOSE-COSE's on the header and the
+    /// JWT claims, and RFC 7515's and RFC 7519's unique member names on both.
     fn inspect(&self, parsed: &ParseOutput, ctx: &Context) -> PhaseOutcome<InspectOutput> {
         let mut findings = Vec::new();
-        let validity = match &parsed.document {
-            Some(document) => validity(document, ctx, &mut findings),
-            None => Validity::Unknown,
+        let mut output = InspectOutput {
+            profile: Some(PROFILE),
+            validity: Validity::Unknown,
+            ..InspectOutput::default()
         };
-        PhaseOutcome::from_findings(
-            InspectOutput {
-                profile: Some(PROFILE),
-                validity,
-            },
-            findings,
-        )
+        let Some(FormatDetail::VcJose(detail)) = &parsed.detail else {
+            return PhaseOutcome::from_findings(output, findings);
+        };
+        let header = detail.header.as_ref();
+        if let Some(header) = header {
+            duplicates(&header.parsed, JwsSegment::Header, &mut findings);
+            header_members(header, &mut findings);
+        }
+        if let (Some(payload), Some(document)) = (&detail.payload, &parsed.document) {
+            duplicates(payload, JwsSegment::Payload, &mut findings);
+            inspect_payload(payload, document, header, ctx, &mut output, &mut findings);
+        }
+        PhaseOutcome::from_findings(output, findings)
     }
 }
+
+fn inspect_error(detail: FindingDetail) -> Finding {
+    Finding::error(Phase::Inspect, Attribution::Input, detail)
+}
+
+fn inspect_warning(detail: FindingDetail) -> Finding {
+    Finding::new(
+        Phase::Inspect,
+        Attribution::Input,
+        Severity::Warning,
+        detail,
+    )
+}
+
+/// Repeated member names, which the parse resolved by keeping the last (RFC 7515 §4;
+/// RFC 7519 §4).
+fn duplicates(json: &Json, segment: JwsSegment, findings: &mut Vec<Finding>) {
+    for duplicate in json.duplicate_names() {
+        findings.push(inspect_error(FindingDetail::DuplicateName {
+            segment: Some(segment),
+            path: duplicate.path,
+            count: duplicate.count,
+        }));
+    }
+}
+
+/// `typ` and `cty` (VC-JOSE-COSE §3.1.1), and the form of `crit` (RFC 7515 §4.1.11).
+fn header_members(header: &JoseHeader, findings: &mut Vec<Finding>) {
+    if header.typ.as_deref().map(media_type).as_deref() != Some("application/vc+jwt") {
+        findings.push(inspect_warning(FindingDetail::TypUnexpected {
+            found: header.typ.clone(),
+        }));
+    }
+    if let Some(cty) = &header.cty
+        && media_type(cty) != "application/vc"
+    {
+        findings.push(inspect_warning(FindingDetail::CtyUnexpected {
+            found: cty.clone(),
+        }));
+    }
+    if let Some(crit) = header.parsed.get("crit") {
+        check_crit(crit, &header.parsed, findings);
+    }
+}
+
+/// RFC 7515 §4.1.9: media types are case-insensitive, and `application/` is implied
+/// before a value with no `/`.
+fn media_type(value: &str) -> String {
+    let value = value.to_ascii_lowercase();
+    if value.contains('/') {
+        value
+    } else {
+        format!("application/{value}")
+    }
+}
+
+/// The Header Parameters RFC 7515 §4.1 defines for JWS, which `crit` MUST NOT list.
+/// RFC 7518 defines none for JWS.
+const REGISTERED_HEADER_PARAMETERS: &[&str] = &[
+    "alg", "jku", "jwk", "kid", "x5u", "x5c", "x5t", "x5t#S256", "typ", "cty", "crit",
+];
+
+/// RFC 7515 §4.1.11's rules for the value of `crit`. Whether vcrd implements the
+/// extensions a well-formed `crit` lists is verify's question (DEVELOPMENT-PLAN.md,
+/// milestone 1).
+fn check_crit(crit: &Json, header: &Json, findings: &mut Vec<Finding>) {
+    let mut invalid =
+        |problem| findings.push(inspect_error(FindingDetail::CritInvalid { problem }));
+    let Json::Array(items) = crit else {
+        invalid(CritProblem::NotArray);
+        return;
+    };
+    if items.is_empty() {
+        invalid(CritProblem::Empty);
+    }
+    let mut seen: Vec<&str> = Vec::new();
+    for (index, item) in items.iter().enumerate() {
+        let Some(name) = item.as_str() else {
+            invalid(CritProblem::NotString { index });
+            continue;
+        };
+        let owned = || name.to_owned();
+        if seen.contains(&name) {
+            invalid(CritProblem::Duplicate { name: owned() });
+            continue;
+        }
+        seen.push(name);
+        if REGISTERED_HEADER_PARAMETERS.contains(&name) {
+            invalid(CritProblem::Registered { name: owned() });
+        } else if header.get(name).is_none() {
+            invalid(CritProblem::NotInHeader { name: owned() });
+        }
+    }
+}
+
+/// The payload: VCDM 1.1's encoding is named and goes no further; anything else is
+/// checked as VCDM 2.0, then against the header and JWT claims.
+fn inspect_payload(
+    payload: &Json,
+    document: &Document,
+    header: Option<&JoseHeader>,
+    ctx: &Context,
+    output: &mut InspectOutput,
+    findings: &mut Vec<Finding>,
+) {
+    let v1_claim = ["vc", "vp"].into_iter().find(|c| payload.get(c).is_some());
+    if let Some(claim) = v1_claim
+        && payload.get("@context").is_none()
+    {
+        // VCDM 2.0's checks would each fail by construction, attributed to the input,
+        // when the cause is that vcrd does not read this encoding (ARCHITECTURE §10
+        // [F2]). Its issuer is in `iss`, which key resolution does not read.
+        let finding = Finding::error(
+            Phase::Inspect,
+            Attribution::Vcrd,
+            FindingDetail::VcdmV1JwtEncoding { claim },
+        );
+        output.profile = None;
+        output.no_issuer_identifier = true;
+        findings.push(finding);
+        return;
+    }
+    if let Some(claim) = v1_claim {
+        findings.push(inspect_error(FindingDetail::JwtClaimForbidden { claim }));
+    }
+    let inspected = vcdm::inspect(payload, document, ctx, findings);
+    output.validity = inspected.validity;
+    // The JOSE format reads `@context` values without JSON-LD processing.
+    output.not_evaluated.push(NotEvaluated {
+        what: Check::ContextResolution,
+        why: NotEvaluatedReason::NotImplemented,
+    });
+    output.not_evaluated.extend(inspected.not_evaluated);
+    output.no_issuer_identifier = inspected.no_issuer_identifier;
+
+    let issuer = document
+        .issuer
+        .as_deref()
+        .filter(|_| !output.no_issuer_identifier);
+    jwt_claims(payload, header, issuer, findings);
+    if let (Some(header), Some(issuer)) = (header, issuer) {
+        check_kid(header, payload, issuer, findings);
+    }
+}
+
+/// The JWT claims that duplicate credential properties: `iss` MUST match the issuer
+/// (VC-JOSE-COSE §4.1.2); `jti` and `id`, and `sub` and `credentialSubject.id`, SHOULD
+/// NOT conflict (§3.1.3). Compared exactly, as RFC 7519 §2 compares StringOrURI
+/// values. `issuer` is `None` when inspect found it unusable.
+fn jwt_claims(
+    payload: &Json,
+    header: Option<&JoseHeader>,
+    issuer: Option<&str>,
+    findings: &mut Vec<Finding>,
+) {
+    if let Some(issuer) = issuer {
+        let header_iss = header.and_then(|h| h.parsed.get("iss"));
+        for (location, iss) in [
+            (IssLocation::Payload, payload.get("iss")),
+            (IssLocation::Header, header_iss),
+        ] {
+            if let Some(iss) = iss.map(Json::as_str)
+                && iss != Some(issuer)
+            {
+                findings.push(inspect_error(FindingDetail::IssMismatch {
+                    location,
+                    iss: iss.map(str::to_owned),
+                    issuer: issuer.to_owned(),
+                }));
+            }
+        }
+    }
+    if let (Some(jti), Some(id)) = (payload.get("jti"), payload.get("id"))
+        && jti != id
+    {
+        findings.push(inspect_warning(FindingDetail::JwtClaimConflict {
+            claim: "jti",
+            property: "id",
+        }));
+    }
+    if let Some(sub) = payload.get("sub") {
+        let ids: Vec<&Json> = match payload.get("credentialSubject") {
+            Some(Json::Array(subjects)) => subjects.iter().filter_map(|s| s.get("id")).collect(),
+            Some(subject) => subject.get("id").into_iter().collect(),
+            None => Vec::new(),
+        };
+        if !ids.is_empty() && !ids.contains(&sub) {
+            findings.push(inspect_warning(FindingDetail::JwtClaimConflict {
+                claim: "sub",
+                property: "credentialSubject.id",
+            }));
+        }
+    }
+}
+
+/// VC-JOSE-COSE §4.1.1 and §4.2: when `kid` must be present and absolute, and whether
+/// it names one of the issuer's keys. A conformance check: it never changes which
+/// key verify uses (DEVELOPMENT-PLAN.md, milestone 1, known input 4).
+fn check_kid(header: &JoseHeader, payload: &Json, issuer: &str, findings: &mut Vec<Finding>) {
+    let iss_present = payload.get("iss").is_some() || header.parsed.get("iss").is_some();
+    let did = issuer.starts_with("did:");
+    let Some(kid) = header.kid.as_deref() else {
+        // A DID issuer's key is a DID URL (§4.1.1); a URL issuer with `iss` absent
+        // needs an absolute `kid` (§4.2).
+        if did || !iss_present {
+            findings.push(inspect_error(FindingDetail::KidMissing));
+        }
+        return;
+    };
+    if !iss_present && url::Url::parse(kid).is_err() {
+        findings.push(inspect_error(FindingDetail::KidNotAbsolute {
+            kid: kid.to_owned(),
+        }));
+    }
+    if did {
+        // A relative DID URL is resolved against the DID (DID Core §3.2.2).
+        let resolved = match kid.strip_prefix('#') {
+            Some(_) => format!("{issuer}{kid}"),
+            None => kid.to_owned(),
+        };
+        // `did:key` names its one key by the method-specific identifier.
+        let expected = issuer
+            .strip_prefix("did:key:")
+            .map(|identifier| format!("{issuer}#{identifier}"));
+        let names_issuers_key = match &expected {
+            Some(expected) => resolved == *expected,
+            None => resolved
+                .strip_prefix(issuer)
+                .is_some_and(|rest| rest.starts_with('#')),
+        };
+        if !names_issuers_key {
+            findings.push(inspect_error(FindingDetail::KidForeign {
+                kid: kid.to_owned(),
+                issuer: issuer.to_owned(),
+                expected,
+            }));
+        }
+    } else if !kid.contains(JWK_THUMBPRINT_URI) {
+        findings.push(inspect_warning(FindingDetail::KidWithoutThumbprint {
+            kid: kid.to_owned(),
+        }));
+    }
+}
+
+/// The prefix of a JWK Thumbprint URI (RFC 9278), whose value is an RFC 7638
+/// thumbprint.
+const JWK_THUMBPRINT_URI: &str = "urn:ietf:params:oauth:jwk-thumbprint:";
 
 /// Printable ASCII with a dot in it, not starting with `{`. Deliberately loose: a
 /// segment in standard base64, or with padding, is still recognized, so that parsing
@@ -251,14 +510,15 @@ fn parse_json_serialization(
 /// non-zero trailing bits (RFC 7515 §2).
 fn decode(segment: &[u8], which: JwsSegment) -> Result<Vec<u8>, Finding> {
     URL_SAFE_NO_PAD.decode(segment).map_err(|e| {
-        let offset = match e {
-            base64::DecodeError::InvalidByte(offset, _)
-            | base64::DecodeError::InvalidLastSymbol { offset, .. } => Some(offset),
-            _ => None,
+        let problem = match e {
+            base64::DecodeError::InvalidByte(..) => Base64urlProblem::InvalidSymbol,
+            base64::DecodeError::InvalidLastSymbol { .. } => Base64urlProblem::NonzeroTrailingBits,
+            base64::DecodeError::InvalidLength(_) => Base64urlProblem::InvalidLength,
+            base64::DecodeError::InvalidPadding => Base64urlProblem::Padding,
         };
         parse_error(FindingDetail::Base64urlInvalid {
             segment: which,
-            offset,
+            problem,
         })
     })
 }
@@ -357,10 +617,19 @@ fn strings(json: Option<&Json>) -> Vec<String> {
     }
 }
 
+/// A validity bound, read as an XML Schema `dateTimeStamp` (VCDM 2.0 §4.9).
 fn timestamp(json: Option<&Json>) -> Option<Timestamp> {
-    let lexical = string(json)?;
-    let parsed = OffsetDateTime::parse(&lexical, &Rfc3339).ok();
-    Some(Timestamp { lexical, parsed })
+    let json = json?;
+    Some(match json.as_str() {
+        Some(lexical) => Timestamp {
+            lexical: Some(lexical.to_owned()),
+            parsed: vcdm::date_time_stamp(lexical),
+        },
+        None => Timestamp {
+            lexical: None,
+            parsed: Err(DateTimeProblem::NotString),
+        },
+    })
 }
 
 /// The payload members whose values are metadata, shown in full (REQUIREMENTS §8).
@@ -433,69 +702,6 @@ fn flatten<'a>(
             finished
         }),
     }
-}
-
-/// The validity period against the clock and skew (VCDM 2.0 §4.9).
-fn validity(document: &Document, ctx: &Context, findings: &mut Vec<Finding>) -> Validity {
-    let now = ctx.now();
-    let skew_seconds = ctx.clock_skew().as_secs();
-    let skew = time::Duration::try_from(ctx.clock_skew()).unwrap_or(time::Duration::MAX);
-    let mut bound = |timestamp: &Option<Timestamp>, field| match timestamp {
-        None => Ok(None),
-        Some(Timestamp {
-            parsed: Some(t), ..
-        }) => Ok(Some(*t)),
-        Some(Timestamp { parsed: None, .. }) => {
-            findings.push(Finding::error(
-                Phase::Inspect,
-                Attribution::Input,
-                FindingDetail::DateTimeInvalid { field },
-            ));
-            Err(())
-        }
-    };
-    let from = bound(&document.valid_from, DateField::ValidFrom);
-    let until = bound(&document.valid_until, DateField::ValidUntil);
-    let (Ok(from), Ok(until)) = (from, until) else {
-        return Validity::Unknown;
-    };
-    if from.is_none() && until.is_none() {
-        return Validity::Unbounded;
-    }
-    // Checked arithmetic: a skew past the end of time makes every bound current.
-    if let Some(valid_from) = from
-        && now
-            .checked_add(skew)
-            .is_some_and(|latest| valid_from > latest)
-    {
-        findings.push(Finding::error(
-            Phase::Inspect,
-            Attribution::Input,
-            FindingDetail::NotYetValid {
-                valid_from,
-                now,
-                skew_seconds,
-            },
-        ));
-        return Validity::NotYetValid;
-    }
-    if let Some(valid_until) = until
-        && now
-            .checked_sub(skew)
-            .is_some_and(|earliest| valid_until < earliest)
-    {
-        findings.push(Finding::error(
-            Phase::Inspect,
-            Attribution::Input,
-            FindingDetail::Expired {
-                valid_until,
-                now,
-                skew_seconds,
-            },
-        ));
-        return Validity::Expired;
-    }
-    Validity::Current
 }
 
 #[cfg(test)]
@@ -595,6 +801,23 @@ mod tests {
             *last = ALPHABET[usize::from(value | noise)];
             proptest::prop_assert!(decode(&encoded, JwsSegment::Payload).is_err());
         }
+    }
+
+    /// Each decoding failure names its problem.
+    #[test]
+    fn names_each_decoding_problem() {
+        let problem = |bytes: &[u8]| match decode(bytes, JwsSegment::Payload) {
+            Err(Finding {
+                detail: FindingDetail::Base64urlInvalid { problem, .. },
+                ..
+            }) => problem,
+            other => panic!("{other:?}"),
+        };
+        // `t` is in the alphabet, but leaves the bits 01 after two whole bytes.
+        assert_eq!(problem(b"not"), Base64urlProblem::NonzeroTrailingBits);
+        assert_eq!(problem(b"a"), Base64urlProblem::InvalidLength);
+        assert_eq!(problem(b"a+b"), Base64urlProblem::InvalidSymbol);
+        assert_eq!(problem(b"YQ=="), Base64urlProblem::Padding);
     }
 
     #[test]

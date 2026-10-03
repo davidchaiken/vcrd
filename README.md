@@ -12,6 +12,7 @@ cargo run -p vcrd-cli -- verify examples/ed25519.jwt --now 2026-10-01T00:00:00Z
 ```
 
 The result is one JSON document on standard output, with every claim value masked.
+[`docs/output.md`](docs/output.md) explains how to read it.
 
 The example is valid from 2026-01-01 to 2031-01-01. The command passes `--now` so that
 it gives the same answer on any date; without it, vcrd uses the system clock, and from

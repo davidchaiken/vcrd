@@ -36,3 +36,8 @@ it says otherwise.
 |---|---|---|---|---|
 | `deep-nesting.jwt` | The payload nests 42 levels deep, over the default depth limit of 32 and under `serde_json`'s own 128. | `parse.nesting_too_deep` | policy | 5 |
 | `jws-json-flattened.json` | The example in flattened JWS JSON serialization (RFC 7515 §7.2.2), which vcrd recognizes but does not read yet (ARCHITECTURE §10 [F1]). | `parse.jws_json_serialization` | vcrd | 6 |
+| `validity-reversed.jwt` | `validUntil` (2026-01-01) is earlier than `validFrom` (2031-01-01), which VCDM 2.0 §4.9 forbids. Correctly signed, so verify passes. Against a clock, a second finding says the credential is not yet valid or has expired. | `inspect.valid_until_before_valid_from` | input | 3 |
+| `issuer-missing.jwt` | No `issuer` (VCDM 2.0 §4.7). With no issuer identifier there is no key, so verify is blocked: `blocked_by` names `key_material` as missing. | `inspect.issuer_missing` | input | 3 |
+| `iss-mismatch.jwt` | `iss` is `did:example:someone-else`, not the issuer, which VC-JOSE-COSE §4.1.2 forbids. Signed by the issuer's key, so verify passes. | `inspect.iss_mismatch` | input | 3 |
+| `kid-missing.jwt` | No `kid`, which VC-JOSE-COSE §4.1.1 requires when the issuer is a DID. Verify still passes: `kid` never chooses the key. | `inspect.kid_missing` | input | 3 |
+| `vcdm-1.1-encoding.jwt` | The example's credential in VCDM 1.1's JWT encoding, inside a `vc` claim, which vcrd does not read yet (ARCHITECTURE §10 [F2]). Verify is blocked, since the issuer is in `iss`. | `inspect.vcdm_1_1_jwt_encoding` | vcrd | 6 |

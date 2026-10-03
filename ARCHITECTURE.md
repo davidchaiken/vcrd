@@ -47,7 +47,7 @@ flowchart TB
     core --> sig["signature primitives<br/>ed25519-dalek · p256 · p521 · rsa · hmac"]
     core --> hash["sha2"]
     core --> enc["encoding<br/>base64 · bs58 · unsigned-varint · serde_json"]
-    core --> time["time"]
+    core --> vals["values<br/>url · regex · time"]
 ```
 
 REQUIREMENTS specifies the frontend and tooling dependencies; this document specifies the
@@ -63,7 +63,9 @@ ones it does not. `vcrd-core` depends on:
 | JWS encoding | `base64` | base64url segments of the compact serialization |
 | `did:key` | `bs58`, `unsigned-varint` | base58btc, the multibase encoding `did:key` identifiers use (prefix `z`), and the multicodec key-type prefix |
 | JSON | `serde_json` | parsing untrusted input |
-| Time | `time` | RFC 3339 timestamps in the validity period |
+| URLs | `url` | URLs as VCDM 2.0 §2 defines them, by the WHATWG URL Standard (§4) |
+| Lexical grammars | `regex` | XML Schema's `dateTimeStamp` grammar, transcribed from the standard (§4) |
+| Time | `time` | the instants of the validity period, and the clock |
 
 That set verified all five algorithms end to end in the prototype (finding 5), and its
 crates perform all of the hashing and arithmetic; vcrd's own code ends at the call into
@@ -73,6 +75,13 @@ Milestone 1 changed two things from the prototype's set. It took the newer RustC
 generation, `ed25519-dalek` 3 with `sha2` 0.11, and it replaced `multibase` with `bs58`:
 `did:key` needs base58btc alone, and `multibase` 0.9.3 brought eight more crates, for
 encodings vcrd does not read. `base64` is built without its default `simd-unsafe` feature.
+
+Milestone 1 also added `url` and `regex`, rather than writing either check by hand
+(decided 2026-10-01): VCDM 2.0 defines a URL by the WHATWG URL Standard, which `url`
+implements, and the network milestones need a URL parser regardless. `url` brings 28
+crates, most of them the Unicode tables `idna` uses for internationalized domain names;
+their licences are MIT, Apache-2.0 or Unicode-3.0. `regex` was already in the lockfile, as
+a test dependency, and is built without its Unicode tables, since the patterns are ASCII.
 
 **No JOSE library.** REQUIREMENTS §10 has vcrd implement the JWS layer itself, so the
 graph contains no JOSE crate: vcrd's own code does algorithm policy, by-name rejection, and
@@ -105,8 +114,7 @@ lockfile). RSA padding checks are also constant-time
 - **Attribution depends on the registry at runtime, not on Cargo features.** When no format
   matches an input, an empty registry attributes the failure to vcrd or to the environment,
   and a non-empty registry attributes it to the input. The rule holds wherever the formats
-  came from. The prototype got this wrong: built with no formats, it blamed the input
-  ("Answered as a side effect" in the findings).
+  came from (`vcrd-core/tests/example.rs`, `an_empty_registry_is_vcrds_limit`).
 
 **Supported feature builds.** REQUIREMENTS §13 has CI build and test each supported
 combination of features. Four rules keep that set linear in the number of features
@@ -162,9 +170,18 @@ pub enum PhaseOutcome<T> {
 
 /// REQUIREMENTS §16 item 20: the structure that reports a block and its reason.
 pub struct Blocked {
-    pub by: Phase,
-    pub reason: BlockReason,          // Impossible | Dangerous (REQUIREMENTS §4)
-    pub findings: Vec<&'static str>,  // codes of the findings responsible
+    pub by: Phase,                    // its findings say what was wrong
+    pub reason: BlockReason,
+}
+
+pub enum BlockReason {                // REQUIREMENTS §4
+    Impossible { missing: Missing },
+    Dangerous,
+}
+
+pub enum Missing {
+    Document,                                         // nothing was parsed
+    KeyMaterial { consulted: Vec<KeySourceKind> },    // no key source remains
 }
 
 pub struct Finding {
@@ -229,8 +246,10 @@ pub enum Severity { Info, Warning, Error }
   and `contained: Vec<ContainedInput>`: for each credential found inside, its bytes, the
   media type from the `data:` URL as a detection hint, and its location, such as
   `verifiableCredential[1]`. The format hands these back; it does not process them (§4).
-- **`InspectOutput`** — the profile and the validity-period status: current, expired, not
-  yet valid, unbounded, or unknown.
+- **`InspectOutput`** — the profile; the validity-period status: current, expired, not
+  yet valid, unbounded, or unknown; the checks the format did not perform, which the
+  runner adds to `not_evaluated`; and whether a finding showed that the input names no
+  usable issuer identifier, which the runner's blocking rule reads (§4).
 - **`VerifyOutput`** — one `ProofResult` per proof: suite, declared algorithm, outcome, and
   key provenance (§8). `ProofOutcome` is `Verified { disclosed }`, `Failed`, or
   `NotAttempted`; `disclosed` exists so that selective disclosure is not designed out,
@@ -329,8 +348,16 @@ In the prototype the corresponding path was traced to the arithmetic: for ES256 
   inspect concluded.
 - Whether a finding blocks is decided in the runner, with the `Context` in hand, not
   fixed per finding code: a credential without a usable issuer identifier is unverifiable
-  only if the caller also supplied no key material. The result structure for a block is
-  REQUIREMENTS §16 item 20.
+  only if the caller also supplied no key material. The format reports whether its
+  findings leave no usable issuer identifier (`InspectOutput`); the runner blocks verify
+  as `Impossible { missing: KeyMaterial { consulted } }` when no other key source remains
+  (`vcrd-core/src/runner.rs`, `blocked_by_inspect`). Milestone 1 has no other source, so
+  those findings always block; milestone 2's caller-supplied keys are consulted at that
+  point. The findings are a missing `issuer`, one that is neither a URL nor an object
+  whose `id` is a URL, and VCDM 1.1's JWT encoding (§10 [F2]). A well-formed issuer vcrd
+  cannot resolve, such as an `https:` URL, does not block: verify runs and fails,
+  attributed to vcrd. `docs/output.md` documents the block's keys and values for readers
+  of the output.
 - **The runner dispatches contained credentials, and recurses.** For each
   `ContainedInput` a parse produced, the runner applies the containment caps, runs format
   detection over its bytes with the media-type hint from the `data:` URL, and runs the
@@ -384,6 +411,38 @@ The prototype parsed both JSON segments before checking depth, so its configurab
 cap bounded nothing; it also reported the depth of the *encoded* token, which is always 0
 ("Answered as a side effect").
 
+### Values the standards constrain
+
+- **URLs.** VCDM 2.0 §2 defines a URL by the WHATWG URL Standard, and `url` implements
+  it. A value that does not parse is an error (`inspect.url_invalid`, or
+  `inspect.issuer_invalid` for the issuer). A value that parses only after the parser
+  corrected it, which the URL Standard calls a validation error and asks conformance
+  checkers to report, is a warning naming each correction (`inspect.url_nonconforming`).
+  Comparisons, such as `iss` against `issuer`, use the strings as written, never the
+  parsed form: the parser normalizes case and path segments, and RFC 7519 §2 compares
+  StringOrURI values without canonicalization.
+- **Date-times.** VCDM 2.0 §4.9 requires XML Schema 1.1 `dateTimeStamp` values. vcrd
+  matches the lexical form against the standard's own grammar (XML Schema 1.1 Part 2
+  §3.4.28, fragment rules [56]–[63]), transcribed as a regular expression, then builds the
+  instant with `time` (`vcrd-core/src/vcdm.rs`, `date_time_stamp`). Where the two
+  standards differ, XML Schema is followed (decided 2026-10-01), each difference with a
+  test:
+
+  | Lexical form | RFC 3339 | XML Schema | vcrd |
+  |---|---|---|---|
+  | lowercase `t` or `z` | allowed (§5.6) | rejected | `inspect.date_time_invalid`, `valid_rfc3339: true` |
+  | a space in place of `T` | allowed by a note in §5.6, not the grammar | rejected | the same |
+  | second 60 (a leap second) | allowed | rejected | the same |
+  | offset beyond ±14:00 | allowed | rejected | the same |
+  | `24:00:00`, the end of a day | rejected | allowed | read as 00:00:00 of the next day |
+  | negative years | rejected | allowed | read, down to -9999 |
+  | years beyond 9999 | rejected | allowed | `inspect.date_time_unrepresentable`, attributed to vcrd |
+  | more than nine fractional digits | allowed | allowed | truncated to nanoseconds; the value as written is kept |
+
+  `valid_rfc3339` in the finding marks a value `time`'s RFC 3339 parser accepts, which
+  follows §5.6's notes as well as its grammar. If such values turn up in credentials in
+  use, the rule is to be revisited in favour of RFC 3339.
+
 ### Where injected items are consulted
 
 | `Context` item | Consulted by |
@@ -411,7 +470,7 @@ a resolved key; a format that resolved keys would be deciding what to trust (fin
 7. Render it as `json`, `text`, or `plain`, and print the stderr warning for any reveal.
 8. Compute the exit code (§6) and exit.
 
-A fault in steps 1–3 skips to step 6 with the error slot filled, so the output is still
+An error in steps 1–3 skips to step 6 with the error slot filled, so the output is still
 one JSON document.
 
 ### The boundary between the crates
@@ -488,7 +547,9 @@ construction (finding 4).
 
 1. Add a Cargo feature in `vcrd-core` and a `FormatDetail` variant.
 2. Implement `CredentialFormat` and register it.
-3. Define which fields are claims, and the path notation for them.
+3. Define which fields are claims, and the path notation for them. A format whose payload
+   is a VCDM 2.0 credential calls the shared checks in `vcrd-core/src/vcdm.rs` from its
+   `inspect`, and joins the `cfg` that compiles that module.
 4. Add the canonical example and the required negative fixtures (REQUIREMENTS §11).
 5. Review against the format's normative text, with each gap a test seen to fail and then
    to pass (REQUIREMENTS §11).
@@ -520,7 +581,7 @@ prototype's name where it differs:
 | `exit_code` | the process exit code, so that stdout alone carries it |
 | `reveals` | every path shown in cleartext or hashed (§7); the prototype had a boolean, `unsafe_cleartext` |
 | `input` | byte length, nesting depth of the decoded payload, detected format |
-| `phases` | per phase: outcome, what blocked it if not reached, finding codes (prototype: `stages`) |
+| `phases` | per phase: outcome, what blocked it if not reached, and each kind of finding once, by code |
 | `proofs` | per proof: suite, declared algorithm, outcome, key provenance — present for failed verification too |
 | `findings` | code, phase, attribution, severity, and typed detail |
 | `not_evaluated` | what was not checked, and why |
@@ -530,12 +591,13 @@ prototype's name where it differs:
 
 | Key | Content |
 |---|---|
-| `error` | a caller fault: code and message |
+| `error` | a caller error: code and message |
 | `format` | format identifier, profile, and format-specific header fields |
 | `credential` | the `Document` fields for this object — a credential or a presentation, per its `kind` — with claims rendered per §7 |
 
 Whether inapplicable keys are omitted, as in the prototype, or emitted as `null` is open
-(§10 [Q2]).
+(§10 [Q2]). [docs/output.md](docs/output.md) explains the keys and values for readers of the
+output, starting with `status` and `phases`.
 
 ### Mapping
 
@@ -554,7 +616,7 @@ REQUIREMENTS §8.
 | Code | Meaning |
 |---|---|
 | 0 | every requested phase passed |
-| 1 | caller fault: unreadable input, invalid flag |
+| 1 | caller error: unreadable input, invalid flag |
 | 2 | parse failed |
 | 3 | inspect failed |
 | 4 | verify failed |
@@ -876,6 +938,13 @@ Each becomes a test observed to fail and then to pass (REQUIREMENTS §11):
   not cover it; and a conformance finding when protected and unprotected names are not
   disjoint (§7.2.1). Until then it is rejected by name, attributed to vcrd
   (DEVELOPMENT-PLAN.md, milestone 4).
+- **[F2] Read VCDM 1.1's JWT encoding**: a credential inside a `vc` claim, or a
+  presentation inside `vp`, with JWT claims standing in for credential properties
+  (`iss`, `jti`, `sub`, `nbf`, `exp`). Probably a second profile of the JWS format, which
+  shares parsing and the signature check: inspect applies VCDM 1.1's rules, and key
+  resolution reads `iss`. Check the mapping against VCDM 1.1's text first. Until then the
+  encoding is named (`inspect.vcdm_1_1_jwt_encoding`), attributed to vcrd, and blocks
+  verify (DEVELOPMENT-PLAN.md, milestone 5).
 
 ### [P] Project and repository setup
 

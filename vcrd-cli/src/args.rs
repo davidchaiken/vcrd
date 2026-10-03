@@ -86,7 +86,7 @@ fn rfc3339(s: &str) -> Result<OffsetDateTime, time::error::Parse> {
 }
 
 /// The output format and verbosity a command line asks for, read without clap. Used
-/// only when clap has rejected the command line, so that the fault is still reported
+/// only when clap has rejected the command line, so that the error is still reported
 /// in the format asked for. Unreadable values fall back to the defaults.
 pub fn prescan(args: &[OsString]) -> (OutputFormat, u8) {
     let format = last_value(args, "format")

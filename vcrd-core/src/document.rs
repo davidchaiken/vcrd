@@ -39,11 +39,24 @@ pub enum ContextEntry {
     Other,
 }
 
-/// A date-time as written, and as read when it could be.
+/// A date-time as written, and as read or why it could not be.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Timestamp {
-    pub lexical: String,
-    pub parsed: Option<OffsetDateTime>,
+    /// The value as written; `None` when it is not a string.
+    pub lexical: Option<String>,
+    pub parsed: Result<OffsetDateTime, DateTimeProblem>,
+}
+
+/// Why a date-time could not be read (VCDM 2.0 §4.9).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DateTimeProblem {
+    /// Not a JSON string.
+    NotString,
+    /// Not in XML Schema 1.1's `dateTimeStamp` lexical space. `valid_rfc3339` says
+    /// whether RFC 3339 would accept it.
+    NotDateTimeStamp { valid_rfc3339: bool },
+    /// A `dateTimeStamp` outside the years vcrd can represent, -9999 to 9999.
+    Unrepresentable,
 }
 
 /// One scalar value and where it is.

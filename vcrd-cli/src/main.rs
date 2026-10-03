@@ -54,7 +54,7 @@ fn main() -> ExitCode {
         Ok(input) => input,
         Err((code, message)) => {
             eprintln_unless_quiet(verbosity, &message);
-            return emit(&view::fault(code, message), format, verbosity);
+            return emit(&view::caller_error(code, message), format, verbosity);
         }
     };
     let bytes = input.bytes;
@@ -71,7 +71,7 @@ fn main() -> ExitCode {
 }
 
 /// `--help` and `--version` are answered as clap renders them, and exit 0. Any other
-/// rejected command line is a caller fault: exit 1, the message on stderr, and with
+/// rejected command line is a caller error: exit 1, the message on stderr, and with
 /// JSON output the envelope on stdout (ARCHITECTURE §6).
 fn usage_error(error: &clap::Error, raw: &[OsString]) -> ExitCode {
     if matches!(
@@ -80,14 +80,14 @@ fn usage_error(error: &clap::Error, raw: &[OsString]) -> ExitCode {
     ) {
         return match error.print() {
             Ok(()) => ExitCode::SUCCESS,
-            Err(_) => ExitCode::from(exit::CALLER_FAULT),
+            Err(_) => ExitCode::from(exit::CALLER_ERROR),
         };
     }
     let (format, verbosity) = args::prescan(raw);
     let message = error.render().to_string();
     eprintln_unless_quiet(verbosity, message.trim_end());
     emit(
-        &view::fault("usage", message.trim_end().to_owned()),
+        &view::caller_error("usage", message.trim_end().to_owned()),
         format,
         verbosity,
     )
@@ -164,7 +164,7 @@ fn emit(envelope: &Envelope, format: OutputFormat, verbosity: u8) -> ExitCode {
                     .and_then(|()| writeln!(stdout));
                 if let Err(error) = written {
                     eprintln!("vcrd: cannot write the result: {error}");
-                    return ExitCode::from(exit::CALLER_FAULT);
+                    return ExitCode::from(exit::CALLER_ERROR);
                 }
             }
         }

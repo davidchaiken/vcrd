@@ -1,4 +1,4 @@
-//! Caller faults: exit 1, and one JSON document on stdout when JSON is the output
+//! Caller errors: exit 1, and one JSON document on stdout when JSON is the output
 //! format (REQUIREMENTS §9; ARCHITECTURE §6).
 
 #[cfg(test)]
@@ -18,7 +18,7 @@ fn an_unknown_flag_exits_1() {
 fn a_usage_error_is_one_json_document_with_the_error_filled() {
     let out = json(vcrd().args(["--format", "json", "--no-such-flag"]), 1);
     assert_eq!(out["schema_version"], 0);
-    assert_eq!(out["status"], "caller_fault");
+    assert_eq!(out["status"], "caller_error");
     assert_eq!(out["exit_code"], 1);
     assert_eq!(out["error"]["code"], "usage");
     assert!(
@@ -49,7 +49,7 @@ fn an_invalid_value_is_a_usage_error() {
 }
 
 #[test]
-fn an_unreadable_file_is_a_caller_fault() {
+fn an_unreadable_file_is_a_caller_error() {
     let out = json(vcrd().arg("no-such-file.jwt"), 1);
     assert_eq!(out["error"]["code"], "input_unreadable");
     assert!(

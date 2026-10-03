@@ -3,12 +3,13 @@
 
 use crate::context::Context;
 use crate::document::ProofMaterial;
-use crate::finding::{Attribution, Finding, FindingDetail, Severity};
+use crate::finding::{Attribution, Finding, FindingDetail, KeySourceKind};
 use crate::keys;
 use crate::registry::{CredentialFormat, Detection, ProofInput, Registry};
 use crate::report::{
-    BlockReason, Blocked, Check, InputSummary, NotEvaluated, NotEvaluatedReason, ParseOutput,
-    Phase, PhaseOutcome, ProofOutcome, ProofResult, Report, VerifyOutput,
+    BlockReason, Blocked, Check, InputSummary, InspectOutput, Missing, NotEvaluated,
+    NotEvaluatedReason, ParseOutput, Phase, PhaseOutcome, ProofOutcome, ProofResult, Report,
+    VerifyOutput,
 };
 
 pub(crate) fn run(bytes: &[u8], ctx: &Context, registry: &Registry, last: Phase) -> Report {
@@ -62,10 +63,12 @@ pub(crate) fn run(bytes: &[u8], ctx: &Context, registry: &Registry, last: Phase)
     let (inspect, verify) = match (&parse, format) {
         (PhaseOutcome::Passed { output, .. }, Some(format)) => {
             let inspect = format.inspect(output, ctx);
-            let verify = if last >= Phase::Verify {
-                verify_proofs(output, ctx, registry)
-            } else {
+            let verify = if last < Phase::Verify {
                 PhaseOutcome::NotRequested
+            } else if let Some(blocked) = blocked_by_inspect(&inspect) {
+                PhaseOutcome::NotReached(blocked)
+            } else {
+                verify_proofs(output, ctx, registry)
             };
             (inspect, verify)
         }
@@ -73,8 +76,9 @@ pub(crate) fn run(bytes: &[u8], ctx: &Context, registry: &Registry, last: Phase)
         _ => {
             let blocked = Blocked {
                 by: Phase::Parse,
-                reason: BlockReason::Impossible,
-                findings: error_codes(parse.findings()),
+                reason: BlockReason::Impossible {
+                    missing: Missing::Document,
+                },
             };
             let verify = if last >= Phase::Verify {
                 PhaseOutcome::NotReached(blocked.clone())
@@ -85,18 +89,40 @@ pub(crate) fn run(bytes: &[u8], ctx: &Context, registry: &Registry, last: Phase)
         }
     };
 
+    // Trust evaluation is not a phase (REQUIREMENTS §4).
+    let mut not_evaluated = vec![NotEvaluated {
+        what: Check::IssuerAccreditation,
+        why: NotEvaluatedReason::OutOfScope,
+    }];
+    if let Some(inspected) = inspect.output() {
+        not_evaluated.extend_from_slice(&inspected.not_evaluated);
+    }
     Report {
         input,
         parse,
         inspect,
         verify,
-        // Trust evaluation is not a phase (REQUIREMENTS §4).
-        not_evaluated: vec![NotEvaluated {
-            what: Check::IssuerAccreditation,
-            why: NotEvaluatedReason::OutOfScope,
-        }],
+        not_evaluated,
         contained: Vec::new(),
     }
+}
+
+/// REQUIREMENTS §4's blocking rule for inspect: verify is impossible when the input
+/// names no usable issuer identifier and no other source of key material remains.
+/// Milestone 1 has no other source; milestone 2's caller-supplied keys are consulted
+/// here, which is why the runner decides and not the format (ARCHITECTURE §4).
+fn blocked_by_inspect(inspect: &PhaseOutcome<InspectOutput>) -> Option<Blocked> {
+    if !inspect.output()?.no_issuer_identifier {
+        return None;
+    }
+    Some(Blocked {
+        by: Phase::Inspect,
+        reason: BlockReason::Impossible {
+            missing: Missing::KeyMaterial {
+                consulted: vec![KeySourceKind::IssuerIdentifier],
+            },
+        },
+    })
 }
 
 /// The most confident format; the first registered wins a tie.
@@ -109,14 +135,6 @@ fn detect<'r>(registry: &'r Registry, bytes: &[u8]) -> Option<&'r dyn Credential
         }
     }
     best.map(|(_, format)| format)
-}
-
-fn error_codes(findings: &[Finding]) -> Vec<&'static str> {
-    findings
-        .iter()
-        .filter(|f| f.severity == Severity::Error)
-        .map(|f| f.code)
-        .collect()
 }
 
 /// Resolves each proof's key and hands the proof to its suite. Key resolution

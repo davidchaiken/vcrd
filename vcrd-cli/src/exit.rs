@@ -3,7 +3,7 @@
 use vcrd_core::{Attribution, Phase, Report, Severity};
 
 pub const PASSED: u8 = 0;
-pub const CALLER_FAULT: u8 = 1;
+pub const CALLER_ERROR: u8 = 1;
 pub const POLICY: u8 = 5;
 pub const UNSUPPORTED: u8 = 6;
 
