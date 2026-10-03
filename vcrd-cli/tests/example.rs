@@ -30,8 +30,12 @@ fn verify_exits_0_with_one_json_document() {
     assert_eq!(out["credential"]["validity"], "current");
     assert_eq!(
         out["not_evaluated"],
-        json!([{"what": "issuer_accreditation", "why": "out_of_scope"}])
+        json!([
+            {"what": "issuer_accreditation", "why": "out_of_scope"},
+            {"what": "context_resolution", "why": "not_implemented"},
+        ])
     );
+    assert_eq!(out["findings"], json!([]));
 }
 
 /// Claim values are masked by default; names, structure and metadata are shown

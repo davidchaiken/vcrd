@@ -21,17 +21,20 @@ mod registry;
 mod report;
 mod runner;
 pub mod suites;
+// The VCDM 2.0 checks, for the formats whose payload is a VCDM 2.0 credential.
+#[cfg(feature = "vc-jose")]
+mod vcdm;
 
 #[cfg(feature = "std-clock")]
 pub use context::SystemClock;
 pub use context::{Clock, Context, ContextBuilder, FixedClock, Limits};
 pub use document::{
-    ContainedInput, ContextEntry, Document, DocumentKind, KeyHints, Leaf, LeafClass,
-    ProofDescriptor, ProofMaterial, Timestamp,
+    ContainedInput, ContextEntry, DateTimeProblem, Document, DocumentKind, KeyHints, Leaf,
+    LeafClass, ProofDescriptor, ProofMaterial, Timestamp,
 };
 pub use finding::{
-    Attribution, DateField, DidKeyProblem, Finding, FindingDetail, JwsJsonSyntax, JwsSegment,
-    KeySourceKind, Severity,
+    Attribution, Base64urlProblem, CritProblem, DateField, DidKeyProblem, Finding, FindingDetail,
+    IssLocation, IssuerProblem, JwsJsonSyntax, JwsSegment, KeySourceKind, Severity,
 };
 pub use json::{DuplicateName, Json, Member, nesting_depth};
 pub use keys::{CredentialKey, KeyProvenance, KeySource, PublicKey};
@@ -43,7 +46,7 @@ pub use registry::{
     CredentialFormat, Detection, FormatId, ProfileId, ProofInput, ProofSuite, Registry, SuiteId,
 };
 pub use report::{
-    BlockReason, Blocked, Check, Disclosure, FormatDetail, InputSummary, InspectOutput,
+    BlockReason, Blocked, Check, Disclosure, FormatDetail, InputSummary, InspectOutput, Missing,
     NotEvaluated, NotEvaluatedReason, ParseOutput, Phase, PhaseOutcome, ProofOutcome, ProofResult,
     Report, Validity, VerifyOutput,
 };

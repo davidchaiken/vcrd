@@ -239,8 +239,8 @@ exploit, or would require fetching external material, such as cryptographic key
 material, from a suspicious source. Any other inspect failure is reported, and verify
 still runs: a credential can fail inspection and still carry a sound signature, and
 saying so is more useful than refusing to look. When an inspect failure does block
-verify, the result identifies the findings responsible and which of the two reasons
-applied.
+verify, the result identifies the phase whose findings blocked it and which of the two
+reasons applied.
 
 "Read-only, no-network by default" (§6) means: parse and inspect are always available.
 Verify is available offline only for self-contained key material; network-dependent
@@ -1124,8 +1124,8 @@ after an incident) is far more painful than starting clean:
 - **CI feature combinations**: because formats and proof suites are feature-gated modules
   (§7), CI builds and tests each supported combination of features, not only the default
   set. A combination that is never built is one that silently stops compiling — or, worse,
-  compiles and misattributes a failure, as when a build with no formats blames the input
-  for vcrd's own missing support.
+  compiles and misattributes a failure, as when a build with no formats attributes to the
+  input a failure that comes from vcrd's own missing support.
 
 ## 14. Contribution & Community Structure
 
@@ -1191,6 +1191,9 @@ checked for such conflicts when the standard comes into scope (§11).
 - **COSE** — CBOR Object Signing and Encryption, the CBOR-based analog to JOSE's
   signing/encryption mechanics.
 - **DID** — Decentralized Identifier.
+- **DID URL** — a DID followed by a path, query or fragment, identifying a resource the
+  DID's controller names, such as one of its keys (`did:key:z6Mk…#z6Mk…`). A relative DID
+  URL (`#z6Mk…`) is resolved against the DID.
 - **DIDComm** — DID Communication, a secure agent-to-agent messaging protocol built on
   DIDs.
 - **EIP-712** — Ethereum Improvement Proposal 712, a typed structured-data
@@ -1204,9 +1207,42 @@ checked for such conflicts when the standard comes into scope (§11).
   and the validity period, without cryptography or network access. Also the CLI
   operation that runs the parse and inspect phases (§8).
 - **JOSE** — JSON Object Signing and Encryption, the IETF framework covering JWS/JWK/JWT.
+- **JOSE Header Parameter names** — the members of a JWS's header, defined in RFC 7515
+  §4.1 unless noted:
+  - `alg` (Algorithm) — the signature algorithm the producer declares. vcrd checks it and
+    never obeys it.
+  - `crit` (Critical) — extensions a recipient MUST understand and process, or reject the
+    JWS.
+  - `cty` (Content Type) — the media type of the payload. VC-JOSE-COSE says it SHOULD be
+    `vc`.
+  - `jku` (JWK Set URL) and `x5u` (X.509 URL) — locations from which to fetch keys or
+    certificates.
+  - `jwk` (JSON Web Key) — a public key the JWS carries about itself.
+  - `kid` (Key ID) — a hint identifying the key that signed. Under VC-JOSE-COSE, usually a
+    DID URL naming one of the issuer's keys.
+  - `typ` (Type) — the media type of the whole JWS. VC-JOSE-COSE says it SHOULD be
+    `vc+jwt`.
+  - `x5c` (X.509 Certificate Chain), `x5t` and `x5t#S256` (X.509 certificate SHA-1 and
+    SHA-256 thumbprints) — certificates for the signing key.
 - **JWK** — JSON Web Key.
 - **JWS** — JSON Web Signature.
 - **JWT** — JSON Web Token.
+- **JWT claim names** — the registered members of a JWT's payload, defined in RFC 7519
+  §4.1 unless noted. VC-JOSE-COSE has them describe the securing JWT, beside the
+  credential's own properties:
+  - `aud` (Audience) — the recipients the JWT is intended for.
+  - `cnf` (Confirmation) — a key the holder can prove possession of (RFC 7800).
+  - `exp` (Expiration Time), `nbf` (Not Before) and `iat` (Issued At) — seconds since the
+    Unix epoch. Under VC-JOSE-COSE, the times of the signature, distinct from the
+    credential's `validFrom` and `validUntil`.
+  - `iss` (Issuer) — the principal that issued the JWT. Under VC-JOSE-COSE it MUST match
+    the credential's `issuer`.
+  - `jti` (JWT ID) — a unique identifier for the JWT, which SHOULD NOT conflict with the
+    credential's `id`.
+  - `sub` (Subject) — the principal the JWT is about, which SHOULD NOT conflict with
+    `credentialSubject.id`.
+  - `vc` and `vp` — a credential or a presentation inside a JWT, as VCDM 1.1's JWT
+    encoding has it. VC-JOSE-COSE says they MUST NOT be present.
 - **Key provenance** — where the key vcrd verified with came from, and any key the
   credential offered about itself (§10).
 - **KMS** — Key Management Service.
@@ -1246,12 +1282,21 @@ checked for such conflicts when the standard comes into scope (§11).
 - **VC** — Verifiable Credential.
 - **VC-API** — the W3C Credentials Community Group's HTTP API specification for VC
   issuance/verification services.
+- **VC-JOSE-COSE** — the W3C Recommendation *Securing Verifiable Credentials using JOSE
+  and COSE*, which secures a VCDM 2.0 credential as a JWS (or with COSE), the format vcrd
+  implements first (§10).
+- **VCDM** — the W3C Verifiable Credentials Data Model, in versions 1.1 and 2.0 (§2):
+  the structure of credentials and presentations, independent of how they are secured.
 - **Verify** — the third phase (§4): checking the proof against key material, and whether
   the securing mechanism is current. As a CLI operation, `verify` runs all three phases,
   and so covers what the W3C VC Data Model 2.0 (§2) defines as *verification*: whether a
   credential is an authentic and current statement of its issuer.
 - **VP** — Verifiable Presentation.
 - **WASM** — WebAssembly.
+- **WHATWG** — the Web Hypertext Application Technology Working Group, whose URL Standard
+  VCDM 2.0 cites as the definition of a URL.
+- **XSD** — XML Schema Definition, the W3C language whose datatypes (XML Schema 1.1 Part 2)
+  include `dateTimeStamp`, the form VCDM 2.0 requires of `validFrom` and `validUntil`.
 
 ## 16. Open / Deferred Items
 
@@ -1322,11 +1367,13 @@ with its tag there, so references to either stay valid.
 19. ~~**Derive structural-limit defaults from a real corpus**~~ — moved to ARCHITECTURE
     §10 [T6].
 20. **Settle the details of when an inspect failure blocks verify** (§4). The rule is
-    fixed — only when verification would be impossible or dangerous — but three details
-    wait for the first case that exercises them: the structure a result uses to report a
-    block and its reason; how to classify a failure whose impossibility depends on what
-    the caller supplied, since a credential without a usable issuer identifier is still
-    verifiable against caller-supplied key material; and how a condition that is dangerous
-    but conforming — a token header telling the verifier where to fetch keys — is
-    reported by inspect so that it can block verify, given that doing so also changes
-    what `vcrd inspect` alone returns.
+    fixed — only when verification would be impossible or dangerous. Two of its three
+    details were settled on 2026-10-01 by the first case, a credential with no usable
+    issuer identifier. A result reports a block with the phase whose findings caused it,
+    the reason, and what is missing: the document, or key material together with the key
+    sources considered. And a failure whose impossibility depends
+    on what the caller supplied is judged against it: a credential without a usable
+    issuer identifier blocks verify only when no other source of key material remains.
+    Still open: how a condition that is dangerous but conforming — a token header telling
+    the verifier where to fetch keys — is reported by inspect so that it can block verify,
+    given that doing so also changes what `vcrd inspect` alone returns.

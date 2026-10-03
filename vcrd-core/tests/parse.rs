@@ -299,5 +299,5 @@ fn a_parse_failure_blocks_inspect() {
     let PhaseOutcome::NotReached(blocked) = &report.inspect else {
         panic!("{report:?}")
     };
-    assert_eq!(blocked.findings, ["parse.no_format_matched"]);
+    assert_eq!(blocked.by, vcrd_core::Phase::Parse);
 }

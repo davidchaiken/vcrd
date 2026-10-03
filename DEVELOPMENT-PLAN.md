@@ -37,7 +37,7 @@ refer to ARCHITECTURE §10. Milestone sizes are unequal: milestones 1 and 5 are 
 | 2 Keys and algorithms | five algorithms, caller keys, embedded-key precedence, allowlist, full provenance, Linux debugging | [S1] [S2] [C1] [C2] [C3] [Q4] [G2] |
 | 3 CLI contract | config file, env, designations, `formats`/`suites`, man pages, fuzz, coverage, limits corpus | [Q2] [T2] [T5] [T6] |
 | 4 Presentations | `vp+jwt` with enveloped credentials, challenge/domain; JWS JSON serialization | [F1] |
-| 5 Data Integrity | `eddsa-rdfc-2022`, `eddsa-jcs-2022`, pinned contexts, canonicalization budget | [Q1] [T1] |
+| 5 Data Integrity | `eddsa-rdfc-2022`, `eddsa-jcs-2022`, pinned contexts, canonicalization budget, VCDM 1.1's JWT encoding | [Q1] [T1] [F2] |
 | 6 Release 0.1.0 | community files, semver-checks, differential harness, distribution | [P1] [P2] [P5] [P6] [T4] [T7] [D1] [D2] |
 
 ### Milestone 0. Repository skeleton
@@ -105,7 +105,27 @@ every other `alg` exercise the by-name rejection path from day one.
   `sub`/`credentialSubject.id` SHOULD agree (warnings). All **[verified]**. `kid` checked
   against `<did>#<multibase>` here, not in verify: it is a conformance check, so a
   missing or foreign `kid` fails inspect (exit 3) while verify reports the signature
-  (decided 2026-09-24; known input 4).
+  (decided 2026-09-24; known input 4). Decided 2026-10-01:
+  - URLs follow the WHATWG URL Standard, through the `url` crate; a URL the parser had
+    to correct is a warning, one it cannot parse an error. Validity bounds follow XML
+    Schema's `dateTimeStamp` where it differs from RFC 3339 (ARCHITECTURE §4), with a
+    finding that marks values RFC 3339 accepts, so that the rule can be revisited if
+    they occur in practice.
+  - A subject with only an `id` is a warning; an empty subject, or an empty set of
+    subjects, is an error ([S5]).
+  - A missing or malformed `issuer` blocks verify as impossible, and the block names
+    what is missing (`key_material`) and where vcrd looked (`consulted`); a parse
+    failure's block names the `document` (REQUIREMENTS §16 item 20; docs/output.md). A
+    URL issuer vcrd cannot resolve does not block.
+  - VCDM 1.1's JWT encoding (`vc` or `vp` with no VCDM 2.0 `@context`) is named and
+    attributed to vcrd, blocks verify, and skips VCDM 2.0's checks; reading it is
+    ARCHITECTURE §10 [F2], in milestone 5. `vc` or `vp` beside a VCDM 2.0 payload is the
+    input's error.
+  - `kid` follows VC-JOSE-COSE §4.1.1 and §4.2 as written: a relative `kid` is an error
+    when `iss` is absent, and is resolved against the issuer when `iss` is present. The
+    JWK Thumbprint recommendation is a warning, for issuers whose URL is not a DID.
+  - `not_evaluated` lists context resolution for every VC-JOSE-COSE credential, and
+    status and schema when present, each as `not_implemented`.
 - *Verify.* EdDSA/Ed25519 via `verify_strict`, `is_weak` at resolution (ARCHITECTURE §8);
   `none` rejected; every other `alg` unsupported by name (attribution vcrd, exit 6). Key
   resolution from the credential's `issuer` (the VCDM-normative identifier; `iss` is a
@@ -127,7 +147,7 @@ every other `alg` exercise the by-name rejection path from day one.
   `schema_version: 0`, `contained: []`; `text` via `tabled`; `plain`; every claim value
   masked by default; `--unsafe` with the stderr banner and the `reveals` list;
   `--format`, `--now`, a skew flag (zero default), `--verbosity` including 0; `NO_COLOR`;
-  exit codes 0–6; `vcrd <file>` and piped input default to `inspect`. Caller faults are
+  exit codes 0–6; `vcrd <file>` and piped input default to `inspect`. Caller errors are
   emitted as the one JSON document: parse arguments with `clap`'s fallible entry point,
   because `clap`'s own usage-error exit status collides with vcrd's code 2 (not verified
   that review; check `clap::Error::exit` at implementation).
@@ -202,7 +222,9 @@ RFC 7519 §4.1, §7.2; RFC 8037 §2–3; RFC 8032 as the crate implements it. Kn
    key is used.
 5. VCDM 2.0 §4.9: values MUST be XML Schema 1.1 `dateTimeStamp`; ARCHITECTURE §2 uses the
    `time` crate's RFC 3339 parser. Enumerate the lexical differences (case of `T`/`Z`,
-   years outside 0001–9999, hour 24) and decide; a test per difference.
+   years outside 0001–9999, hour 24) and decide; a test per difference. Decided
+   2026-10-01: XML Schema is followed; the differences and their handling are tabled in
+   ARCHITECTURE §4.
 6. VCDM 2.0 §4.8: "each object MUST be the subject of one or more claims", so [S5]'s fix is
    a distinct "empty subject" finding, not a corrected "missing" one.
 7. VCDM 2.0 §1.3: a conforming verifier "MUST produce errors when non-conforming documents
@@ -357,9 +379,9 @@ document's `@context` starts with the proof options' `@context` (§3.3.2 **[veri
 `ProofInput::DataIntegrity { unsecured document, proof options }` ([Q1]). `Multikey`
 verification methods and the `did:key` DID document with `<did>#<multibase>`.
 `verificationMethod` as a key hint. Data Integrity §4.4 steps 2–7 **[verified]**: a missing
-`proof` map, or a proof without `type`, `verificationMethod` or `proofPurpose`, is the
-first real "impossible" case of REQUIREMENTS §4's blocking rule, which settles the report
-structure REQUIREMENTS §16 item 20 leaves open; `expectedProofPurpose` joins `Context`
+`proof` map, or a proof without `type`, `verificationMethod` or `proofPurpose`, is an
+"impossible" case of REQUIREMENTS §4's blocking rule, reported in the structure milestone 1
+settled (REQUIREMENTS §16 item 20); `expectedProofPurpose` joins `Context`
 (`assertionMethod` for credentials, `authentication` for presentations). Proof sets
 (§2.1.1); proof chains as a follow-on. The canonicalization budget as a verify-phase
 bounded-out finding attributed to vcrd; note that REQUIREMENTS §4's "dangerous, internal"
@@ -368,7 +390,10 @@ count over a threshold) is added at inspect or the budget itself is the control,
 choice is written down. Vendored vectors with source and license: the RDFC-1.0 test suite,
 EdDSA cryptosuites Appendix B, VC test-suite fixtures. [T1] the two-branch VC-API spike.
 Data Integrity presentations as the per-format follow-on PR: §4.4 steps 6 and 7 map
-directly onto REQUIREMENTS §10's expected domain and challenge **[verified]**.
+directly onto REQUIREMENTS §10's expected domain and challenge **[verified]**. [F2]
+VCDM 1.1's JWT encoding, beside the JSON-LD format, since both bring a second set of
+data-model checks: when they arrive, decide whether the VCDM checks become a registry
+extension point of their own (ARCHITECTURE §5).
 
 **Delivers.** `vcrd verify credential.jsonld` for both cryptosuites, offline, against
 `did:key` and caller-supplied keys; an unpinned or inline `@context` reported at error
@@ -378,7 +403,7 @@ severity with the prominence REQUIREMENTS §12 demands.
 trips the budget and fails closed; `jsonld` builds alone and within
 the full set, under ARCHITECTURE §2's rules; the review is complete.
 
-**Closes.** [Q1], [T1]; provides the first case for REQUIREMENTS §16 item 20.
+**Closes.** [Q1], [T1], [F2].
 
 **Milestone review.** Texts: Data Integrity 1.0 §2.1–2.4, §4.4–4.7; EdDSA cryptosuites §2,
 §3.2, §3.3, §4.1 (Ed25519 security properties, cross-checked against the `verify_strict`

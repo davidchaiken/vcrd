@@ -73,6 +73,11 @@ mod generate {
             ("examples/ed25519.jwt", ed25519_example()),
             ("fixtures/deep-nesting.jwt", deep_nesting()),
             ("fixtures/jws-json-flattened.json", jws_json_flattened()),
+            ("fixtures/validity-reversed.jwt", validity_reversed()),
+            ("fixtures/issuer-missing.jwt", issuer_missing()),
+            ("fixtures/iss-mismatch.jwt", iss_mismatch()),
+            ("fixtures/kid-missing.jwt", kid_missing()),
+            ("fixtures/vcdm-1.1-encoding.jwt", vcdm_1_1_encoding()),
         ]
     }
 
@@ -133,6 +138,64 @@ mod generate {
         let [protected, payload, signature] = sign_parts(&key, &header, &payload);
         let jws = json!({ "payload": payload, "protected": protected, "signature": signature });
         serde_json::to_vec(&jws).unwrap()
+    }
+
+    /// The example's validity bounds swapped: `validUntil` earlier than `validFrom`
+    /// (VCDM 2.0 §4.9; ARCHITECTURE §10 [S3]). Correctly signed.
+    fn validity_reversed() -> Vec<u8> {
+        let (key, header, mut payload) = example_parts();
+        payload["validFrom"] = json!("2031-01-01T00:00:00Z");
+        payload["validUntil"] = json!("2026-01-01T00:00:00Z");
+        sign(&key, &header, &payload)
+    }
+
+    /// The example with no `issuer` (VCDM 2.0 §4.7): there is no identifier to derive
+    /// a key from, so verify is blocked. Correctly signed.
+    fn issuer_missing() -> Vec<u8> {
+        let (key, header, mut payload) = example_parts();
+        payload.as_object_mut().unwrap().remove("issuer");
+        sign(&key, &header, &payload)
+    }
+
+    /// The example with an `iss` naming someone other than the issuer (VC-JOSE-COSE
+    /// §4.1.2). Correctly signed by the issuer's key.
+    fn iss_mismatch() -> Vec<u8> {
+        let (key, header, mut payload) = example_parts();
+        payload["iss"] = json!("did:example:someone-else");
+        sign(&key, &header, &payload)
+    }
+
+    /// The example without `kid`, which VC-JOSE-COSE §4.1.1 requires when the issuer
+    /// is a DID. Correctly signed.
+    fn kid_missing() -> Vec<u8> {
+        let (key, mut header, payload) = example_parts();
+        header.as_object_mut().unwrap().remove("kid");
+        sign(&key, &header, &payload)
+    }
+
+    /// The example's credential in VCDM 1.1's JWT encoding: inside a `vc` claim, with
+    /// the issuer, identifier, subject and validity as `iss`, `jti`, `sub`, `nbf` and
+    /// `exp`. vcrd does not read it yet (ARCHITECTURE §10 [F2]). The header is the
+    /// example's, so that the encoding is the one condition.
+    fn vcdm_1_1_encoding() -> Vec<u8> {
+        let (key, header, example) = example_parts();
+        let payload = json!({
+            "iss": example["issuer"],
+            "jti": example["id"],
+            "sub": example["credentialSubject"]["id"],
+            // 2026-01-01T00:00:00Z and 2031-01-01T00:00:00Z.
+            "nbf": 1767225600,
+            "exp": 1924992000,
+            "vc": {
+                "@context": [
+                    "https://www.w3.org/2018/credentials/v1",
+                    "https://www.w3.org/2018/credentials/examples/v1",
+                ],
+                "type": example["type"],
+                "credentialSubject": {"degree": example["credentialSubject"]["degree"]},
+            },
+        });
+        sign(&key, &header, &payload)
     }
 
     /// The curated example's key, header and payload.

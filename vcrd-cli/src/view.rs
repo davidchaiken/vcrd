@@ -9,8 +9,9 @@ use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use vcrd_core::{
-    Attribution, BlockReason, Check, Context, DateField, DidKeyProblem, Document, DocumentKind,
-    Finding, FindingDetail, FormatDetail, JwsJsonSyntax, JwsSegment, KeySourceKind, LeafClass,
+    Attribution, Base64urlProblem, BlockReason, Check, Context, CritProblem, DateField,
+    DidKeyProblem, Document, DocumentKind, Finding, FindingDetail, FormatDetail, IssLocation,
+    IssuerProblem, JwsJsonSyntax, JwsSegment, KeySourceKind, LeafClass, Missing,
     NotEvaluatedReason, Phase, PhaseOutcome, ProofOutcome, Rendered, Report, Revealed, Severity,
     Validity, render,
 };
@@ -33,7 +34,7 @@ pub struct Envelope {
     pub result: ResultView,
 }
 
-/// A caller fault: code and message (ARCHITECTURE §6).
+/// A caller error: code and message (ARCHITECTURE §6).
 #[derive(Debug, Serialize)]
 pub struct ErrorView {
     pub code: &'static str,
@@ -82,16 +83,22 @@ pub struct PhaseView {
     pub outcome: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blocked_by: Option<BlockedView>,
-    /// The codes of this phase's findings.
+    /// The kinds of condition this phase found: each code once, in the order first
+    /// found. The top-level `findings` list has each occurrence and its detail.
     pub findings: Vec<&'static str>,
 }
 
+/// Why a phase did not run. docs/output.md documents every key and value.
 #[derive(Debug, Serialize)]
 pub struct BlockedView {
     pub phase: &'static str,
     pub reason: &'static str,
-    /// The codes of the findings responsible.
-    pub findings: Vec<&'static str>,
+    /// What an impossible phase lacks: `document` or `key_material`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub missing: Option<&'static str>,
+    /// The key sources considered, when `missing` is `key_material`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consulted: Option<Vec<&'static str>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -203,8 +210,8 @@ pub fn envelope(report: &Report, ctx: &Context, size: Option<u64>) -> Envelope {
     }
 }
 
-/// The envelope for a caller fault: no phase ran (ARCHITECTURE §4, `vcrd-cli`).
-pub fn fault(code: &'static str, message: String) -> Envelope {
+/// The envelope for a caller error: no phase ran (ARCHITECTURE §4, `vcrd-cli`).
+pub fn caller_error(code: &'static str, message: String) -> Envelope {
     let not_run = || PhaseView {
         outcome: "not_reached",
         blocked_by: None,
@@ -212,8 +219,8 @@ pub fn fault(code: &'static str, message: String) -> Envelope {
     };
     Envelope {
         schema_version: SCHEMA_VERSION,
-        status: "caller_fault",
-        exit_code: crate::exit::CALLER_FAULT,
+        status: "caller_error",
+        exit_code: crate::exit::CALLER_ERROR,
         reveals: Vec::new(),
         error: Some(ErrorView { code, message }),
         result: ResultView {
@@ -277,25 +284,43 @@ fn result(
 }
 
 fn phase<T>(outcome: &PhaseOutcome<T>) -> PhaseView {
-    let codes = outcome.findings().iter().map(|f| f.code).collect();
+    let mut codes: Vec<&'static str> = Vec::new();
+    for finding in outcome.findings() {
+        if !codes.contains(&finding.code) {
+            codes.push(finding.code);
+        }
+    }
     match outcome {
         PhaseOutcome::NotRequested => PhaseView {
             outcome: "not_requested",
             blocked_by: None,
             findings: codes,
         },
-        PhaseOutcome::NotReached(blocked) => PhaseView {
-            outcome: "not_reached",
-            blocked_by: Some(BlockedView {
-                phase: phase_name(blocked.by),
-                reason: match blocked.reason {
-                    BlockReason::Impossible => "impossible",
-                    BlockReason::Dangerous => "dangerous",
-                },
-                findings: blocked.findings.clone(),
-            }),
-            findings: codes,
-        },
+        PhaseOutcome::NotReached(blocked) => {
+            let (reason, missing, consulted) = match &blocked.reason {
+                BlockReason::Impossible {
+                    missing: Missing::Document,
+                } => ("impossible", Some("document"), None),
+                BlockReason::Impossible {
+                    missing: Missing::KeyMaterial { consulted },
+                } => (
+                    "impossible",
+                    Some("key_material"),
+                    Some(consulted.iter().map(|k| key_source_kind(*k)).collect()),
+                ),
+                BlockReason::Dangerous => ("dangerous", None, None),
+            };
+            PhaseView {
+                outcome: "not_reached",
+                blocked_by: Some(BlockedView {
+                    phase: phase_name(blocked.by),
+                    reason,
+                    missing,
+                    consulted,
+                }),
+                findings: codes,
+            }
+        }
         PhaseOutcome::Failed { .. } => PhaseView {
             outcome: "failed",
             blocked_by: None,
@@ -428,10 +453,15 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
         FindingDetail::NotCompactJws { segments } => {
             json!({"type": "not_compact_jws", "segments": segments})
         }
-        FindingDetail::Base64urlInvalid { segment, offset } => json!({
+        FindingDetail::Base64urlInvalid { segment, problem } => json!({
             "type": "base64url_invalid",
             "segment": jws_segment(*segment),
-            "offset": offset,
+            "problem": match problem {
+                Base64urlProblem::InvalidSymbol => "invalid_symbol",
+                Base64urlProblem::NonzeroTrailingBits => "nonzero_trailing_bits",
+                Base64urlProblem::InvalidLength => "invalid_length",
+                Base64urlProblem::Padding => "padding",
+            },
         }),
         FindingDetail::JsonInvalid {
             segment,
@@ -446,8 +476,123 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
         FindingDetail::JsonNotObject { segment } => {
             json!({"type": "json_not_object", "segment": jws_segment(*segment)})
         }
-        FindingDetail::DateTimeInvalid { field } => {
-            json!({"type": "date_time_invalid", "field": date_field(*field)})
+        FindingDetail::DuplicateName {
+            segment,
+            path,
+            count,
+        } => json!({
+            "type": "duplicate_name",
+            "segment": segment.map(jws_segment),
+            "path": path,
+            "count": count,
+        }),
+        FindingDetail::CritInvalid { problem } => {
+            json!({"type": "crit_invalid", "problem": crit_problem(problem)})
+        }
+        FindingDetail::ContextMissing => json!({"type": "context_missing"}),
+        FindingDetail::ContextFirstInvalid { found } => {
+            json!({"type": "context_first_invalid", "found": found})
+        }
+        FindingDetail::ContextEntryInvalid { path } => {
+            json!({"type": "context_entry_invalid", "path": path})
+        }
+        FindingDetail::TypeMissing { path } => json!({"type": "type_missing", "path": path}),
+        FindingDetail::TypeNotString { path } => {
+            json!({"type": "type_not_string", "path": path})
+        }
+        FindingDetail::TypeLacksVerifiableCredential => {
+            json!({"type": "type_lacks_verifiable_credential"})
+        }
+        FindingDetail::IssuerMissing => json!({"type": "issuer_missing"}),
+        FindingDetail::IssuerInvalid { problem } => json!({
+            "type": "issuer_invalid",
+            "problem": match problem {
+                IssuerProblem::WrongType => json!("wrong_type"),
+                IssuerProblem::NoId => json!("no_id"),
+                IssuerProblem::NotUrl { error } => json!({"not_url": error}),
+            },
+        }),
+        FindingDetail::CredentialSubjectMissing => json!({"type": "credential_subject_missing"}),
+        FindingDetail::CredentialSubjectInvalid { path } => {
+            json!({"type": "credential_subject_invalid", "path": path})
+        }
+        FindingDetail::CredentialSubjectEmpty { path } => {
+            json!({"type": "credential_subject_empty", "path": path})
+        }
+        FindingDetail::CredentialSubjectNoClaims { path } => {
+            json!({"type": "credential_subject_no_claims", "path": path})
+        }
+        FindingDetail::UrlInvalid { path, error } => {
+            json!({"type": "url_invalid", "path": path, "error": error})
+        }
+        FindingDetail::UrlNonconforming { path, violations } => json!({
+            "type": "url_nonconforming",
+            "path": path,
+            "violations": violations,
+        }),
+        FindingDetail::DateTimeInvalid {
+            field,
+            valid_rfc3339,
+        } => json!({
+            "type": "date_time_invalid",
+            "field": date_field(*field),
+            "valid_rfc3339": valid_rfc3339,
+        }),
+        FindingDetail::DateTimeUnrepresentable { field } => {
+            json!({"type": "date_time_unrepresentable", "field": date_field(*field)})
+        }
+        FindingDetail::ValidUntilBeforeValidFrom {
+            valid_from,
+            valid_until,
+        } => json!({
+            "type": "valid_until_before_valid_from",
+            "valid_from": rfc3339(*valid_from),
+            "valid_until": rfc3339(*valid_until),
+        }),
+        FindingDetail::TypUnexpected { found } => {
+            json!({"type": "typ_unexpected", "found": found, "expected": "vc+jwt"})
+        }
+        FindingDetail::CtyUnexpected { found } => {
+            json!({"type": "cty_unexpected", "found": found, "expected": "vc"})
+        }
+        FindingDetail::VcdmV1JwtEncoding { claim } => {
+            json!({"type": "vcdm_1_1_jwt_encoding", "claim": claim})
+        }
+        FindingDetail::JwtClaimForbidden { claim } => {
+            json!({"type": "jwt_claim_forbidden", "claim": claim})
+        }
+        FindingDetail::IssMismatch {
+            location,
+            iss,
+            issuer,
+        } => json!({
+            "type": "iss_mismatch",
+            "location": match location {
+                IssLocation::Header => "header",
+                IssLocation::Payload => "payload",
+            },
+            "iss": iss,
+            "issuer": issuer,
+        }),
+        FindingDetail::JwtClaimConflict { claim, property } => {
+            json!({"type": "jwt_claim_conflict", "claim": claim, "property": property})
+        }
+        FindingDetail::KidMissing => json!({"type": "kid_missing"}),
+        FindingDetail::KidNotAbsolute { kid } => {
+            json!({"type": "kid_not_absolute", "kid": kid})
+        }
+        FindingDetail::KidForeign {
+            kid,
+            issuer,
+            expected,
+        } => json!({
+            "type": "kid_foreign",
+            "kid": kid,
+            "issuer": issuer,
+            "expected": expected,
+        }),
+        FindingDetail::KidWithoutThumbprint { kid } => {
+            json!({"type": "kid_without_thumbprint", "kid": kid})
         }
         FindingDetail::Expired {
             valid_until,
@@ -529,6 +674,17 @@ fn date_field(field: DateField) -> &'static str {
     match field {
         DateField::ValidFrom => "validFrom",
         DateField::ValidUntil => "validUntil",
+    }
+}
+
+fn crit_problem(problem: &CritProblem) -> Value {
+    match problem {
+        CritProblem::NotArray => json!("not_array"),
+        CritProblem::Empty => json!("empty"),
+        CritProblem::NotString { index } => json!({"not_string": index}),
+        CritProblem::Duplicate { name } => json!({"duplicate": name}),
+        CritProblem::Registered { name } => json!({"registered": name}),
+        CritProblem::NotInHeader { name } => json!({"not_in_header": name}),
     }
 }
 
@@ -622,8 +778,11 @@ fn credential(
         },
         issuer: document.issuer.clone(),
         types: document.types.clone(),
-        valid_from: document.valid_from.as_ref().map(|t| t.lexical.clone()),
-        valid_until: document.valid_until.as_ref().map(|t| t.lexical.clone()),
+        valid_from: document.valid_from.as_ref().and_then(|t| t.lexical.clone()),
+        valid_until: document
+            .valid_until
+            .as_ref()
+            .and_then(|t| t.lexical.clone()),
         validity: validity.map(|v| match v {
             Validity::Current => "current",
             Validity::Expired => "expired",
