@@ -77,6 +77,16 @@ impl ClaimValue {
         }
     }
 
+    /// A number's JSON text and value, for checks inside core. Not public
+    /// (ARCHITECTURE §7), for the reason given on [`ClaimValue::as_str`].
+    #[cfg_attr(not(feature = "vc-jose"), allow(dead_code))]
+    pub(crate) fn as_number(&self) -> Option<(String, f64)> {
+        match &self.0 {
+            Scalar::Number(n) => Some((n.to_string(), n.as_f64()?)),
+            Scalar::Null | Scalar::Bool(_) | Scalar::String(_) => None,
+        }
+    }
+
     fn reveal(&self) -> Revealed {
         match &self.0 {
             Scalar::Null => Revealed::Null,

@@ -4,6 +4,7 @@ use std::fmt;
 
 use time::OffsetDateTime;
 
+use crate::keys::Jwk;
 use crate::redact::ClaimValue;
 use crate::registry::SuiteId;
 
@@ -84,6 +85,8 @@ pub struct ProofDescriptor {
     pub algorithm: Option<String>,
     pub key_hints: KeyHints,
     pub material: ProofMaterial,
+    /// The proof's own times, which the runner compares with the clock.
+    pub times: ProofTimes,
 }
 
 /// Where key material may be found.
@@ -93,6 +96,17 @@ pub struct KeyHints {
     pub issuer: Option<String>,
     /// The key identifier the proof names.
     pub kid: Option<String>,
+    /// A key the credential carries about itself, used only as REQUIREMENTS §10
+    /// allows.
+    pub embedded: Option<EmbeddedKey>,
+}
+
+/// A key the credential carries about itself, and where.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EmbeddedKey {
+    /// Where it was, e.g. `header.jwk`.
+    pub location: &'static str,
+    pub jwk: Jwk,
 }
 
 /// What the suite verifies. One variant per kind of suite (ARCHITECTURE §5).
@@ -102,6 +116,9 @@ pub enum ProofMaterial {
     Jws {
         signing_input: Vec<u8>,
         signature: Vec<u8>,
+        /// The extensions `crit` lists, which the suite must implement or reject the
+        /// JWS (RFC 7515 §4.1.11). Empty when `crit` is absent or lists none.
+        critical: Vec<String>,
     },
 }
 
@@ -112,13 +129,47 @@ impl fmt::Debug for ProofMaterial {
             ProofMaterial::Jws {
                 signing_input,
                 signature,
+                critical,
             } => f
                 .debug_struct("Jws")
                 .field("signing_input_len", &signing_input.len())
                 .field("signature_len", &signature.len())
+                .field("critical", critical)
                 .finish(),
         }
     }
+}
+
+/// A proof's own times, distinct from the credential's validity period. Under
+/// VC-JOSE-COSE they are the JWT's `nbf`, `exp` and `iat`, "the issuance and
+/// expiration time of the signature" (§3.1.3).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ProofTimes {
+    /// Not valid before this time (`nbf`, RFC 7519 §4.1.5).
+    pub not_before: Option<ProofTime>,
+    /// Not valid at or after this time (`exp`, RFC 7519 §4.1.4).
+    pub expires: Option<ProofTime>,
+    /// When the proof was made (`iat`, RFC 7519 §4.1.6).
+    pub issued_at: Option<ProofTime>,
+}
+
+/// One of a proof's times, and the member it was read from.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProofTime {
+    /// The member, e.g. `exp`.
+    pub claim: &'static str,
+    /// `None` when the value is not a number, which inspect reports.
+    pub value: Option<NumericDate>,
+}
+
+/// Seconds since 1970-01-01T00:00:00Z UTC, ignoring leap seconds (RFC 7519 §2). Kept
+/// as a number, not converted to a date, so that every value compares, however far
+/// from the present.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NumericDate {
+    /// The JSON number as written.
+    pub text: String,
+    pub seconds: f64,
 }
 
 /// A credential found inside another, handed back for the runner to dispatch

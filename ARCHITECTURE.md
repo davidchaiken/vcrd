@@ -250,10 +250,12 @@ pub enum Severity { Info, Warning, Error }
   yet valid, unbounded, or unknown; the checks the format did not perform, which the
   runner adds to `not_evaluated`; and whether a finding showed that the input names no
   usable issuer identifier, which the runner's blocking rule reads (§4).
-- **`VerifyOutput`** — one `ProofResult` per proof: suite, declared algorithm, outcome, and
-  key provenance (§8). `ProofOutcome` is `Verified { disclosed }`, `Failed`, or
-  `NotAttempted`; `disclosed` exists so that selective disclosure is not designed out,
-  without any claim that it is sufficient.
+- **`VerifyOutput`** — one `ProofResult` per proof: suite, declared algorithm, outcome,
+  key provenance (§8), and where the clock falls relative to the proof's own times, such
+  as a JWT's `nbf` and `exp`, which is separate from the credential's validity period.
+  `ProofOutcome` is `Verified { disclosed }`, `Failed`, or `NotAttempted`; `disclosed`
+  exists so that selective disclosure is not designed out, without any claim that it is
+  sufficient.
 
 ### The `Document` projection
 
@@ -277,7 +279,7 @@ disclosure, which is neither present nor absent (§10 [Q3]).
 | `Finding` | one condition found | any phase | typed detail, no prose |
 | `Document` | format-neutral view | format's parse | every credential-derived value is a `ClaimValue` |
 | `ClaimValue` | one claim leaf | format's parse | no plaintext accessor outside core's rendering (§7) |
-| `ProofDescriptor` | where a proof is and what it covers | format's parse | carries key hints, never a resolved key |
+| `ProofDescriptor` | where a proof is, what it covers, and its own times | format's parse | carries key hints, never a resolved key |
 | `KeyHints` | where key material may be | format's parse | typed; an embedded key is parsed, not kept as raw JSON |
 | `KeyProvenance` | where the key used came from | key resolution | reported whether verification succeeds or fails (§8) |
 | `ProofInput` | what a suite verifies | phase runner | carries no provenance (§5) |
@@ -356,8 +358,11 @@ In the prototype the corresponding path was traced to the arithmetic: for ES256 
   point. The findings are a missing `issuer`, one that is neither a URL nor an object
   whose `id` is a URL, and VCDM 1.1's JWT encoding (§10 [F2]). A well-formed issuer vcrd
   cannot resolve, such as an `https:` URL, does not block: verify runs and fails,
-  attributed to vcrd. `docs/output.md` documents the block's keys and values for readers
-  of the output.
+  attributed to vcrd. A credential that carries a key about itself is not blocked
+  either: that key is a source the runner consults, though it refuses it without the
+  caller's opt-in, so verify runs and reports the refusal rather than "no key material"
+  (REQUIREMENTS §10; §8). `docs/output.md` documents the block's keys and values for
+  readers of the output.
 - **The runner dispatches contained credentials, and recurses.** For each
   `ContainedInput` a parse produced, the runner applies the containment caps, runs format
   detection over its bytes with the media-type hint from the `data:` URL, and runs the
@@ -448,7 +453,7 @@ cap bounded nothing; it also reported the depth of the *encoded* token, which is
 | `Context` item | Consulted by |
 |---|---|
 | limits | parse |
-| clock, clock skew | inspect — the validity period |
+| clock, clock skew | inspect, for the credential's validity period; the runner in verify, for each proof's own times |
 | algorithm policy | the proof suite |
 | key store, embedded-key opt-in | key resolution |
 | expected challenge and domain | verification of presentations (not yet designed) |
@@ -505,10 +510,12 @@ Responsibilities:
   as `ContainedInput`s, performs inspection, defines which of its fields are claims, and
   supplies the path notation for redaction designations (REQUIREMENTS §16 item 18). It
   never resolves keys, dispatches contained credentials, or decides trust.
-- **A suite** applies the algorithm policy, binds the algorithm to the key type, computes
-  the bytes the signature covers, and calls the primitives. It never sees key provenance.
+- **A suite** applies the algorithm policy, binds the algorithm to the key type, refuses
+  a critical extension it does not implement, computes the bytes the signature covers,
+  and calls the primitives. It never sees key provenance.
 - **The phase runner** — neither trait — resolves keys, records provenance, applies the
-  blocking rule, and lists what was not evaluated.
+  blocking rule, compares each proof's own times with the clock, and lists what was not
+  evaluated.
 
 ### Who computes the signed bytes
 
@@ -582,7 +589,7 @@ prototype's name where it differs:
 | `reveals` | every path shown in cleartext or hashed (§7); the prototype had a boolean, `unsafe_cleartext` |
 | `input` | byte length, nesting depth of the decoded payload, detected format |
 | `phases` | per phase: outcome, what blocked it if not reached, and each kind of finding once, by code |
-| `proofs` | per proof: suite, declared algorithm, outcome, key provenance — present for failed verification too |
+| `proofs` | per proof: suite, declared algorithm, outcome, key provenance, and the proof's validity against its own times — present for failed verification too |
 | `findings` | code, phase, attribution, severity, and typed detail |
 | `not_evaluated` | what was not checked, and why |
 | `contained` | one nested result per credential found inside this one, in the same shape as the enclosing document, each with its own `phases`, `proofs`, `findings` and `not_evaluated`; `[]` for a bare credential |
@@ -706,17 +713,17 @@ A codec vcrd can name but not use fails by name and is attributed to vcrd — RE
 
 ### The provenance record
 
-Shown for example test fixture `embedded-jwk.jwt`, where the credential carries an attacker's 
-key but names a `did:key` issuer for a different key:
+Shown for the fixture `fixtures/embedded-jwk.jwt`, where the credential carries another
+key, which signed it, but names a `did:key` issuer for a different key:
 
 ```json
 "key_provenance": {
   "source": "issuer_identifier",
   "method": "did:key",
-  "thumbprint": "…",
+  "thumbprint": "0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c",
   "credential_key": {
     "location": "header.jwk",
-    "thumbprint": "…",
+    "thumbprint": "_i3gzFWABuHlZnuT9FBtp8CVlJ57CcWpTPwviZ2m1ms",
     "matched": false,
     "verifies_signature": true
   }
@@ -732,21 +739,34 @@ values and their guarantees:
 | `issuer_identifier` | derived from the issuer identifier the credential names; the credential cannot use a different key while naming this issuer | who controls that identifier |
 | `credential_embedded` | a key the credential carries about itself, used only because the caller opted in | anything — it is bound to nothing |
 
-`credential_key` is present whenever the credential offered a key: `matched` says whether
-it is the key used, and `verifies_signature` whether the signature verifies under it. That
-second verification is additional information — it applies the same algorithm policy and
-key-type binding, never affects the verdict or the exit code, and is absent when it cannot
-be attempted. `matched: false` with `verifies_signature: true` is specific evidence of key
-substitution.
+`credential_key` is present whenever the credential offered a public key vcrd can read:
+`matched` says whether it is the key resolution established, and `verifies_signature`
+whether the signature verifies under it. That second verification is additional
+information — it applies the same algorithm policy and key-type binding, never affects
+the verdict or the exit code, and is absent when it cannot be attempted, as for a key type
+vcrd does not implement. `matched: false` with `verifies_signature: true` is specific
+evidence of key substitution.
+
+A carried key unlike the established one is also a warning, `verify.credential_key_mismatch`,
+attributed to the input: RFC 7515 §4.1.3 makes `jwk` the key that signed. When no key was
+established, the carried key is refused: `verify.embedded_key_refused`, attributed to the
+caller's policy (exit 5), since the opt-in that would allow it is the caller's.
+
+Inspect reports a `jwk` that is not a public key vcrd can read (`inspect.jwk_invalid`), one
+whose key type it does not know (`inspect.jwk_kty_unsupported`, a warning attributed to
+vcrd, since a later standard may define the type), and one carrying private-key members
+(`inspect.jwk_private_key`). None of these blocks verify. A symmetric key (`kty: oct`) is
+secret, so it is reported and given no `credential_key`: its thumbprint would be an unsalted
+hash of the secret, and the output is often shared more widely than the input.
 
 | Situation | `source` | `credential_key` |
 |---|---|---|
 | `did:key` issuer only | `issuer_identifier` | — |
 | caller-supplied key set | `caller_supplied` | — |
 | embedded key equals the `did:key` | `issuer_identifier` | `matched: true` |
-| embedded key differs | `issuer_identifier` | `matched: false`, `verifies_signature: true` |
+| embedded key differs, and signed | `issuer_identifier` | `matched: false`, `verifies_signature: true`; the mismatch warning |
 | embedded only, caller opted in | `credential_embedded` | `matched: true` |
-| embedded only, no opt-in | absent | `matched: false`; the refusal is its own finding |
+| embedded only, no opt-in | absent | `matched: false`; the refusal is its own finding, `verify.embedded_key_refused` |
 
 ### Algorithms
 
@@ -763,6 +783,11 @@ substitution.
 - **`none` is always rejected**, and never treated as a policy question.
 - **Unsupported and policy-rejected are evaluated independently**, and both are reported
   when both apply (finding 5).
+- **A critical extension the suite does not implement fails verify**, attributed to vcrd,
+  and the signature is not checked (RFC 7515 §4.1.11). An extension can change what was
+  signed, as RFC 7797's `b64` does, so a check without it would be against the wrong
+  bytes. The suite implements none yet. Whether `crit` itself is well-formed is inspect's
+  question.
 - **The resolved key's type must match the algorithm's.** Otherwise the result is a
   key-type mismatch attributed to the input. This is the defense against algorithm
   confusion: a token HMAC-signed with the issuer's public key is rejected here, not as an
@@ -775,7 +800,7 @@ its own finding. The criteria, checked at resolution:
 
 | Algorithm | Criterion | Enforced by the crate? |
 |---|---|---|
-| EdDSA | a small-order public key is weak (`VerifyingKey::is_weak`); `verify_strict` also rejects a small-order signature point | no — vcrd must check (finding 5) |
+| EdDSA | a small-order public key is weak (`VerifyingKey::is_weak`); `verify_strict` also rejects a small-order signature point R, which vcrd checks first so that the finding names it (`verify.signature_small_order`) | no — vcrd must check |
 | ES256, ES512 | the identity point is rejected; P-256 and P-521 have cofactor 1, so no other point has small order | yes — decoding rejects the identity (`elliptic-curve-0.13.8/src/public_key.rs:232`) |
 | RS256 | modulus of at least 2048 bits (RFC 7518 §3.3, a MUST); odd exponent of at least 3 | partly — `RsaPublicKey::new` rejects even and out-of-range exponents, but sets no minimum modulus (`rsa-0.9.10/src/key.rs:501–533`) |
 | HS256 | key of at least 256 bits (RFC 7518 §3.2, a MUST) | no |
@@ -790,8 +815,8 @@ mechanism and its status:
 | Threat | Mechanism | Section | Status |
 |---|---|---|---|
 | false "verified" through algorithm confusion | caller allowlist; `none` always rejected; algorithm bound to key type | §8 | designed; tested in the prototype |
-| false "verified" through key substitution | resolution precedence; provenance, including whether the credential's own key verifies | §8 | designed; tested in the prototype except `verifies_signature` |
-| false "verified" through a weak key | per-algorithm criteria at resolution; strict verification | §8 | designed; not in the prototype |
+| false "verified" through key substitution | resolution precedence; provenance, including whether the credential's own key verifies | §8 | implemented for `did:key` and an embedded JWK; tested by `fixtures/embedded-jwk.jwt` and `embedded-jwk-only.jwt` |
+| false "verified" through a weak key | per-algorithm criteria at resolution; strict verification | §8 | implemented for EdDSA; tested by `fixtures/weak-key.jwt` and `small-order-r.jwt` |
 | false assurance from checks not performed | `not_evaluated` in every result | §3, §6 | designed; in the prototype |
 | verification steered to fetch key material from an attacker-chosen location | the blocking rule stops verify on a dangerous inspect failure | §4 | designed; no case implemented |
 | crash or exploit through malformed input | limits before JSON parsing; no panics; no `unsafe` (REQUIREMENTS §6) | §4 | designed; the prototype's limits were misordered |

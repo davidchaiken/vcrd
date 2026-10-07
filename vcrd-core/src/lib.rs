@@ -29,15 +29,15 @@ mod vcdm;
 pub use context::SystemClock;
 pub use context::{Clock, Context, ContextBuilder, FixedClock, Limits};
 pub use document::{
-    ContainedInput, ContextEntry, DateTimeProblem, Document, DocumentKind, KeyHints, Leaf,
-    LeafClass, ProofDescriptor, ProofMaterial, Timestamp,
+    ContainedInput, ContextEntry, DateTimeProblem, Document, DocumentKind, EmbeddedKey, KeyHints,
+    Leaf, LeafClass, NumericDate, ProofDescriptor, ProofMaterial, ProofTime, ProofTimes, Timestamp,
 };
 pub use finding::{
     Attribution, Base64urlProblem, CritProblem, DateField, DidKeyProblem, Finding, FindingDetail,
-    IssLocation, IssuerProblem, JwsJsonSyntax, JwsSegment, KeySourceKind, Severity,
+    IssLocation, IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment, KeySourceKind, Severity,
 };
 pub use json::{DuplicateName, Json, Member, nesting_depth};
-pub use keys::{CredentialKey, KeyProvenance, KeySource, PublicKey};
+pub use keys::{CredentialKey, Jwk, KeyProvenance, KeySource, PublicKey};
 pub use redact::{
     ClaimValue, Designations, Rendered, RenderedLeaf, Reveal, Revealed, Treatment, ValueKind,
     render,

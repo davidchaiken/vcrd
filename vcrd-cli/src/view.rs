@@ -11,7 +11,7 @@ use time::format_description::well_known::Rfc3339;
 use vcrd_core::{
     Attribution, Base64urlProblem, BlockReason, Check, Context, CritProblem, DateField,
     DidKeyProblem, Document, DocumentKind, Finding, FindingDetail, FormatDetail, IssLocation,
-    IssuerProblem, JwsJsonSyntax, JwsSegment, KeySourceKind, LeafClass, Missing,
+    IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment, KeySourceKind, LeafClass, Missing,
     NotEvaluatedReason, Phase, PhaseOutcome, ProofOutcome, Rendered, Report, Revealed, Severity,
     Validity, render,
 };
@@ -107,6 +107,10 @@ pub struct ProofView {
     pub algorithm: Option<String>,
     pub outcome: &'static str,
     pub key_provenance: ProvenanceView,
+    /// The clock against the proof's own times, such as a JWT's `nbf` and `exp`.
+    /// Absent when verify did not run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub validity: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -369,6 +373,7 @@ fn proofs(report: &Report) -> Vec<ProofView> {
                         }
                     }),
                 },
+                validity: Some(validity_name(p.validity)),
             })
             .collect();
     }
@@ -386,6 +391,7 @@ fn proofs(report: &Report) -> Vec<ProofView> {
                     thumbprint: None,
                     credential_key: None,
                 },
+                validity: None,
             })
             .collect()
     })
@@ -488,6 +494,18 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
         }),
         FindingDetail::CritInvalid { problem } => {
             json!({"type": "crit_invalid", "problem": crit_problem(problem)})
+        }
+        FindingDetail::JwkInvalid { problem } => {
+            json!({"type": "jwk_invalid", "problem": jwk_problem(problem)})
+        }
+        FindingDetail::JwkKtyUnsupported { kty } => {
+            json!({"type": "jwk_kty_unsupported", "kty": kty})
+        }
+        FindingDetail::JwkPrivateKey { members } => {
+            json!({"type": "jwk_private_key", "members": members})
+        }
+        FindingDetail::NumericDateInvalid { claim } => {
+            json!({"type": "numeric_date_invalid", "claim": claim})
         }
         FindingDetail::ContextMissing => json!({"type": "context_missing"}),
         FindingDetail::ContextFirstInvalid { found } => {
@@ -641,6 +659,35 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
         FindingDetail::SignatureInvalid { algorithm } => {
             json!({"type": "signature_invalid", "algorithm": algorithm})
         }
+        FindingDetail::SignatureSmallOrder { algorithm } => {
+            json!({"type": "signature_small_order", "algorithm": algorithm})
+        }
+        FindingDetail::CritUnsupported {
+            extensions,
+            supported,
+        } => json!({
+            "type": "crit_unsupported",
+            "extensions": extensions,
+            "supported": supported,
+        }),
+        FindingDetail::ProofExpired {
+            claim,
+            value,
+            now,
+            skew_seconds,
+        } => proof_time("proof_expired", claim, value, *now, *skew_seconds),
+        FindingDetail::ProofNotYetValid {
+            claim,
+            value,
+            now,
+            skew_seconds,
+        } => proof_time("proof_not_yet_valid", claim, value, *now, *skew_seconds),
+        FindingDetail::ProofIssuedInFuture {
+            claim,
+            value,
+            now,
+            skew_seconds,
+        } => proof_time("proof_issued_in_future", claim, value, *now, *skew_seconds),
         FindingDetail::NoKeyMaterial { consulted } => json!({
             "type": "no_key_material",
             "consulted": consulted.iter().map(|k| key_source_kind(*k)).collect::<Vec<_>>(),
@@ -659,7 +706,38 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
         FindingDetail::WeakKey { thumbprint } => {
             json!({"type": "weak_key", "thumbprint": thumbprint})
         }
+        FindingDetail::EmbeddedKeyRefused { location } => {
+            json!({"type": "embedded_key_refused", "location": location})
+        }
+        FindingDetail::CredentialKeyMismatch {
+            location,
+            credential_key,
+            key,
+        } => json!({
+            "type": "credential_key_mismatch",
+            "location": location,
+            "credential_key": credential_key,
+            "key": key,
+        }),
     }
+}
+
+/// A proof's time and the clock it was compared with. `value` is the JSON number as
+/// written.
+fn proof_time(
+    kind: &str,
+    claim: &str,
+    value: &str,
+    now: OffsetDateTime,
+    skew_seconds: u64,
+) -> Value {
+    json!({
+        "type": kind,
+        "claim": claim,
+        "value": serde_json::from_str::<Value>(value).unwrap_or(Value::Null),
+        "now": rfc3339(now),
+        "skew_seconds": skew_seconds,
+    })
 }
 
 fn jws_segment(segment: JwsSegment) -> &'static str {
@@ -685,6 +763,18 @@ fn crit_problem(problem: &CritProblem) -> Value {
         CritProblem::Duplicate { name } => json!({"duplicate": name}),
         CritProblem::Registered { name } => json!({"registered": name}),
         CritProblem::NotInHeader { name } => json!({"not_in_header": name}),
+    }
+}
+
+fn jwk_problem(problem: &JwkProblem) -> Value {
+    match problem {
+        JwkProblem::NotObject => json!("not_object"),
+        JwkProblem::KtyMissing => json!("kty_missing"),
+        JwkProblem::Symmetric => json!("symmetric"),
+        // Reported as `jwk_kty_unsupported`; kept here so that the mapping is total.
+        JwkProblem::KtyUnknown { kty } => json!({"kty_unknown": kty}),
+        JwkProblem::MemberMissing { member } => json!({"member_missing": member}),
+        JwkProblem::KeyInvalid => json!("key_invalid"),
     }
 }
 
@@ -783,15 +873,19 @@ fn credential(
             .valid_until
             .as_ref()
             .and_then(|t| t.lexical.clone()),
-        validity: validity.map(|v| match v {
-            Validity::Current => "current",
-            Validity::Expired => "expired",
-            Validity::NotYetValid => "not_yet_valid",
-            Validity::Unbounded => "unbounded",
-            Validity::Unknown => "unknown",
-        }),
+        validity: validity.map(validity_name),
         metadata: of_class(LeafClass::Metadata),
         claims: of_class(LeafClass::Claim),
+    }
+}
+
+fn validity_name(validity: Validity) -> &'static str {
+    match validity {
+        Validity::Current => "current",
+        Validity::Expired => "expired",
+        Validity::NotYetValid => "not_yet_valid",
+        Validity::Unbounded => "unbounded",
+        Validity::Unknown => "unknown",
     }
 }
 

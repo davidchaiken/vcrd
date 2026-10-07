@@ -123,6 +123,18 @@ pub enum FindingDetail {
     },
     /// `crit` (Critical) breaks one of RFC 7515 §4.1.11's rules for its value.
     CritInvalid { problem: CritProblem },
+    /// The header's `jwk` is not a public key in a form RFC 7517, RFC 7518 §6 and
+    /// RFC 8037 §2 define; `problem` says how. It does not block verify, which takes
+    /// the issuer's key from elsewhere.
+    JwkInvalid { problem: JwkProblem },
+    /// The header's `jwk` has a key type vcrd cannot read, so it has no thumbprint
+    /// to compare. Attributed to vcrd; a warning.
+    JwkKtyUnsupported { kty: String },
+    /// The header's `jwk` carries private-key members, which a public key does not
+    /// (RFC 7515 §4.1.3): whoever has the credential has the private key.
+    JwkPrivateKey { members: Vec<&'static str> },
+    /// `exp`, `nbf` or `iat` is not a number, which RFC 7519 §4.1.4–4.1.6 require.
+    NumericDateInvalid { claim: &'static str },
 
     // Inspect: VCDM 2.0 (the Verifiable Credentials Data Model).
     /// No `@context` (VCDM 2.0 §4.3).
@@ -267,6 +279,40 @@ pub enum FindingDetail {
     },
     /// The signature does not verify under the resolved key.
     SignatureInvalid { algorithm: &'static str },
+    /// The R of an Ed25519 signature has small order. A verifier that checks only
+    /// [s]B = R + [k]A can accept such a signature; vcrd rejects it (ARCHITECTURE §8).
+    SignatureSmallOrder { algorithm: &'static str },
+    /// `crit` lists extensions the suite does not implement, so the JWS is invalid
+    /// (RFC 7515 §4.1.11). The signature is not checked, since an extension can change
+    /// what was signed. Attributed to vcrd.
+    CritUnsupported {
+        extensions: Vec<String>,
+        supported: Vec<&'static str>,
+    },
+    /// `exp` is not later than the clock, less the skew (RFC 7519 §4.1.4): the proof
+    /// has expired, whatever the credential's validity period says.
+    ProofExpired {
+        claim: &'static str,
+        /// The JSON number as written.
+        value: String,
+        now: OffsetDateTime,
+        skew_seconds: u64,
+    },
+    /// `nbf` is later than the clock, plus the skew (RFC 7519 §4.1.5).
+    ProofNotYetValid {
+        claim: &'static str,
+        value: String,
+        now: OffsetDateTime,
+        skew_seconds: u64,
+    },
+    /// `iat` is later than the clock, plus the skew. RFC 7519 §4.1.6 sets no rule for
+    /// it, so this is a warning.
+    ProofIssuedInFuture {
+        claim: &'static str,
+        value: String,
+        now: OffsetDateTime,
+        skew_seconds: u64,
+    },
     /// No key material was found; `consulted` lists where vcrd looked (ARCHITECTURE §8).
     NoKeyMaterial { consulted: Vec<KeySourceKind> },
     /// The issuer identifier uses a scheme or DID method vcrd cannot resolve.
@@ -280,6 +326,20 @@ pub enum FindingDetail {
     },
     /// The key cannot bind a signature to a message (REQUIREMENTS §10).
     WeakKey { thumbprint: String },
+    /// The only key on offer is one the credential carries about itself, which vcrd
+    /// uses only on the caller's opt-in (REQUIREMENTS §10). Attributed to caller
+    /// policy.
+    EmbeddedKeyRefused { location: &'static str },
+    /// The key the credential carries about itself is not the key derived from its
+    /// issuer, though RFC 7515 §4.1.3 makes `jwk` the key that signed. A warning:
+    /// it never changes which key is used (ARCHITECTURE §8).
+    CredentialKeyMismatch {
+        location: &'static str,
+        /// The carried key's RFC 7638 thumbprint.
+        credential_key: String,
+        /// The thumbprint of the key derived from the issuer.
+        key: String,
+    },
 }
 
 impl FindingDetail {
@@ -299,6 +359,10 @@ impl FindingDetail {
             FindingDetail::JsonNotObject { .. } => "parse.json_not_object",
             FindingDetail::DuplicateName { .. } => "inspect.duplicate_name",
             FindingDetail::CritInvalid { .. } => "inspect.crit_invalid",
+            FindingDetail::JwkInvalid { .. } => "inspect.jwk_invalid",
+            FindingDetail::JwkKtyUnsupported { .. } => "inspect.jwk_kty_unsupported",
+            FindingDetail::JwkPrivateKey { .. } => "inspect.jwk_private_key",
+            FindingDetail::NumericDateInvalid { .. } => "inspect.numeric_date_invalid",
             FindingDetail::ContextMissing => "inspect.context_missing",
             FindingDetail::ContextFirstInvalid { .. } => "inspect.context_first_invalid",
             FindingDetail::ContextEntryInvalid { .. } => "inspect.context_entry_invalid",
@@ -341,11 +405,18 @@ impl FindingDetail {
             FindingDetail::AlgorithmUnsupported { .. } => "verify.algorithm_unsupported",
             FindingDetail::SignatureLength { .. } => "verify.signature_length",
             FindingDetail::SignatureInvalid { .. } => "verify.signature_invalid",
+            FindingDetail::SignatureSmallOrder { .. } => "verify.signature_small_order",
+            FindingDetail::CritUnsupported { .. } => "verify.crit_unsupported",
+            FindingDetail::ProofExpired { .. } => "verify.proof_expired",
+            FindingDetail::ProofNotYetValid { .. } => "verify.proof_not_yet_valid",
+            FindingDetail::ProofIssuedInFuture { .. } => "verify.proof_issued_in_future",
             FindingDetail::NoKeyMaterial { .. } => "verify.no_key_material",
             FindingDetail::IssuerMethodUnsupported { .. } => "verify.issuer_method_unsupported",
             FindingDetail::DidKeyUndecodable { .. } => "verify.did_key_undecodable",
             FindingDetail::DidKeyCodecUnsupported { .. } => "verify.did_key_codec_unsupported",
             FindingDetail::WeakKey { .. } => "verify.weak_key",
+            FindingDetail::EmbeddedKeyRefused { .. } => "verify.embedded_key_refused",
+            FindingDetail::CredentialKeyMismatch { .. } => "verify.credential_key_mismatch",
         }
     }
 }
@@ -403,6 +474,27 @@ pub enum CritProblem {
     Registered { name: String },
     /// A name that is not a member of the header.
     NotInHeader { name: String },
+}
+
+/// Why a `jwk` is not a public key vcrd can read (RFC 7517 §4; RFC 7518 §6; RFC 8037
+/// §2; RFC 7638 §3.2).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum JwkProblem {
+    /// Not a JSON object.
+    NotObject,
+    /// No `kty`, or one that is not a string.
+    KtyMissing,
+    /// `kty` is `oct`: a symmetric key, which is secret, where RFC 7515 §4.1.3
+    /// requires a public key.
+    Symmetric,
+    /// A key type vcrd does not know. Reported as [`FindingDetail::JwkKtyUnsupported`],
+    /// attributed to vcrd, not as an invalid key.
+    KtyUnknown { kty: String },
+    /// A member the key type requires, and its thumbprint covers, is absent or not a
+    /// string.
+    MemberMissing { member: &'static str },
+    /// An Ed25519 key's `x` is not 32 bytes of strict base64url, or not a point.
+    KeyInvalid,
 }
 
 /// Why `issuer` is not an issuer identifier (VCDM 2.0 §4.7).

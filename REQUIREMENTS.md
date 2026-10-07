@@ -1225,6 +1225,18 @@ checked for such conflicts when the standard comes into scope (§11).
   - `x5c` (X.509 Certificate Chain), `x5t` and `x5t#S256` (X.509 certificate SHA-1 and
     SHA-256 thumbprints) — certificates for the signing key.
 - **JWK** — JSON Web Key.
+- **JWK member names** — the members of a JWK, defined in RFC 7517 §4 and, for each key
+  type, RFC 7518 §6 and RFC 8037 §2:
+  - `kty` (Key Type) — `EC` (elliptic curve), `RSA`, `oct` (a symmetric key) or `OKP`
+    (Octet Key Pair, such as an Ed25519 key).
+  - `crv` (Curve), `x` and `y` — an elliptic-curve public key; an OKP key has `crv` and
+    `x` only.
+  - `n` (Modulus) and `e` (Exponent) — an RSA public key.
+  - `d`, and for RSA also `p`, `q`, `dp`, `dq`, `qi` and `oth` — private-key members,
+    which a public key does not carry.
+  - `k` (Key Value) — an `oct` key, which is secret.
+- **JWK Thumbprint** — the SHA-256 hash of a JWK's required members in a canonical form
+  (RFC 7638). vcrd names and compares keys by it.
 - **JWS** — JSON Web Signature.
 - **JWT** — JSON Web Token.
 - **JWT claim names** — the registered members of a JWT's payload, defined in RFC 7519

@@ -22,6 +22,7 @@ std-clock = []
 
 [dependencies]
 base64.workspace = true
+curve25519-dalek.workspace = true
 ed25519-dalek.workspace = true
 bs58.workspace = true
 regex.workspace = true
@@ -53,3 +54,8 @@ required-features = ["vc-jose"]
 [[test]]
 name = "inspect"
 required-features = ["vc-jose"]
+
+# Needs a format and a suite.
+[[test]]
+name = "verify"
+required-features = ["vc-jose", "jws"]
