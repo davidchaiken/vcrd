@@ -1,11 +1,12 @@
 # The CI jobs. Each job in .github/workflows/ci.yml runs one of these targets,
 # so the commands and tool versions live only here.
 #
-#   make ci-ok          the four jobs ci-ok requires, in order, stopping at the
-#                       first failure
+#   make ci-ok          the jobs ci-ok requires except test-powerset, in order,
+#                       stopping at the first failure
 #   make -k ci-ok       the same, but running every job and reporting each failure
 #   make latest-stable  the non-blocking job, on the latest stable toolchain
-#   make test-powerset  the weekly job: every combination of vcrd-core's features
+#   make test-powerset  every combination of vcrd-core's features: required in CI,
+#                       left out of make ci-ok
 #   make clean          our crates' build output; dependencies and tools stay
 #   make clean-build    all build output, lints-fire's included; tools stay
 #   make clean-all      everything, the tools included
@@ -28,15 +29,16 @@ help:
 	@echo "make -k ci-ok       the same, continuing past failures"
 	@echo "make fmt | test | lints-fire | supply-chain    one job"
 	@echo "make latest-stable  the non-blocking job, on the latest stable toolchain"
-	@echo "make test-powerset  every combination of vcrd-core's features (weekly in CI)"
+	@echo "make test-powerset  every combination of vcrd-core's features (CI requires it; ci-ok here does not run it)"
 	@echo "make tools-hack | tools-supply-chain    build the tools into $(TOOLS)"
 	@echo "make clean          our crates' build output; dependencies and tools stay"
 	@echo "make clean-build    all build output, lints-fire's included; tools stay"
 	@echo "make clean-all      everything, the tools included"
 
-# Keep equal to the needs of the ci-ok job in ci.yml.
+# Keep equal to the needs of the ci-ok job in ci.yml, less test-powerset: locally,
+# the supported builds are enough, and `make test-powerset` runs the rest on demand.
 ci-ok: fmt test lints-fire supply-chain
-	@echo "ci-ok: every required job passed"
+	@echo "ci-ok: every required job passed; CI also requires test-powerset"
 
 fmt:
 	cargo fmt --all --check

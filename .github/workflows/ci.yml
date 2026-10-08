@@ -18,8 +18,8 @@ on:
     branches: [main]
   schedule:
     # Weekly, so that a new RustSec advisory against an unchanged Cargo.lock is
-    # noticed without waiting for the next pull request, and to run the
-    # test-powerset job. A failure is emailed to whoever last changed this line.
+    # noticed without waiting for the next pull request. A failure is emailed to
+    # whoever last changed this line.
     - cron: "23 6 * * 1"
   workflow_dispatch:
 
@@ -156,12 +156,12 @@ jobs:
         run: make latest-stable
 
   test-powerset:
-    # Every combination of vcrd-core's features, weekly and on demand: the check
-    # that ARCHITECTURE §2's rules hold, which lets every change test only the
-    # supported builds. Linux only, to keep the weekly cost down; macOS runs the
-    # supported builds on every change. ci-ok does not wait for it.
+    # Every combination of vcrd-core's features, on every change: the check that
+    # ARCHITECTURE §2's rules hold. Linux only; macOS runs the supported builds.
+    # ci-ok waits for it, but `make ci-ok` leaves it out (see the Makefile). The
+    # number of combinations doubles with each feature: if the job grows slow,
+    # return it to the weekly schedule and take it out of ci-ok's needs.
     name: test (every feature combination)
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -182,10 +182,11 @@ jobs:
     # The one status check the main ruleset requires. GitHub reports a job that
     # was skipped because a job it needs failed as successful, which would let a
     # required check pass; hence if: always() and a test of every result.
-    # `make ci-ok` is the local equivalent; keep its prerequisites equal to needs.
+    # `make ci-ok` is the local equivalent; keep its prerequisites equal to needs,
+    # less test-powerset.
     name: ci-ok
     if: always()
-    needs: [fmt, test, lints-fire, supply-chain]
+    needs: [fmt, test, lints-fire, supply-chain, test-powerset]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

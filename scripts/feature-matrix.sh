@@ -2,7 +2,8 @@
 # Lints, checks and tests the supported feature builds (ARCHITECTURE §2;
 # REQUIREMENTS §13), then checks that vcrd-cli refuses to build with no format or
 # no proof suite. With --powerset, vcrd-core runs in every combination of its
-# features instead: the weekly check that ARCHITECTURE §2's rules hold.
+# features instead: the check that ARCHITECTURE §2's rules hold, which CI runs on
+# every change and `make ci-ok` leaves out.
 #
 # vcrd-core's builds come from cargo-hack, which reads the features from
 # vcrd-core/Cargo.toml. --each-feature is: no features, each feature alone, the

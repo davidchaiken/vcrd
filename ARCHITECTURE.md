@@ -136,8 +136,11 @@ rather than exponential:
 - **`vcrd-cli` supports its default features.** The builds with no format and with no
   proof suite must fail, and CI checks that they do.
 
-Every combination of `vcrd-core`'s features runs weekly and on demand (`make
-test-powerset`), as the check that these rules hold; it does not block a merge.
+Every combination of `vcrd-core`'s features (`make test-powerset`) runs in CI on every
+change, as the check that these rules hold, and a merge waits for it (decided
+2026-10-07). `make ci-ok` leaves it out, so a local run tests the supported builds only.
+The combinations double with each feature; if the job grows slow, it returns to a weekly
+run that does not block a merge.
 
 ## 3. Data structures
 
