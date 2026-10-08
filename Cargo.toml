@@ -29,6 +29,10 @@ base64 = { version = "0.23", default-features = false, features = ["std"] }
 # did:key identifiers: base58btc only (the multibase `z` prefix).
 bs58 = "0.5"
 clap = { version = "4.6", features = ["derive"] }
+# Whether an Ed25519 signature's R has small order, which ed25519-dalek rejects
+# without saying why (ARCHITECTURE §8). Already a dependency of ed25519-dalek;
+# default-features = false enables none of its features beyond what that does.
+curve25519-dalek = { version = "5.0", default-features = false }
 ed25519-dalek = "3.0"
 # Lexical checks against the grammars standards publish, such as XML Schema's
 # dateTimeStamp. The patterns are ASCII, so the default Unicode tables are left out.

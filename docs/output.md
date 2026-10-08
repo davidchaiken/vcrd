@@ -58,7 +58,7 @@ A failed phase does not stop the next one unless running it is impossible or dan
 | `missing` | Meaning |
 |---|---|
 | `document` | Parsing failed, so there is nothing to inspect or verify. |
-| `key_material` | No key can be found to check the signature with. The credential names no usable issuer identifier (no `issuer`, or one that is not a URL, or an encoding vcrd does not read), and no other source of keys is available. |
+| `key_material` | No key can be found to check the signature with. The credential names no usable issuer identifier (no `issuer`, or one that is not a URL, or an encoding vcrd does not read), and no other source of keys is available. A credential that carries a key about itself is not blocked: verify runs and reports that it refused that key (`verify.embedded_key_refused`). |
 
 | `consulted` value | The source |
 |---|---|
@@ -67,6 +67,27 @@ A failed phase does not stop the next one unless running it is impossible or dan
 | `credential_embedded` | a key the credential carries about itself, which vcrd uses only if the caller opts in (not available yet) |
 
 The list may gain values; a consumer should accept values it does not recognize.
+
+## `proofs`
+
+One object for each proof the input carries, whether or not verify ran:
+
+| Key | Present | Value |
+|---|---|---|
+| `suite` | always | the proof suite, such as `jws` |
+| `algorithm` | always | the algorithm the input declares, which vcrd checks and never obeys; `null` when there is none |
+| `outcome` | always | whether the signature verifies under the key vcrd accepted: `verified`, `failed`, or `not_attempted` (no key was accepted, or the algorithm was refused; the findings say which) |
+| `key_provenance` | always | where the key came from, and any key the credential carries about itself, with `matched` and `verifies_signature` ([ARCHITECTURE.md §8](../ARCHITECTURE.md)); empty when verify did not run |
+| `validity` | when verify ran | where the clock falls relative to the proof's own times: `current`, `expired`, `not_yet_valid`, `unbounded` (no times) or `unknown` (a time that is not a number). For a JWT these are `nbf` and `exp`, the times of the signature, separate from the credential's own validity period in `credential.validity` |
+
+A signature can verify and still have expired: `outcome` and `validity` are independent.
+
+When the credential carries a key about itself, such as a JWS header's `jwk`,
+`key_provenance.credential_key` describes it. Its `verifies_signature` says whether the
+signature verifies under that key, which vcrd checks for information whether or not it
+accepts the key; `outcome` is unaffected. `outcome: not_attempted` with
+`verifies_signature: true` means that the signature is sound under a key vcrd refused to
+rely on (REQUIREMENTS §10).
 
 ## `findings`
 
@@ -159,6 +180,74 @@ vcrd verify fixtures/issuer-missing.jwt --now 2026-10-01T00:00:00Z | jq '{status
       "severity": "error",
       "detail": { "type": "issuer_missing" }
     }
+  ]
+}
+```
+
+A signature that has expired while the credential has not: the JWT's `exp` is earlier than
+the clock, and `validUntil` is later. Inspect passes and the signature verifies; the
+proof's `validity` is `expired`, and verify fails.
+
+```bash
+vcrd verify fixtures/exp-past.jwt --now 2026-10-01T00:00:00Z | jq '{status, exit_code, credential: .credential.validity, proofs: [.proofs[] | {outcome, validity}], findings: [.findings[] | {code, detail}]}'
+```
+
+```json
+{
+  "status": "verify_failed",
+  "exit_code": 4,
+  "credential": "current",
+  "proofs": [{ "outcome": "verified", "validity": "expired" }],
+  "findings": [
+    {
+      "code": "verify.proof_expired",
+      "detail": {
+        "claim": "exp",
+        "now": "2026-10-01T00:00:00Z",
+        "skew_seconds": 0,
+        "type": "proof_expired",
+        "value": 1780272000,
+        "value_date_time": "2026-06-01T00:00:00Z"
+      }
+    }
+  ]
+}
+```
+
+`value` is `exp` as written, in seconds since 1970-01-01T00:00:00Z; `value_date_time` is
+the same instant, `null` if it is outside the years -9999 to 9999.
+
+A credential with no `issuer` that carries its signer's key in the header's `jwk`. With no
+key from the issuer, vcrd refuses the carried one, so `outcome` is `not_attempted` and
+verify fails, attributed to the caller's policy. `verifies_signature: true` says the
+signature is sound under the refused key: the credential was signed by whoever holds that
+key, which is all a key the credential asserts about itself can show. `matched: false`
+because there is no other key to match.
+
+```bash
+vcrd verify fixtures/embedded-jwk-only.jwt --now 2026-10-01T00:00:00Z | jq '{status, exit_code, proofs: [.proofs[] | {outcome, key_provenance}], findings: [.findings[] | {code, attribution}]}'
+```
+
+```json
+{
+  "status": "inspect_failed",
+  "exit_code": 5,
+  "proofs": [
+    {
+      "outcome": "not_attempted",
+      "key_provenance": {
+        "credential_key": {
+          "location": "header.jwk",
+          "thumbprint": "0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c",
+          "matched": false,
+          "verifies_signature": true
+        }
+      }
+    }
+  ],
+  "findings": [
+    { "code": "inspect.issuer_missing", "attribution": "input" },
+    { "code": "verify.embedded_key_refused", "attribution": "policy" }
   ]
 }
 ```

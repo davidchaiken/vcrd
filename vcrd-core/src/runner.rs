@@ -2,14 +2,14 @@
 //! dispatches proofs to suites, and lists what was not evaluated.
 
 use crate::context::Context;
-use crate::document::ProofMaterial;
-use crate::finding::{Attribution, Finding, FindingDetail, KeySourceKind};
-use crate::keys;
+use crate::document::{ProofDescriptor, ProofMaterial, ProofTime, ProofTimes};
+use crate::finding::{Attribution, Finding, FindingDetail, KeySourceKind, Severity};
+use crate::keys::{self, PublicKey};
 use crate::registry::{CredentialFormat, Detection, ProofInput, Registry};
 use crate::report::{
     BlockReason, Blocked, Check, InputSummary, InspectOutput, Missing, NotEvaluated,
     NotEvaluatedReason, ParseOutput, Phase, PhaseOutcome, ProofOutcome, ProofResult, Report,
-    VerifyOutput,
+    Validity, VerifyOutput,
 };
 
 pub(crate) fn run(bytes: &[u8], ctx: &Context, registry: &Registry, last: Phase) -> Report {
@@ -65,7 +65,7 @@ pub(crate) fn run(bytes: &[u8], ctx: &Context, registry: &Registry, last: Phase)
             let inspect = format.inspect(output, ctx);
             let verify = if last < Phase::Verify {
                 PhaseOutcome::NotRequested
-            } else if let Some(blocked) = blocked_by_inspect(&inspect) {
+            } else if let Some(blocked) = blocked_by_inspect(&inspect, output) {
                 PhaseOutcome::NotReached(blocked)
             } else {
                 verify_proofs(output, ctx, registry)
@@ -109,10 +109,23 @@ pub(crate) fn run(bytes: &[u8], ctx: &Context, registry: &Registry, last: Phase)
 
 /// REQUIREMENTS §4's blocking rule for inspect: verify is impossible when the input
 /// names no usable issuer identifier and no other source of key material remains.
-/// Milestone 1 has no other source; milestone 2's caller-supplied keys are consulted
-/// here, which is why the runner decides and not the format (ARCHITECTURE §4).
-fn blocked_by_inspect(inspect: &PhaseOutcome<InspectOutput>) -> Option<Blocked> {
+/// Milestone 2's caller-supplied keys are consulted here, which is why the runner
+/// decides and not the format (ARCHITECTURE §4).
+fn blocked_by_inspect(
+    inspect: &PhaseOutcome<InspectOutput>,
+    parsed: &ParseOutput,
+) -> Option<Blocked> {
     if !inspect.output()?.no_issuer_identifier {
+        return None;
+    }
+    // A key the credential carries is a source, though one refused without the
+    // caller's opt-in: verify runs, so that the refusal is reported rather than
+    // treated as "no key material" (REQUIREMENTS §10).
+    let carries_key = parsed
+        .document
+        .as_ref()
+        .is_some_and(|d| d.proofs.iter().any(|p| p.key_hints.embedded.is_some()));
+    if carries_key {
         return None;
     }
     Some(Blocked {
@@ -158,8 +171,8 @@ fn verify_proofs(
     }
     let mut proofs = Vec::with_capacity(descriptors.len());
     for descriptor in descriptors {
-        let resolution = keys::resolve(&descriptor.key_hints);
-        findings.extend(resolution.findings);
+        let mut resolution = keys::resolve(&descriptor.key_hints);
+        findings.append(&mut resolution.findings);
         let outcome = match registry.suite(descriptor.suite) {
             None => {
                 findings.push(Finding::error(
@@ -172,28 +185,131 @@ fn verify_proofs(
                 ProofOutcome::NotAttempted
             }
             Some(suite) => {
-                let input = match &descriptor.material {
-                    ProofMaterial::Jws {
-                        signing_input,
-                        signature,
-                    } => ProofInput::Jws {
-                        algorithm: descriptor.algorithm.as_deref(),
-                        signing_input,
-                        signature,
-                        key: resolution.key.as_ref(),
-                    },
-                };
+                let input = proof_input(descriptor, resolution.key.as_ref());
                 let (outcome, suite_findings) = suite.verify(&input, ctx);
                 findings.extend(suite_findings);
+                // Additional information, under the same rules: it never changes the
+                // verdict or the exit code (ARCHITECTURE §8).
+                if let (Some(credential_key), Some(key)) = (
+                    resolution.provenance.credential_key.as_mut(),
+                    resolution.credential_key.as_ref(),
+                ) {
+                    let (outcome, _) = suite.verify(&proof_input(descriptor, Some(key)), ctx);
+                    credential_key.verifies_signature = match outcome {
+                        ProofOutcome::Verified { .. } => Some(true),
+                        ProofOutcome::Failed => Some(false),
+                        ProofOutcome::NotAttempted => None,
+                    };
+                }
                 outcome
             }
         };
+        let validity = proof_validity(&descriptor.times, ctx, &mut findings);
         proofs.push(ProofResult {
             suite: descriptor.suite,
             algorithm: descriptor.algorithm.clone(),
             outcome,
             key_provenance: resolution.provenance,
+            validity,
         });
     }
     PhaseOutcome::from_findings(VerifyOutput { proofs }, findings)
+}
+
+fn proof_input<'a>(descriptor: &'a ProofDescriptor, key: Option<&'a PublicKey>) -> ProofInput<'a> {
+    match &descriptor.material {
+        ProofMaterial::Jws {
+            signing_input,
+            signature,
+            critical,
+        } => ProofInput::Jws {
+            algorithm: descriptor.algorithm.as_deref(),
+            signing_input,
+            signature,
+            critical,
+            key,
+        },
+    }
+}
+
+/// The proof's own times against the clock and skew (RFC 7519 §4.1.4–4.1.6), in the
+/// verify phase because they are the signature's, not the credential's (VC-JOSE-COSE
+/// §3.1.3). Mirrors the credential's validity period: a bound that is not a number
+/// leaves it unknown, and not yet valid is reported before expired.
+fn proof_validity(times: &ProofTimes, ctx: &Context, findings: &mut Vec<Finding>) -> Validity {
+    let now = ctx.now();
+    let skew_seconds = ctx.clock_skew().as_secs();
+    let skew = ctx.clock_skew().as_secs_f64();
+    // Seconds as a float: a NumericDate may have a fraction, and may lie beyond the
+    // years a date can represent (RFC 7519 §2).
+    let now_seconds = now.unix_timestamp() as f64 + f64::from(now.nanosecond()) / 1e9;
+    let read = |time: &Option<ProofTime>| match time {
+        None => Ok(None),
+        Some(ProofTime {
+            claim,
+            value: Some(date),
+        }) => Ok(Some((
+            *claim,
+            date.text.clone(),
+            date.date_time,
+            date.seconds,
+        ))),
+        Some(ProofTime { value: None, .. }) => Err(()),
+    };
+    if let Ok(Some((claim, value, value_date_time, seconds))) = read(&times.issued_at)
+        && seconds > now_seconds + skew
+    {
+        findings.push(Finding::new(
+            Phase::Verify,
+            Attribution::Input,
+            Severity::Warning,
+            FindingDetail::ProofIssuedInFuture {
+                claim,
+                value,
+                value_date_time,
+                now,
+                skew_seconds,
+            },
+        ));
+    }
+    let (Ok(not_before), Ok(expires)) = (read(&times.not_before), read(&times.expires)) else {
+        return Validity::Unknown;
+    };
+    if not_before.is_none() && expires.is_none() {
+        return Validity::Unbounded;
+    }
+    if let Some((claim, value, value_date_time, seconds)) = not_before
+        && seconds > now_seconds + skew
+    {
+        findings.push(Finding::error(
+            Phase::Verify,
+            Attribution::Input,
+            FindingDetail::ProofNotYetValid {
+                claim,
+                value,
+                value_date_time,
+                now,
+                skew_seconds,
+            },
+        ));
+        return Validity::NotYetValid;
+    }
+    // The current time MUST be before `exp` (RFC 7519 §4.1.4).
+    if let Some((claim, value, value_date_time, seconds)) = expires
+        && now_seconds - skew >= seconds
+    {
+        findings.push(Finding::error(
+            Phase::Verify,
+            Attribution::Input,
+            FindingDetail::ProofExpired {
+                claim,
+                value,
+                value_date_time,
+                now,
+                skew_seconds,
+            },
+        ));
+        return Validity::Expired;
+    }
+    Validity::Current
 }

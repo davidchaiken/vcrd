@@ -6,14 +6,15 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
 use crate::context::{Context, Limits};
 use crate::document::{
-    ContextEntry, DateTimeProblem, Document, DocumentKind, KeyHints, Leaf, LeafClass,
-    ProofDescriptor, ProofMaterial, Timestamp,
+    ContextEntry, DateTimeProblem, Document, DocumentKind, EmbeddedKey, KeyHints, Leaf, LeafClass,
+    NumericDate, ProofDescriptor, ProofMaterial, ProofTime, ProofTimes, Timestamp,
 };
 use crate::finding::{
-    Attribution, Base64urlProblem, CritProblem, Finding, FindingDetail, IssLocation, JwsJsonSyntax,
-    JwsSegment, Severity,
+    Attribution, Base64urlProblem, CritProblem, Finding, FindingDetail, IssLocation, JwkProblem,
+    JwsJsonSyntax, JwsSegment, Severity,
 };
 use crate::json::{Json, Step, nesting_depth, path_string};
+use crate::keys::{Jwk, PRIVATE_MEMBERS};
 use crate::registry::{CredentialFormat, Detection, FormatId, ProfileId};
 use crate::report::{
     Check, FormatDetail, InspectOutput, NotEvaluated, NotEvaluatedReason, ParseOutput, Phase,
@@ -50,6 +51,9 @@ pub struct JoseHeader {
     pub typ: Option<String>,
     /// Content Type (§4.1.10).
     pub cty: Option<String>,
+    /// JSON Web Key (§4.1.3): the key the JWS carries about itself, typed, or why it
+    /// could not be read.
+    pub jwk: Option<Result<Jwk, JwkProblem>>,
     /// The whole header, every member kept.
     pub parsed: Json,
 }
@@ -61,6 +65,7 @@ impl JoseHeader {
             kid: string(parsed.get("kid")),
             typ: string(parsed.get("typ")),
             cty: string(parsed.get("cty")),
+            jwk: parsed.get("jwk").map(Jwk::parse),
             parsed,
         }
     }
@@ -158,6 +163,34 @@ fn header_members(header: &JoseHeader, findings: &mut Vec<Finding>) {
     if let Some(crit) = header.parsed.get("crit") {
         check_crit(crit, &header.parsed, findings);
     }
+    if let (Some(jwk), Some(read)) = (header.parsed.get("jwk"), &header.jwk) {
+        check_jwk(jwk, read, findings);
+    }
+}
+
+/// `jwk` (RFC 7515 §4.1.3): a public key vcrd can read, with no private members. None
+/// of this blocks verify, which takes the issuer's key from elsewhere.
+fn check_jwk(jwk: &Json, read: &Result<Jwk, JwkProblem>, findings: &mut Vec<Finding>) {
+    match read {
+        Ok(_) => {}
+        Err(JwkProblem::KtyUnknown { kty }) => findings.push(Finding::new(
+            Phase::Inspect,
+            Attribution::Vcrd,
+            Severity::Warning,
+            FindingDetail::JwkKtyUnsupported { kty: kty.clone() },
+        )),
+        Err(problem) => findings.push(inspect_error(FindingDetail::JwkInvalid {
+            problem: problem.clone(),
+        })),
+    }
+    let members: Vec<&'static str> = PRIVATE_MEMBERS
+        .iter()
+        .copied()
+        .filter(|member| jwk.get(member).is_some())
+        .collect();
+    if !members.is_empty() {
+        findings.push(inspect_error(FindingDetail::JwkPrivateKey { members }));
+    }
 }
 
 /// RFC 7515 §4.1.9: media types are case-insensitive, and `application/` is implied
@@ -210,6 +243,44 @@ fn check_crit(crit: &Json, header: &Json, findings: &mut Vec<Finding>) {
     }
 }
 
+/// The extensions a `crit` array lists, for the suite to implement or refuse (RFC 7515
+/// §4.1.11), each once. A name RFC 7515 defines is no extension, and is left out;
+/// inspect reports it, and any other way `crit` is malformed.
+fn extensions(header: &Json) -> Vec<String> {
+    let Some(Json::Array(items)) = header.get("crit") else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = Vec::new();
+    for name in items.iter().filter_map(Json::as_str) {
+        if !REGISTERED_HEADER_PARAMETERS.contains(&name) && !names.iter().any(|n| n == name) {
+            names.push(name.to_owned());
+        }
+    }
+    names
+}
+
+/// The JWT claims that time the signature (VC-JOSE-COSE §3.1.3): Not Before,
+/// Expiration Time and Issued At (RFC 7519 §4.1.4–4.1.6).
+const JWT_TIMES: [&str; 3] = ["nbf", "exp", "iat"];
+
+/// The proof's own times, read from the JWT claims. A value that is not a number is
+/// kept as unreadable, for inspect to report and verify to treat as unknown.
+fn proof_times(payload: &Json) -> ProofTimes {
+    let time = |claim: &'static str| {
+        payload.get(claim).map(|value| ProofTime {
+            claim,
+            value: value
+                .as_number()
+                .map(|(text, seconds)| NumericDate::new(text, seconds)),
+        })
+    };
+    ProofTimes {
+        not_before: time("nbf"),
+        expires: time("exp"),
+        issued_at: time("iat"),
+    }
+}
+
 /// The payload: VCDM 1.1's encoding is named and goes no further; anything else is
 /// checked as VCDM 2.0, then against the header and JWT claims.
 fn inspect_payload(
@@ -255,6 +326,11 @@ fn inspect_payload(
         .as_deref()
         .filter(|_| !output.no_issuer_identifier);
     jwt_claims(payload, header, issuer, findings);
+    for claim in JWT_TIMES {
+        if payload.get(claim).is_some_and(|v| v.as_number().is_none()) {
+            findings.push(inspect_error(FindingDetail::NumericDateInvalid { claim }));
+        }
+    }
     if let (Some(header), Some(issuer)) = (header, issuer) {
         check_kid(header, payload, issuer, findings);
     }
@@ -431,21 +507,34 @@ fn parse_compact(bytes: &[u8], limits: &Limits, findings: &mut Vec<Finding>) -> 
     };
 
     let mut document = payload.as_ref().map(|p| document(p, limits, findings));
-    if let (Some(document), Some(header), Some(signature)) =
-        (document.as_mut(), header.as_ref(), signature)
-    {
+    if let (Some(document), Some(payload), Some(header), Some(signature)) = (
+        document.as_mut(),
+        payload.as_ref(),
+        header.as_ref(),
+        signature,
+    ) {
+        let embedded = match &header.jwk {
+            Some(Ok(jwk)) => Some(EmbeddedKey {
+                location: "header.jwk",
+                jwk: jwk.clone(),
+            }),
+            _ => None,
+        };
         document.proofs.push(ProofDescriptor {
             suite: crate::suites::JWS,
             algorithm: header.alg.clone(),
             key_hints: KeyHints {
                 issuer: document.issuer.clone(),
                 kid: header.kid.clone(),
+                embedded,
             },
             // The two encoded segments as they arrived (RFC 7515 §5.1).
             material: ProofMaterial::Jws {
                 signing_input: [header_b64, b".", payload_b64].concat(),
                 signature,
+                critical: extensions(&header.parsed),
             },
+            times: proof_times(payload),
         });
     }
     ParseOutput {

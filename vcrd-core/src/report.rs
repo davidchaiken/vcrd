@@ -197,6 +197,10 @@ pub struct ProofResult {
     pub algorithm: Option<String>,
     pub outcome: ProofOutcome,
     pub key_provenance: KeyProvenance,
+    /// Where the clock falls relative to the proof's own times, such as a JWT's `nbf`
+    /// and `exp`: separate from the credential's validity period, and from whether
+    /// the signature verifies.
+    pub validity: Validity,
 }
 
 /// Not `#[non_exhaustive]`, for the reason given on [`FormatDetail`].

@@ -3,6 +3,8 @@
 //!
 //! Its algorithm table has one row in milestone 1: EdDSA over Ed25519 (RFC 8037 §3.1).
 
+use curve25519_dalek::edwards::CompressedEdwardsY;
+
 use crate::context::Context;
 use crate::finding::{Attribution, Finding, FindingDetail};
 use crate::keys::PublicKey;
@@ -14,6 +16,10 @@ use crate::report::{Phase, ProofOutcome};
 pub struct Jws;
 
 const EDDSA: &str = "EdDSA";
+
+/// The JWS extensions the suite implements, which `crit` may list (RFC 7515
+/// §4.1.11). None yet.
+const EXTENSIONS: &[&str] = &[];
 
 impl ProofSuite for Jws {
     fn id(&self) -> SuiteId {
@@ -29,22 +35,49 @@ impl ProofSuite for Jws {
             algorithm,
             signing_input,
             signature,
+            critical,
             key,
         } = input;
+        let mut findings = Vec::new();
+        // The JWS is invalid (RFC 7515 §4.1.11), and the signature is still checked
+        // below, for the information. RFC 7797's `b64: false` changes what was signed,
+        // but it also leaves the payload unencoded, which parse rejects first.
+        let unsupported: Vec<String> = critical
+            .iter()
+            .filter(|name| !EXTENSIONS.contains(&name.as_str()))
+            .cloned()
+            .collect();
+        if !unsupported.is_empty() {
+            findings.push(Finding::error(
+                Phase::Verify,
+                Attribution::Vcrd,
+                FindingDetail::CritUnsupported {
+                    extensions: unsupported,
+                    supported: EXTENSIONS.to_vec(),
+                },
+            ));
+        }
         // The declared algorithm is checked, never obeyed (ARCHITECTURE §8).
-        match *algorithm {
-            None => not_attempted(Attribution::Input, FindingDetail::AlgorithmMissing),
+        let rejected = match *algorithm {
+            None => Some((Attribution::Input, FindingDetail::AlgorithmMissing)),
             // Always rejected, never a policy question (ARCHITECTURE §8).
-            Some("none") => not_attempted(Attribution::Input, FindingDetail::AlgorithmNone),
-            Some(EDDSA) => eddsa(signing_input, signature, *key),
-            Some(declared) => not_attempted(
+            Some("none") => Some((Attribution::Input, FindingDetail::AlgorithmNone)),
+            Some(EDDSA) => None,
+            Some(declared) => Some((
                 Attribution::Vcrd,
                 FindingDetail::AlgorithmUnsupported {
                     declared: declared.to_owned(),
                     supported: self.algorithms().to_vec(),
                 },
-            ),
+            )),
+        };
+        if let Some((attribution, detail)) = rejected {
+            findings.push(Finding::error(Phase::Verify, attribution, detail));
+            return (ProofOutcome::NotAttempted, findings);
         }
+        let (outcome, signature_findings) = eddsa(signing_input, signature, *key);
+        findings.extend(signature_findings);
+        (outcome, findings)
     }
 }
 
@@ -52,6 +85,13 @@ fn not_attempted(attribution: Attribution, detail: FindingDetail) -> (ProofOutco
     (
         ProofOutcome::NotAttempted,
         vec![Finding::error(Phase::Verify, attribution, detail)],
+    )
+}
+
+fn failed(detail: FindingDetail) -> (ProofOutcome, Vec<Finding>) {
+    (
+        ProofOutcome::Failed,
+        vec![Finding::error(Phase::Verify, Attribution::Input, detail)],
     )
 }
 
@@ -75,17 +115,19 @@ fn eddsa(
             },
         );
     };
-    // verify_strict also rejects a small-order R and a weak key (ARCHITECTURE §8).
+    // verify_strict rejects a small-order R with the same error as any other
+    // failure, so it is checked here first, to be named (ARCHITECTURE §8).
+    let small_order = bytes
+        .first_chunk::<32>()
+        .and_then(|r| CompressedEdwardsY(*r).decompress())
+        .is_some_and(|r| r.is_small_order());
+    if small_order {
+        return failed(FindingDetail::SignatureSmallOrder { algorithm: EDDSA });
+    }
+    // verify_strict also rejects a weak key, which resolution has already refused.
     match key.verify_strict(signing_input, &ed25519_dalek::Signature::from_bytes(bytes)) {
         Ok(()) => (ProofOutcome::Verified { disclosed: None }, Vec::new()),
-        Err(_) => (
-            ProofOutcome::Failed,
-            vec![Finding::error(
-                Phase::Verify,
-                Attribution::Input,
-                FindingDetail::SignatureInvalid { algorithm: EDDSA },
-            )],
-        ),
+        Err(_) => failed(FindingDetail::SignatureInvalid { algorithm: EDDSA }),
     }
 }
 
@@ -106,6 +148,14 @@ mod tests {
         "hgyY0il_MGCjP0JzlnLWG1PPOt7-09PGcvMg3AIbQR6dWbhijcNR4ki4iylGjg5BhVsPt9g7sVvpAr_MuM0KAg";
 
     fn verify(algorithm: Option<&str>, signing_input: &[u8]) -> (ProofOutcome, Vec<Finding>) {
+        verify_critical(algorithm, signing_input, &[])
+    }
+
+    fn verify_critical(
+        algorithm: Option<&str>,
+        signing_input: &[u8],
+        critical: &[String],
+    ) -> (ProofOutcome, Vec<Finding>) {
         let key: [u8; 32] = URL_SAFE_NO_PAD.decode(X).unwrap().try_into().unwrap();
         let key = PublicKey::Ed25519(VerifyingKey::from_bytes(&key).unwrap());
         let signature = URL_SAFE_NO_PAD.decode(SIGNATURE).unwrap();
@@ -113,6 +163,7 @@ mod tests {
             algorithm,
             signing_input,
             signature: &signature,
+            critical,
             key: Some(&key),
         };
         let ctx = Context::builder(FixedClock(OffsetDateTime::UNIX_EPOCH)).build();
@@ -154,5 +205,32 @@ mod tests {
             (declared.as_str(), supported.as_slice()),
             ("ES256", &["EdDSA"][..])
         );
+    }
+
+    /// RFC 8037 A.5's signature is sound, and is reported as verified beside the
+    /// unimplemented critical extension, which alone fails the JWS.
+    #[test]
+    fn checks_the_signature_beside_an_unimplemented_critical_extension() {
+        let critical = ["urn:example:unimplemented".to_owned()];
+        let (outcome, findings) =
+            verify_critical(Some("EdDSA"), SIGNING_INPUT.as_bytes(), &critical);
+        assert!(
+            matches!(outcome, ProofOutcome::Verified { .. }),
+            "{outcome:?}"
+        );
+        let [finding] = findings.as_slice() else {
+            panic!("{findings:?}")
+        };
+        assert_eq!(finding.code, "verify.crit_unsupported");
+        assert_eq!(finding.attribution, Attribution::Vcrd);
+    }
+
+    /// Unsupported and rejected are reported independently (ARCHITECTURE §8).
+    #[test]
+    fn reports_an_unimplemented_extension_and_alg_none_together() {
+        let critical = ["urn:example:unimplemented".to_owned()];
+        let (_, findings) = verify_critical(Some("none"), SIGNING_INPUT.as_bytes(), &critical);
+        let codes: Vec<_> = findings.iter().map(|f| f.code).collect();
+        assert_eq!(codes, ["verify.crit_unsupported", "verify.algorithm_none"]);
     }
 }

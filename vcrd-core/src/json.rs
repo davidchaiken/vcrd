@@ -64,6 +64,16 @@ impl Json {
         }
     }
 
+    /// A number scalar's JSON text and value, for checks inside core. Not public,
+    /// for the reason given on [`Json::as_str`].
+    #[cfg_attr(not(feature = "vc-jose"), allow(dead_code))]
+    pub(crate) fn as_number(&self) -> Option<(String, f64)> {
+        match self {
+            Json::Scalar(value) => value.as_number(),
+            Json::Array(_) | Json::Object(_) => None,
+        }
+    }
+
     /// Every member name that repeats within one object, with its path and how many
     /// times it appears, in the order the names first appear.
     pub fn duplicate_names(&self) -> Vec<DuplicateName> {

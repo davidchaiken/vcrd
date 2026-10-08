@@ -53,6 +53,8 @@ pub enum ProofInput<'a> {
         algorithm: Option<&'a str>,
         signing_input: &'a [u8],
         signature: &'a [u8],
+        /// The extensions the JWS marks critical (RFC 7515 §4.1.11).
+        critical: &'a [String],
         /// `None` when resolution found no usable key; the suite still checks the
         /// algorithm, so that its findings are reported too.
         key: Option<&'a PublicKey>,
