@@ -54,11 +54,11 @@ fn alg_none_is_rejected() {
 
 #[test]
 fn an_algorithm_vcrd_does_not_implement_is_rejected_by_name() {
-    let out = verify_fixture("alg-es256.jwt", 6);
+    let out = verify_fixture("alg-ed448.jwt", 6);
     let f = finding(&out, "verify.algorithm_unsupported", "vcrd", "error");
     assert_eq!(
         f["detail"],
-        json!({"type": "algorithm_unsupported", "declared": "ES256", "supported": ["EdDSA"]})
+        json!({"type": "algorithm_unsupported", "declared": "Ed448", "supported": ["EdDSA"]})
     );
     assert_eq!(out["proofs"][0]["outcome"], "not_attempted");
 }
@@ -145,6 +145,7 @@ fn an_expired_signature_fails_verify() {
             "type": "proof_expired",
             "claim": "exp",
             "value": 1780272000,
+            "value_date_time": "2026-06-01T00:00:00Z",
             "now": "2026-10-01T00:00:00Z",
             "skew_seconds": 0,
         })
@@ -157,7 +158,7 @@ fn an_expired_signature_fails_verify() {
 }
 
 /// RFC 7515 §4.1.11: an extension the recipient does not understand makes the JWS
-/// invalid; vcrd names it and does not check the signature.
+/// invalid. vcrd names it, and still checks the signature, which verifies.
 #[test]
 fn a_critical_extension_vcrd_does_not_implement_fails_verify() {
     let out = verify_fixture("crit-unsupported.jwt", 6);
@@ -171,7 +172,7 @@ fn a_critical_extension_vcrd_does_not_implement_fails_verify() {
         })
     );
     assert_eq!(out["phases"]["inspect"]["outcome"], "passed");
-    assert_eq!(out["proofs"][0]["outcome"], "not_attempted");
+    assert_eq!(out["proofs"][0]["outcome"], "verified");
 }
 
 /// The example's JWT has no `exp` or `nbf`, so its signature has no validity

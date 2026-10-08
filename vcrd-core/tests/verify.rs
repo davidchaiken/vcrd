@@ -4,7 +4,8 @@
 //! through the binary, in vcrd-cli/tests/verify.rs.
 
 use serde_json::json;
-use vcrd_core::{Attribution, ProofOutcome, Severity, Validity};
+use time::macros::datetime;
+use vcrd_core::{Attribution, FindingDetail, ProofOutcome, Severity, Validity};
 
 use support::{NOW, issuer_jwk, proof_of, signed, verified, verified_with_skew};
 
@@ -151,6 +152,26 @@ fn a_numeric_date_beyond_any_calendar_compares() {
     let (proof, findings) = proof_of(&report);
     assert_eq!(findings, []);
     assert_eq!(proof.validity, Validity::Current);
+}
+
+/// The finding gives the time as a date-time too, for a reader, keeping a fraction of
+/// a second, and none when the number is outside the years a date can represent.
+#[test]
+fn a_proof_time_finding_gives_the_date_time_when_there_is_one() {
+    let value_date_time = |exp: serde_json::Value| {
+        let report = verified(&signed(|_, p| p["exp"] = exp));
+        match &report.verify.findings()[0].detail {
+            FindingDetail::ProofExpired {
+                value_date_time, ..
+            } => *value_date_time,
+            other => panic!("{other:?}"),
+        }
+    };
+    assert_eq!(
+        value_date_time(json!(1780272000.25)),
+        Some(datetime!(2026-06-01 0:00:00.25 UTC))
+    );
+    assert_eq!(value_date_time(json!(-1e20)), None);
 }
 
 /// RFC 7519 §4.1.4 and §4.1.5 allow a small leeway for clock skew.

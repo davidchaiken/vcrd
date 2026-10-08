@@ -783,10 +783,12 @@ hash of the secret, and the output is often shared more widely than the input.
 - **`none` is always rejected**, and never treated as a policy question.
 - **Unsupported and policy-rejected are evaluated independently**, and both are reported
   when both apply (finding 5).
-- **A critical extension the suite does not implement fails verify**, attributed to vcrd,
-  and the signature is not checked (RFC 7515 §4.1.11). An extension can change what was
-  signed, as RFC 7797's `b64` does, so a check without it would be against the wrong
-  bytes. The suite implements none yet. Whether `crit` itself is well-formed is inspect's
+- **A critical extension the suite does not implement fails verify**, attributed to vcrd
+  (RFC 7515 §4.1.11). The signature is still checked over the usual signing input and its
+  outcome reported, for the information. An extension that changes what was signed, as
+  RFC 7797's `b64: false` does, also leaves the payload unencoded, which parse rejects
+  before verify runs; a failed check is reported as for any other JWS. The suite
+  implements no extension yet. Whether `crit` itself is well-formed is inspect's
   question.
 - **The resolved key's type must match the algorithm's.** Otherwise the result is a
   key-type mismatch attributed to the input. This is the defense against algorithm
@@ -943,7 +945,9 @@ Each becomes a test observed to fail and then to pass (REQUIREMENTS §11):
   when adding them, and whether `p521` 0.14 fixes [C1].
 - **[C3] Extend algorithm coverage.** REQUIREMENTS §10 asks for coverage as broad as
   practical. The prototype verified EdDSA, ES256, ES512, RS256, and HS256; ES384, the PS
-  family, and RS384/RS512 remain, and ES256K needs a decision.
+  family, and RS384/RS512 remain, and ES256K needs a decision. The fixture for an
+  unsupported algorithm, `fixtures/alg-ed448.jwt`, needs one that stays unsupported: if
+  Ed448 is ever implemented, move the fixture to another.
 
 ### [G] Guides
 

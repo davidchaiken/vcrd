@@ -283,8 +283,8 @@ pub enum FindingDetail {
     /// [s]B = R + [k]A can accept such a signature; vcrd rejects it (ARCHITECTURE §8).
     SignatureSmallOrder { algorithm: &'static str },
     /// `crit` lists extensions the suite does not implement, so the JWS is invalid
-    /// (RFC 7515 §4.1.11). The signature is not checked, since an extension can change
-    /// what was signed. Attributed to vcrd.
+    /// (RFC 7515 §4.1.11). The signature is still checked, and its outcome reported,
+    /// for the information. Attributed to vcrd.
     CritUnsupported {
         extensions: Vec<String>,
         supported: Vec<&'static str>,
@@ -295,6 +295,8 @@ pub enum FindingDetail {
         claim: &'static str,
         /// The JSON number as written.
         value: String,
+        /// The same instant as a date-time, when it is within the years -9999 to 9999.
+        value_date_time: Option<OffsetDateTime>,
         now: OffsetDateTime,
         skew_seconds: u64,
     },
@@ -302,6 +304,7 @@ pub enum FindingDetail {
     ProofNotYetValid {
         claim: &'static str,
         value: String,
+        value_date_time: Option<OffsetDateTime>,
         now: OffsetDateTime,
         skew_seconds: u64,
     },
@@ -310,6 +313,7 @@ pub enum FindingDetail {
     ProofIssuedInFuture {
         claim: &'static str,
         value: String,
+        value_date_time: Option<OffsetDateTime>,
         now: OffsetDateTime,
         skew_seconds: u64,
     },

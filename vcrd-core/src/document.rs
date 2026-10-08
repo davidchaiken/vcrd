@@ -162,14 +162,36 @@ pub struct ProofTime {
     pub value: Option<NumericDate>,
 }
 
-/// Seconds since 1970-01-01T00:00:00Z UTC, ignoring leap seconds (RFC 7519 §2). Kept
-/// as a number, not converted to a date, so that every value compares, however far
-/// from the present.
+/// Seconds since 1970-01-01T00:00:00Z UTC, ignoring leap seconds (RFC 7519 §2). Compared
+/// as a number, so that every value compares, however far from the present.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NumericDate {
     /// The JSON number as written.
     pub text: String,
     pub seconds: f64,
+    /// The same instant as a date-time, for a reader; `None` outside the years
+    /// -9999 to 9999. A fraction of a second is kept to the nanosecond.
+    pub date_time: Option<OffsetDateTime>,
+}
+
+impl NumericDate {
+    #[cfg_attr(not(feature = "vc-jose"), allow(dead_code))]
+    pub(crate) fn new(text: String, seconds: f64) -> Self {
+        let whole = seconds.floor();
+        // A cast saturates, and a saturated value is outside the range `time` accepts.
+        let date_time = OffsetDateTime::from_unix_timestamp(whole as i64)
+            .ok()
+            .and_then(|t| {
+                t.checked_add(time::Duration::nanoseconds(
+                    ((seconds - whole) * 1e9).round() as i64,
+                ))
+            });
+        NumericDate {
+            text,
+            seconds,
+            date_time,
+        }
+    }
 }
 
 /// A credential found inside another, handed back for the runner to dispatch

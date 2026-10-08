@@ -103,7 +103,7 @@ mod generate {
             ("fixtures/vcdm-1.1-encoding.jwt", vcdm_1_1_encoding()),
             ("fixtures/tampered-claim.jwt", tampered_claim()),
             ("fixtures/alg-none.jwt", alg_none()),
-            ("fixtures/alg-es256.jwt", alg_es256()),
+            ("fixtures/alg-ed448.jwt", alg_ed448()),
             ("fixtures/weak-key.jwt", weak_key()),
             ("fixtures/small-order-r.jwt", small_order_r()),
             ("fixtures/embedded-jwk.jwt", embedded_jwk()),
@@ -287,13 +287,13 @@ mod generate {
         format!("{}.{}.", b64_json(&header), b64_json(&payload)).into_bytes()
     }
 
-    /// The example declaring `alg: ES256`, which vcrd does not implement yet, with 64
-    /// zero bytes where an ES256 signature would be. vcrd rejects the algorithm by
-    /// name and never reads the signature.
-    fn alg_es256() -> Vec<u8> {
+    /// The example declaring `alg: Ed448` (RFC 9864), which no milestone plans to
+    /// implement, with 114 zero bytes where an Ed448 signature would be. vcrd rejects
+    /// the algorithm by name and never reads the signature.
+    fn alg_ed448() -> Vec<u8> {
         let (_, mut header, payload) = example_parts();
-        header["alg"] = json!("ES256");
-        [b64_json(&header), b64_json(&payload), b64(&[0; 64])]
+        header["alg"] = json!("Ed448");
+        [b64_json(&header), b64_json(&payload), b64(&[0; 114])]
             .join(".")
             .into_bytes()
     }

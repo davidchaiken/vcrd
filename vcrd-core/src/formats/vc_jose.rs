@@ -271,7 +271,7 @@ fn proof_times(payload: &Json) -> ProofTimes {
             claim,
             value: value
                 .as_number()
-                .map(|(text, seconds)| NumericDate { text, seconds }),
+                .map(|(text, seconds)| NumericDate::new(text, seconds)),
         })
     };
     ProofTimes {

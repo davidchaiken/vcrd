@@ -39,9 +39,9 @@ impl ProofSuite for Jws {
             key,
         } = input;
         let mut findings = Vec::new();
-        // An extension can change what was signed, as RFC 7797's `b64` does, so a
-        // signature checked without implementing it would be checked against the
-        // wrong bytes.
+        // The JWS is invalid (RFC 7515 §4.1.11), and the signature is still checked
+        // below, for the information. RFC 7797's `b64: false` changes what was signed,
+        // but it also leaves the payload unencoded, which parse rejects first.
         let unsupported: Vec<String> = critical
             .iter()
             .filter(|name| !EXTENSIONS.contains(&name.as_str()))
@@ -73,11 +73,11 @@ impl ProofSuite for Jws {
         };
         if let Some((attribution, detail)) = rejected {
             findings.push(Finding::error(Phase::Verify, attribution, detail));
-        }
-        if !findings.is_empty() {
             return (ProofOutcome::NotAttempted, findings);
         }
-        eddsa(signing_input, signature, *key)
+        let (outcome, signature_findings) = eddsa(signing_input, signature, *key);
+        findings.extend(signature_findings);
+        (outcome, findings)
     }
 }
 
@@ -207,14 +207,17 @@ mod tests {
         );
     }
 
-    /// RFC 8037 A.5's signature is sound; an unimplemented critical extension still
-    /// stops it being checked.
+    /// RFC 8037 A.5's signature is sound, and is reported as verified beside the
+    /// unimplemented critical extension, which alone fails the JWS.
     #[test]
-    fn does_not_verify_past_an_unimplemented_critical_extension() {
+    fn checks_the_signature_beside_an_unimplemented_critical_extension() {
         let critical = ["urn:example:unimplemented".to_owned()];
         let (outcome, findings) =
             verify_critical(Some("EdDSA"), SIGNING_INPUT.as_bytes(), &critical);
-        assert!(matches!(outcome, ProofOutcome::NotAttempted));
+        assert!(
+            matches!(outcome, ProofOutcome::Verified { .. }),
+            "{outcome:?}"
+        );
         let [finding] = findings.as_slice() else {
             panic!("{findings:?}")
         };

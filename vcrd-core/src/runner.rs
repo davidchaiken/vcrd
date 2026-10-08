@@ -248,10 +248,15 @@ fn proof_validity(times: &ProofTimes, ctx: &Context, findings: &mut Vec<Finding>
         Some(ProofTime {
             claim,
             value: Some(date),
-        }) => Ok(Some((*claim, date.text.clone(), date.seconds))),
+        }) => Ok(Some((
+            *claim,
+            date.text.clone(),
+            date.date_time,
+            date.seconds,
+        ))),
         Some(ProofTime { value: None, .. }) => Err(()),
     };
-    if let Ok(Some((claim, value, seconds))) = read(&times.issued_at)
+    if let Ok(Some((claim, value, value_date_time, seconds))) = read(&times.issued_at)
         && seconds > now_seconds + skew
     {
         findings.push(Finding::new(
@@ -261,6 +266,7 @@ fn proof_validity(times: &ProofTimes, ctx: &Context, findings: &mut Vec<Finding>
             FindingDetail::ProofIssuedInFuture {
                 claim,
                 value,
+                value_date_time,
                 now,
                 skew_seconds,
             },
@@ -272,7 +278,7 @@ fn proof_validity(times: &ProofTimes, ctx: &Context, findings: &mut Vec<Finding>
     if not_before.is_none() && expires.is_none() {
         return Validity::Unbounded;
     }
-    if let Some((claim, value, seconds)) = not_before
+    if let Some((claim, value, value_date_time, seconds)) = not_before
         && seconds > now_seconds + skew
     {
         findings.push(Finding::error(
@@ -281,6 +287,7 @@ fn proof_validity(times: &ProofTimes, ctx: &Context, findings: &mut Vec<Finding>
             FindingDetail::ProofNotYetValid {
                 claim,
                 value,
+                value_date_time,
                 now,
                 skew_seconds,
             },
@@ -288,7 +295,7 @@ fn proof_validity(times: &ProofTimes, ctx: &Context, findings: &mut Vec<Finding>
         return Validity::NotYetValid;
     }
     // The current time MUST be before `exp` (RFC 7519 §4.1.4).
-    if let Some((claim, value, seconds)) = expires
+    if let Some((claim, value, value_date_time, seconds)) = expires
         && now_seconds - skew >= seconds
     {
         findings.push(Finding::error(
@@ -297,6 +304,7 @@ fn proof_validity(times: &ProofTimes, ctx: &Context, findings: &mut Vec<Finding>
             FindingDetail::ProofExpired {
                 claim,
                 value,
+                value_date_time,
                 now,
                 skew_seconds,
             },

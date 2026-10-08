@@ -673,21 +673,45 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
         FindingDetail::ProofExpired {
             claim,
             value,
+            value_date_time,
             now,
             skew_seconds,
-        } => proof_time("proof_expired", claim, value, *now, *skew_seconds),
+        } => proof_time(
+            "proof_expired",
+            claim,
+            value,
+            *value_date_time,
+            *now,
+            *skew_seconds,
+        ),
         FindingDetail::ProofNotYetValid {
             claim,
             value,
+            value_date_time,
             now,
             skew_seconds,
-        } => proof_time("proof_not_yet_valid", claim, value, *now, *skew_seconds),
+        } => proof_time(
+            "proof_not_yet_valid",
+            claim,
+            value,
+            *value_date_time,
+            *now,
+            *skew_seconds,
+        ),
         FindingDetail::ProofIssuedInFuture {
             claim,
             value,
+            value_date_time,
             now,
             skew_seconds,
-        } => proof_time("proof_issued_in_future", claim, value, *now, *skew_seconds),
+        } => proof_time(
+            "proof_issued_in_future",
+            claim,
+            value,
+            *value_date_time,
+            *now,
+            *skew_seconds,
+        ),
         FindingDetail::NoKeyMaterial { consulted } => json!({
             "type": "no_key_material",
             "consulted": consulted.iter().map(|k| key_source_kind(*k)).collect::<Vec<_>>(),
@@ -723,11 +747,13 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
 }
 
 /// A proof's time and the clock it was compared with. `value` is the JSON number as
-/// written.
+/// written; `value_date_time` is the same instant in RFC 3339, `null` when it is outside
+/// the years -9999 to 9999.
 fn proof_time(
     kind: &str,
     claim: &str,
     value: &str,
+    value_date_time: Option<OffsetDateTime>,
     now: OffsetDateTime,
     skew_seconds: u64,
 ) -> Value {
@@ -735,6 +761,7 @@ fn proof_time(
         "type": kind,
         "claim": claim,
         "value": serde_json::from_str::<Value>(value).unwrap_or(Value::Null),
+        "value_date_time": value_date_time.map_or(Value::Null, rfc3339),
         "now": rfc3339(now),
         "skew_seconds": skew_seconds,
     })

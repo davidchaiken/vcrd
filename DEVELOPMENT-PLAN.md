@@ -145,8 +145,8 @@ every other `alg` exercise the by-name rejection path from day one.
     and refuses the key, attributed to caller policy (exit 5). A carried key unlike
     the issuer's is a warning. Inspect reports a `jwk` it cannot read, one with
     private-key members, and an unknown key type (a warning attributed to vcrd).
-  - A critical extension the suite does not implement fails verify, attributed to vcrd,
-    without the signature being checked.
+  - A critical extension the suite does not implement fails verify, attributed to vcrd.
+    The signature is still checked, and its outcome reported (decided 2026-10-07).
 - *Features.* A Cargo feature for the first proof suite, EdDSA over JWS, beside
   `vc-jose` (ARCHITECTURE §2: one feature per format and per proof suite).
   `vcrd-cli` forwards it, and `scripts/feature-matrix.sh` builds it (REQUIREMENTS §13).
@@ -164,8 +164,9 @@ every other `alg` exercise the by-name rejection path from day one.
   that review; check `clap::Error::exit` at implementation).
 - *Fixtures, negative first* (REQUIREMENTS §11), committed under `fixtures/` except the
   over-size input, which its test generates: happy Ed25519; tampered signature;
-  expired; not yet valid; `validUntil` before `validFrom`; `alg: none`; `alg: ES256`
-  (unsupported by name in this slice); embedded `jwk` only (refused); `did:key` encoding
+  expired; not yet valid; `validUntil` before `validFrom`; `alg: none`; `alg: Ed448`
+  (unsupported by name; decided 2026-10-07 in place of ES256, which milestone 2
+  implements); embedded `jwk` only (refused); `did:key` encoding
   the identity point (weak-key finding); small-order `R` under an ordinary key; the VCDM
   1.1 `vc` mapping; over the size cap; over the depth cap; JWS JSON serialization
   (rejected by name); unknown `crit` extension; `exp` in the past with `validUntil` in the
