@@ -154,6 +154,8 @@ every other `alg` exercise the by-name rejection path from day one.
   extends; and `vcrd-cli` refuses to build with no suite, as with no format, which the
   feature matrix checks. Decided 2026-09-27: CI builds the supported feature builds of
   ARCHITECTURE §2 on every change, through cargo-hack, and every combination weekly.
+  Decided 2026-10-07: every combination runs on every change too, and a merge waits for
+  it; `make ci-ok` still runs only the supported builds.
 - *Output.* The JSON envelope with every always-present key of ARCHITECTURE §6,
   `schema_version: 0`, `contained: []`; `text` via `tabled`; `plain`; every claim value
   masked by default; `--unsafe` with the stderr banner and the `reveals` list;
