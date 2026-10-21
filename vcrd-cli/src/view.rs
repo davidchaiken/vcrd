@@ -129,7 +129,8 @@ pub struct PhaseView {
 pub struct BlockedView {
     pub phase: &'static str,
     pub reason: &'static str,
-    /// What an impossible phase lacks: `document` or `key_material`.
+    /// What an impossible phase lacks, when the blocking phase's name does not already
+    /// say: `key_material`. A block by parse means only that parse failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub missing: Option<&'static str>,
     /// The key sources considered, when `missing` is `key_material`.
@@ -363,7 +364,7 @@ fn phase<T>(outcome: &PhaseOutcome<T>) -> PhaseView {
             let (reason, missing, consulted) = match &blocked.reason {
                 BlockReason::Impossible {
                     missing: Missing::Document,
-                } => ("impossible", Some("document"), None),
+                } => ("impossible", None, None),
                 BlockReason::Impossible {
                     missing: Missing::KeyMaterial { consulted },
                 } => (

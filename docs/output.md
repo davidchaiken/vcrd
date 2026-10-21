@@ -137,14 +137,13 @@ A failed phase does not stop the next one unless running it is impossible or dan
 
 | Key | Present | Value |
 |---|---|---|
-| `phase` | always | the phase whose findings prevented this one: `parse` or `inspect`. That phase's own `findings` say what was wrong. |
+| `phase` | always | the phase whose findings prevented this one: `parse` or `inspect`. That phase's own `findings` say what was wrong. A block by `parse` means parse failed: whatever the cause, nothing that fails to parse can be inspected or verified. |
 | `reason` | always | `impossible`: what the phase needs is not available. `dangerous`: running it could expose vcrd to an exploit, or would fetch material such as a key from an untrustworthy source. No input produces `dangerous` yet. |
-| `missing` | when `reason` is `impossible` | what the phase lacks: `document` or `key_material` |
+| `missing` | when `reason` is `impossible` and the blocking phase is not `parse` | what the phase lacks: `key_material` |
 | `consulted` | when `missing` is `key_material` | the key sources vcrd considered, none of them usable; values below |
 
 | `missing` | Meaning |
 |---|---|
-| `document` | Parsing failed, so there is nothing to inspect or verify. |
 | `key_material` | No key can be found to check the signature with. The credential names no usable issuer identifier (no `issuer`, or one that is not a URL, or an encoding vcrd does not read), and no other source of keys is available. A credential that carries a key about itself is not blocked: verify runs and reports that it refused that key (`verify.embedded_key_refused`). |
 
 | `consulted` value | The source |
@@ -154,6 +153,9 @@ A failed phase does not stop the next one unless running it is impossible or dan
 | `credential_embedded` | a key the credential carries about itself, which vcrd uses only if the caller opts in (not available yet) |
 
 The list may gain values; a consumer should accept values it does not recognize.
+
+`text` and `plain` say the same in the Blocked by column, in the reader's terms: "parse
+failed", or "inspect: no key for verify; looked in: issuer identifier".
 
 ## `proofs`
 
@@ -307,7 +309,7 @@ vcrd verify fixtures/validity-reversed.jwt --now 2026-10-01T00:00:00Z --format j
 ```
 
 A credential with no `issuer`: inspect fails, and verify is blocked because there is no
-key to verify with. `blocked_by.phase` points at inspect, whose findings, here one,
+key for verify to use. `blocked_by.phase` points at inspect, whose findings, here one,
 say what was wrong; the top-level `findings` list has each one in full.
 
 ```bash
@@ -412,7 +414,7 @@ vcrd verify fixtures/embedded-jwk-only.jwt --now 2026-10-01T00:00:00Z --format j
 }
 ```
 
-An input that does not parse: both later phases are blocked for want of a document.
+An input that does not parse: both later phases are blocked by parse.
 The header, `not`, and the payload, `a`, each fail to decode; the signature, `jws`,
 decodes. Parse lists that kind of finding once, and the top-level `findings` list has one
 entry for each segment, with its problem. In `not`, the `t` leaves non-zero bits after
@@ -428,12 +430,12 @@ printf 'not.a.jws' | vcrd verify --format json | jq '{phases, findings: [.findin
     "parse": { "outcome": "failed", "findings": ["parse.base64url_invalid"] },
     "inspect": {
       "outcome": "not_reached",
-      "blocked_by": { "phase": "parse", "reason": "impossible", "missing": "document" },
+      "blocked_by": { "phase": "parse", "reason": "impossible" },
       "findings": []
     },
     "verify": {
       "outcome": "not_reached",
-      "blocked_by": { "phase": "parse", "reason": "impossible", "missing": "document" },
+      "blocked_by": { "phase": "parse", "reason": "impossible" },
       "findings": []
     }
   },

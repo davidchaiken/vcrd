@@ -416,17 +416,24 @@ fn phases(result: &ResultView, full: bool, verify_requested: bool) -> Section {
 }
 
 fn phase_row(name: &str, phase: &PhaseView) -> Row {
-    let blocked = phase.blocked_by.as_ref().map_or_else(String::new, |b| {
-        let mut text = format!("{} ({}", b.phase, b.reason);
-        if let Some(missing) = b.missing {
-            let _ = write!(text, ": {missing} missing");
-        }
-        if let Some(consulted) = &b.consulted {
-            let _ = write!(text, "; consulted {}", consulted.join(", "));
-        }
-        text.push(')');
-        text
-    });
+    // In the reader's terms: what failed, or what is lacking and where vcrd looked.
+    let blocked =
+        phase
+            .blocked_by
+            .as_ref()
+            .map_or_else(String::new, |b| match (b.phase, b.missing) {
+                ("parse", _) => "parse failed".to_owned(),
+                (by, Some("key_material")) => {
+                    let mut text = format!("{by}: no key for verify");
+                    if let Some(consulted) = &b.consulted {
+                        let places: Vec<String> =
+                            consulted.iter().map(|c| c.replace('_', " ")).collect();
+                        let _ = write!(text, "; looked in: {}", places.join(", "));
+                    }
+                    text
+                }
+                (by, _) => format!("{by} ({})", b.reason),
+            });
     Row {
         name: name.to_owned(),
         cells: vec![

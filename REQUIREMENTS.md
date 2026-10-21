@@ -1385,8 +1385,9 @@ with its tag there, so references to either stay valid.
     fixed — only when verification would be impossible or dangerous. Two of its three
     details were settled on 2026-10-01 by the first case, a credential with no usable
     issuer identifier. A result reports a block with the phase whose findings caused it,
-    the reason, and what is missing: the document, or key material together with the key
-    sources considered. And a failure whose impossibility depends
+    the reason, and, when the phase's name does not already say it, what is missing: key
+    material, together with the key sources considered. A block by parse means parse
+    failed. And a failure whose impossibility depends
     on what the caller supplied is judged against it: a credential without a usable
     issuer identifier blocks verify only when no other source of key material remains.
     Still open: how a condition that is dangerous but conforming — a token header telling

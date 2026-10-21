@@ -2,9 +2,9 @@
 
 Phases
  Phase   | Outcome     | Findings | Blocked by
----------+-------------+----------+--------------------------------------
- inspect | not_reached |          | parse (impossible: document missing)
- verify  | not_reached |          | parse (impossible: document missing)
+---------+-------------+----------+--------------
+ inspect | not_reached |          | parse failed
+ verify  | not_reached |          | parse failed
 
 Findings
  Code                    | Attribution | Severity | Detail

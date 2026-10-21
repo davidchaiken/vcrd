@@ -5,9 +5,9 @@
 
 Phases
  Phase   | Outcome     | Findings               | Blocked by
----------+-------------+------------------------+-------------------------------------------------------------------------
+---------+-------------+------------------------+----------------------------------------------------------
  inspect | failed      | inspect.issuer_missing |
- verify  | not_reached |                        | inspect (impossible: key_material missing; consulted issuer_identifier)
+ verify  | not_reached |                        | inspect: no key for verify; looked in: issuer identifier
 
 Proof
  Suite       jws

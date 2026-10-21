@@ -115,8 +115,11 @@ every other `alg` exercise the by-name rejection path from day one.
     subjects, is an error ([S5]).
   - A missing or malformed `issuer` blocks verify as impossible, and the block names
     what is missing (`key_material`) and where vcrd looked (`consulted`); a parse
-    failure's block names the `document` (REQUIREMENTS §16 item 20; docs/output.md). A
-    URL issuer vcrd cannot resolve does not block.
+    failure's block names only the parse phase (REQUIREMENTS §16 item 20;
+    docs/output.md). A URL issuer vcrd cannot resolve does not block. Decided
+    2026-10-21, after review: a parse block no longer names a missing `document`, which
+    described vcrd's internals rather than what the reader needs, that parse failed;
+    `text` and `plain` say "parse failed" and "no key for verify".
   - VCDM 1.1's JWT encoding (`vc` or `vp` with no VCDM 2.0 `@context`) is named and
     attributed to vcrd, blocks verify, and skips VCDM 2.0's checks; reading it is
     ARCHITECTURE §10 [F2], in milestone 5. `vc` or `vp` beside a VCDM 2.0 payload is the
