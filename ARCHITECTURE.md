@@ -746,9 +746,11 @@ key, which signed it, but names a `did:key` issuer for a different key:
   "source": "issuer_identifier",
   "method": "did:key",
   "thumbprint": "0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c",
+  "jwk": { "crv": "Ed25519", "kty": "OKP", "x": "mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0" },
   "credential_key": {
     "location": "header.jwk",
     "thumbprint": "_i3gzFWABuHlZnuT9FBtp8CVlJ57CcWpTPwviZ2m1ms",
+    "jwk": { "crv": "Ed25519", "kty": "OKP", "x": "dmVW__tsfsOxTi_nA17JMexgwC2vIwXdN2ouKk5wJDs" },
     "matched": false,
     "verifies_signature": true
   }

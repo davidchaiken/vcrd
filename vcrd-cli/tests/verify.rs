@@ -68,10 +68,27 @@ fn an_algorithm_vcrd_does_not_implement_is_rejected_by_name() {
 #[test]
 fn a_weak_key_is_refused_at_resolution() {
     let out = verify_fixture("weak-key.jwt", 4);
-    finding(&out, "verify.weak_key", "input", "error");
+    let weak = finding(&out, "verify.weak_key", "input", "error");
     let proof = &out["proofs"][0];
     assert_eq!(proof["outcome"], "not_attempted");
     assert_eq!(proof["key_provenance"]["source"], "issuer_identifier");
+    // The identity point, as the issuer's `did:key` encodes it.
+    assert_eq!(
+        proof["key_provenance"]["jwk"]["x"],
+        "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    );
+    assert_eq!(
+        weak["detail"],
+        json!({
+            "type": "weak_key",
+            "key": {
+                "source": "issuer_identifier",
+                "method": "did:key",
+                "thumbprint": "eV9frzBXPTP92MWWMpoFOh0WI_kJLvGlhcNs15APU_s",
+            },
+            "criterion": "small_order",
+        })
+    );
 }
 
 /// The signature would pass a verifier without the small-order check
@@ -101,13 +118,21 @@ fn key_substitution_is_reported() {
     assert_eq!(key["matched"], false);
     assert_eq!(key["verifies_signature"], true);
     assert_ne!(key["thumbprint"], provenance["thumbprint"]);
+    // Each thumbprint is shown with the key it names.
+    assert_eq!(provenance["jwk"]["kty"], "OKP");
+    assert_eq!(key["jwk"]["kty"], "OKP");
+    assert_ne!(key["jwk"]["x"], provenance["jwk"]["x"]);
+    // The finding says where each key came from.
     assert_eq!(
         mismatch["detail"],
         json!({
             "type": "credential_key_mismatch",
-            "location": "header.jwk",
-            "credential_key": key["thumbprint"],
-            "key": provenance["thumbprint"],
+            "carried_key": {"location": "header.jwk", "thumbprint": key["thumbprint"]},
+            "key": {
+                "source": "issuer_identifier",
+                "method": "did:key",
+                "thumbprint": provenance["thumbprint"],
+            },
         })
     );
 }

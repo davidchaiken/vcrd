@@ -91,6 +91,14 @@ mod helpers {
             Input::Fixture("issuer-missing.jwt"),
             &[],
         ),
+        // The carried key, refused, and whether the signature verifies under it, at
+        // the default level (review of slice 5, N10).
+        case(
+            "embedded-jwk-only-verify-text-1",
+            "verify",
+            Input::Fixture("embedded-jwk-only.jwt"),
+            &[],
+        ),
         case(
             "embedded-jwk-verify-text-2",
             "verify",

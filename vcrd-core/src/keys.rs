@@ -7,7 +7,8 @@ use sha2::{Digest, Sha256};
 
 use crate::document::{EmbeddedKey, KeyHints};
 use crate::finding::{
-    Attribution, DidKeyProblem, Finding, FindingDetail, JwkProblem, KeySourceKind, Severity,
+    Attribution, CarriedKeyRef, DidKeyProblem, Finding, FindingDetail, JwkProblem, KeyRef,
+    KeySourceKind, Severity, WeakKeyCriterion,
 };
 use crate::json::Json;
 use crate::report::Phase;
@@ -19,17 +20,46 @@ pub enum PublicKey {
 }
 
 impl PublicKey {
+    /// The key as a JWK: the members its thumbprint covers.
+    pub fn jwk(&self) -> PublicJwk {
+        match self {
+            // The required members of an OKP key (RFC 8037 §2).
+            PublicKey::Ed25519(key) => PublicJwk {
+                members: vec![
+                    ("crv", "Ed25519".to_owned()),
+                    ("kty", "OKP".to_owned()),
+                    ("x", URL_SAFE_NO_PAD.encode(key.as_bytes())),
+                ],
+            },
+        }
+    }
+
     /// The RFC 7638 JWK thumbprint, base64url-encoded.
     pub fn thumbprint(&self) -> String {
-        match self {
-            PublicKey::Ed25519(key) => {
-                // The required members of an OKP key (RFC 8037 §2), in lexicographic
-                // order with no whitespace (RFC 7638 §3.2).
-                let x = URL_SAFE_NO_PAD.encode(key.as_bytes());
-                let canonical = format!(r#"{{"crv":"Ed25519","kty":"OKP","x":"{x}"}}"#);
-                URL_SAFE_NO_PAD.encode(Sha256::digest(canonical.as_bytes()))
-            }
-        }
+        self.jwk().thumbprint()
+    }
+}
+
+/// A public key as a JWK (RFC 7517): the members its RFC 7638 thumbprint covers, in
+/// that RFC's lexicographic order, each value as written. Shown beside a thumbprint,
+/// so that a reader can see which key it names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublicJwk {
+    pub members: Vec<(&'static str, String)>,
+}
+
+impl PublicJwk {
+    /// The RFC 7638 thumbprint, base64url-encoded: SHA-256 over the members as a JSON
+    /// object with no whitespace (RFC 7638 §3.2–3.3).
+    pub fn thumbprint(&self) -> String {
+        let quote = |s: &str| serde_json::Value::String(s.to_owned()).to_string();
+        let members: Vec<String> = self
+            .members
+            .iter()
+            .map(|(name, value)| format!("{}:{}", quote(name), quote(value)))
+            .collect();
+        let canonical = format!("{{{}}}", members.join(","));
+        URL_SAFE_NO_PAD.encode(Sha256::digest(canonical.as_bytes()))
     }
 }
 
@@ -37,6 +67,8 @@ impl PublicKey {
 /// parse boundary rather than kept as JSON (ARCHITECTURE §3).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Jwk {
+    /// Its public members, which the thumbprint covers.
+    pub public: PublicJwk,
     /// The RFC 7638 thumbprint, base64url-encoded, by which it is compared with the
     /// key resolution establishes (ARCHITECTURE §8).
     pub thumbprint: String,
@@ -80,17 +112,15 @@ impl Jwk {
             .ok_or_else(|| JwkProblem::KtyUnknown {
                 kty: kty.to_owned(),
             })?;
-        let mut canonical = Vec::with_capacity(required.len());
+        let mut members = Vec::with_capacity(required.len());
         for &member in required {
             let value = json
                 .get(member)
                 .and_then(Json::as_str)
                 .ok_or(JwkProblem::MemberMissing { member })?;
-            // JSON string syntax, with no whitespace (RFC 7638 §3.3).
-            let quote = |s: &str| serde_json::Value::String(s.to_owned()).to_string();
-            canonical.push(format!("{}:{}", quote(member), quote(value)));
+            members.push((member, value.to_owned()));
         }
-        let canonical = format!("{{{}}}", canonical.join(","));
+        let public = PublicJwk { members };
         let key = match (kty, json.get("crv").and_then(Json::as_str)) {
             ("OKP", Some("Ed25519")) => {
                 let x = json.get("x").and_then(Json::as_str).unwrap_or_default();
@@ -99,7 +129,8 @@ impl Jwk {
             _ => None,
         };
         Ok(Jwk {
-            thumbprint: URL_SAFE_NO_PAD.encode(Sha256::digest(canonical.as_bytes())),
+            thumbprint: public.thumbprint(),
+            public,
             key,
         })
     }
@@ -122,6 +153,8 @@ pub struct KeyProvenance {
     pub method: Option<&'static str>,
     /// The key used, as an RFC 7638 thumbprint.
     pub thumbprint: Option<String>,
+    /// The key used, as a JWK: what the thumbprint is of.
+    pub jwk: Option<PublicJwk>,
     /// Present whenever the credential offered a key of its own.
     pub credential_key: Option<CredentialKey>,
 }
@@ -155,6 +188,8 @@ pub struct CredentialKey {
     /// Where it was, e.g. `header.jwk`.
     pub location: String,
     pub thumbprint: String,
+    /// Its public members, as the credential carries them.
+    pub jwk: PublicJwk,
     /// Whether it is the key used.
     pub matched: bool,
     /// Whether the signature verifies under it; absent when that cannot be tried.
@@ -208,8 +243,10 @@ pub(crate) fn resolve(hints: &KeyHints) -> Resolution {
 /// derived, and a warning when the two differ.
 fn compare_embedded(embedded: &EmbeddedKey, resolution: &mut Resolution) {
     let thumbprint = &embedded.jwk.thumbprint;
-    let derived = resolution.provenance.thumbprint.clone();
-    let matched = derived.as_ref() == Some(thumbprint);
+    let provenance = &resolution.provenance;
+    let derived = provenance.source.zip(provenance.thumbprint.clone());
+    let matched = derived.as_ref().map(|(_, t)| t) == Some(thumbprint);
+    let method = provenance.method;
     match derived {
         // Refused, and reported as such rather than as "no key material"
         // (REQUIREMENTS §10). The opt-in that would allow it is the caller's.
@@ -220,14 +257,20 @@ fn compare_embedded(embedded: &EmbeddedKey, resolution: &mut Resolution) {
                 location: embedded.location,
             },
         )),
-        Some(key) if !matched => resolution.findings.push(Finding::new(
+        Some((source, key)) if !matched => resolution.findings.push(Finding::new(
             Phase::Verify,
             Attribution::Input,
             Severity::Warning,
             FindingDetail::CredentialKeyMismatch {
-                location: embedded.location,
-                credential_key: thumbprint.clone(),
-                key,
+                carried_key: CarriedKeyRef {
+                    location: embedded.location,
+                    thumbprint: thumbprint.clone(),
+                },
+                key: KeyRef {
+                    source,
+                    method,
+                    thumbprint: key,
+                },
             },
         )),
         Some(_) => {}
@@ -235,6 +278,7 @@ fn compare_embedded(embedded: &EmbeddedKey, resolution: &mut Resolution) {
     resolution.provenance.credential_key = Some(CredentialKey {
         location: embedded.location.to_owned(),
         thumbprint: thumbprint.clone(),
+        jwk: embedded.jwk.public.clone(),
         matched,
         verifies_signature: None,
     });
@@ -264,11 +308,13 @@ fn from_issuer(issuer: &str) -> Resolution {
             FindingDetail::DidKeyCodecUnsupported { codec, name },
         )),
         Ok(DidKey::Usable(key, weak)) => {
-            let thumbprint = key.thumbprint();
+            let jwk = key.jwk();
+            let thumbprint = jwk.thumbprint();
             let provenance = KeyProvenance {
                 source: Some(KeySource::IssuerIdentifier),
                 method: Some("did:key"),
                 thumbprint: Some(thumbprint.clone()),
+                jwk: Some(jwk),
                 credential_key: None,
             };
             if weak {
@@ -276,7 +322,14 @@ fn from_issuer(issuer: &str) -> Resolution {
                 let finding = Finding::error(
                     Phase::Verify,
                     Attribution::Input,
-                    FindingDetail::WeakKey { thumbprint },
+                    FindingDetail::WeakKey {
+                        key: KeyRef {
+                            source: KeySource::IssuerIdentifier,
+                            method: Some("did:key"),
+                            thumbprint,
+                        },
+                        criterion: WeakKeyCriterion::SmallOrder,
+                    },
                 );
                 Resolution {
                     provenance,

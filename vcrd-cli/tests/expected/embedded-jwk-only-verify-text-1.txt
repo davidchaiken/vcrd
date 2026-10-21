@@ -1,0 +1,38 @@
+ Status     inspect_failed
+ Kind       credential
+ Types      VerifiableCredential, ExampleDegreeCredential
+ Validity   current
+
+Phases
+ Phase   | Outcome | Findings                    | Blocked by
+---------+---------+-----------------------------+------------
+ inspect | failed  | inspect.issuer_missing      |
+ verify  | failed  | verify.embedded_key_refused |
+
+Proof
+ Suite                jws
+ Algorithm            EdDSA
+ Outcome              not_attempted
+ Carried key          header.jwk
+ Matched              false
+ Verifies signature   true
+
+Claims
+ Path                          | Type   | Value    | Visibility
+-------------------------------+--------+----------+------------
+ credentialSubject.degree.name | string | (masked) | masked
+ credentialSubject.degree.type | string | (masked) | masked
+ credentialSubject.id          | string | (masked) | masked
+ id                            | string | (masked) | masked
+
+Findings
+ Code                        | Attribution | Severity | Detail
+-----------------------------+-------------+----------+----------------------
+ inspect.issuer_missing      | input       | error    |
+ verify.embedded_key_refused | policy      | error    | location: header.jwk
+
+Not evaluated
+ Check                | Reason
+----------------------+-----------------
+ issuer_accreditation | out_of_scope
+ context_resolution   | not_implemented

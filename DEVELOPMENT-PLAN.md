@@ -182,6 +182,11 @@ every other `alg` exercise the by-name rejection path from day one.
     after review, in place of an Unmasked column and JSON's `treatment`). JSON keeps
     `reveals`, each entry naming the key its path is relative to and its visibility,
     `revealed`; milestone 3's hashed designation adds `hashed`.
+  - Each key is shown with its JWK beside its thumbprint (`key_provenance.jwk`,
+    `credential_key.jwk`), and key findings say where each key came from: `key` with
+    its source, method and thumbprint, `carried_key` with its location and thumbprint;
+    `verify.weak_key` adds the `criterion` it fails. A carried key, and whether the
+    signature verifies under it, is shown at level 1 (decided 2026-10-21, after review).
   - `--unsafe` has three levels: 0 masks claims and secrets, 1 (`--unsafe`) shows claims,
     2 also shows cryptographic secrets, such as a header `jwk`'s private members.
     Caller errors and the warning are the only stderr output; milestone 3 adds
@@ -290,7 +295,11 @@ ES384, ES256K and the PS and RS384/RS512 families ([C3]), implementing what is d
 caller-supplied JWK set (flag name is implementation-time), matched by `kid` else the sole
 key. The full precedence of REQUIREMENTS §10 with RFC 7638 thumbprint matching, the
 embedded-key opt-in, and the `credential_key` block with `matched` and `verifies_signature`
-(ARCHITECTURE §8). The algorithm allowlist as a `Context` input and a CLI flag; policy
+(ARCHITECTURE §8). A `kid` that is a `did:key` URL, in a credential whose issuer gives no
+key, as a key the credential carries about itself: refused without the opt-in and
+reported as an embedded `jwk` is, with `credential_key.location: header.kid`, so that
+such a credential is not blocked for want of key material (milestone 1's review of
+slice 5, N12: nothing binds such a key to an issuer). The algorithm allowlist as a `Context` input and a CLI flag; policy
 rejection (exit 5) distinct from unsupported (exit 6), both reported when both apply.
 Binding of each algorithm to key type *and curve*. Weak-key criteria at resolution: RSA
 modulus of at least 2048 bits (RFC 7518 §3.3 **[verified]**), HS256 key of at least 256

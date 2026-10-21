@@ -479,30 +479,42 @@ fn proof_section(index: usize, proof: &ProofView, full: bool) -> Section {
                 thumbprint.clone(),
             ));
         }
-        if let Some(key) = &provenance.credential_key {
-            let carried = "key_provenance.credential_key";
-            fields.push(field(
-                &format!("{carried}.location"),
-                "Carried key",
-                key.location.clone(),
-            ));
+        if let Some(jwk) = &provenance.jwk {
+            fields.push(field("key_provenance.jwk", "Key JWK", jwk.to_string()));
+        }
+    }
+    // The key the credential carries, and whether the signature verifies under it,
+    // at every level: without them a refused key reads as if nothing was tried.
+    if let Some(key) = &provenance.credential_key {
+        let carried = "key_provenance.credential_key";
+        fields.push(field(
+            &format!("{carried}.location"),
+            "Carried key",
+            key.location.clone(),
+        ));
+        if full {
             fields.push(field(
                 &format!("{carried}.thumbprint"),
                 "Carried thumbprint",
                 key.thumbprint.clone(),
             ));
             fields.push(field(
-                &format!("{carried}.matched"),
-                "Matched",
-                key.matched.to_string(),
+                &format!("{carried}.jwk"),
+                "Carried key JWK",
+                key.jwk.to_string(),
             ));
-            if let Some(verifies) = key.verifies_signature {
-                fields.push(field(
-                    &format!("{carried}.verifies_signature"),
-                    "Verifies signature",
-                    verifies.to_string(),
-                ));
-            }
+        }
+        fields.push(field(
+            &format!("{carried}.matched"),
+            "Matched",
+            key.matched.to_string(),
+        ));
+        if let Some(verifies) = key.verifies_signature {
+            fields.push(field(
+                &format!("{carried}.verifies_signature"),
+                "Verifies signature",
+                verifies.to_string(),
+            ));
         }
     }
     Section {

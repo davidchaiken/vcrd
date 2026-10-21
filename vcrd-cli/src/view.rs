@@ -11,9 +11,10 @@ use time::format_description::well_known::Rfc3339;
 use vcrd_core::{
     Attribution, Base64urlProblem, BlockReason, Check, Context, CritProblem, DateField,
     DidKeyProblem, Document, DocumentKind, Finding, FindingDetail, IssLocation, IssuerProblem,
-    JwkProblem, JwsJsonSyntax, JwsSegment, KeySourceKind, LeafClass, Missing, NotEvaluatedReason,
-    Phase, PhaseOutcome, ProofOutcome, Rendered, RenderedJson, Report, RevealLocation, Revealed,
-    Severity, Treatment, Validity, ValueKind, render,
+    JwkProblem, JwsJsonSyntax, JwsSegment, KeyRef, KeySourceKind, LeafClass, Missing,
+    NotEvaluatedReason, Phase, PhaseOutcome, ProofOutcome, PublicJwk, Rendered, RenderedJson,
+    Report, RevealLocation, Revealed, Severity, Treatment, Validity, ValueKind, WeakKeyCriterion,
+    render,
 };
 
 /// `0` until the schema is declared stable (REQUIREMENTS §9).
@@ -156,8 +157,12 @@ pub struct ProvenanceView {
     pub source: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub method: Option<&'static str>,
+    /// The key used, as an RFC 7638 thumbprint.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thumbprint: Option<String>,
+    /// The key used, as a JWK: the members the thumbprint covers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jwk: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential_key: Option<CredentialKeyView>,
 }
@@ -166,6 +171,8 @@ pub struct ProvenanceView {
 pub struct CredentialKeyView {
     pub location: String,
     pub thumbprint: String,
+    /// The carried key's public members, which its thumbprint covers.
+    pub jwk: Value,
     pub matched: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verifies_signature: Option<bool>,
@@ -424,10 +431,12 @@ fn proofs(report: &Report) -> Vec<ProofView> {
                     source: p.key_provenance.source.map(|s| s.as_str()),
                     method: p.key_provenance.method,
                     thumbprint: p.key_provenance.thumbprint.clone(),
+                    jwk: p.key_provenance.jwk.as_ref().map(jwk),
                     credential_key: p.key_provenance.credential_key.as_ref().map(|k| {
                         CredentialKeyView {
                             location: k.location.clone(),
                             thumbprint: k.thumbprint.clone(),
+                            jwk: jwk(&k.jwk),
                             matched: k.matched,
                             verifies_signature: k.verifies_signature,
                         }
@@ -449,6 +458,7 @@ fn proofs(report: &Report) -> Vec<ProofView> {
                     source: None,
                     method: None,
                     thumbprint: None,
+                    jwk: None,
                     credential_key: None,
                 },
                 validity: None,
@@ -787,23 +797,41 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
             "codec": format!("0x{codec:x}"),
             "name": name,
         }),
-        FindingDetail::WeakKey { thumbprint } => {
-            json!({"type": "weak_key", "thumbprint": thumbprint})
-        }
+        FindingDetail::WeakKey { key, criterion } => json!({
+            "type": "weak_key",
+            "key": key_ref(key),
+            "criterion": match criterion {
+                WeakKeyCriterion::SmallOrder => "small_order",
+            },
+        }),
         FindingDetail::EmbeddedKeyRefused { location } => {
             json!({"type": "embedded_key_refused", "location": location})
         }
-        FindingDetail::CredentialKeyMismatch {
-            location,
-            credential_key,
-            key,
-        } => json!({
+        FindingDetail::CredentialKeyMismatch { carried_key, key } => json!({
             "type": "credential_key_mismatch",
-            "location": location,
-            "credential_key": credential_key,
-            "key": key,
+            "carried_key": {
+                "location": carried_key.location,
+                "thumbprint": carried_key.thumbprint,
+            },
+            "key": key_ref(key),
         }),
     }
+}
+
+/// A key as a finding names it: where it came from, as `key_provenance` says, and its
+/// thumbprint.
+fn key_ref(key: &KeyRef) -> Value {
+    json!({"source": key.source.as_str(), "method": key.method, "thumbprint": key.thumbprint})
+}
+
+/// A public key's JWK members as a JSON object.
+fn jwk(jwk: &PublicJwk) -> Value {
+    Value::Object(
+        jwk.members
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), Value::String(value.clone())))
+            .collect(),
+    )
 }
 
 /// A proof's time and the clock it was compared with. `value` is the JSON number as

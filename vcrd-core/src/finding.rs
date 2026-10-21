@@ -2,6 +2,7 @@
 
 use time::OffsetDateTime;
 
+use crate::keys::KeySource;
 use crate::registry::{FormatId, SuiteId};
 use crate::report::Phase;
 
@@ -328,8 +329,12 @@ pub enum FindingDetail {
         codec: u64,
         name: Option<&'static str>,
     },
-    /// The key cannot bind a signature to a message (REQUIREMENTS §10).
-    WeakKey { thumbprint: String },
+    /// The key cannot bind a signature to a message (REQUIREMENTS §10). `criterion`
+    /// says which of the algorithm's weak-key criteria it meets (ARCHITECTURE §8).
+    WeakKey {
+        key: KeyRef,
+        criterion: WeakKeyCriterion,
+    },
     /// The only key on offer is one the credential carries about itself, which vcrd
     /// uses only on the caller's opt-in (REQUIREMENTS §10). Attributed to caller
     /// policy.
@@ -338,11 +343,10 @@ pub enum FindingDetail {
     /// issuer, though RFC 7515 §4.1.3 makes `jwk` the key that signed. A warning:
     /// it never changes which key is used (ARCHITECTURE §8).
     CredentialKeyMismatch {
-        location: &'static str,
-        /// The carried key's RFC 7638 thumbprint.
-        credential_key: String,
-        /// The thumbprint of the key derived from the issuer.
-        key: String,
+        /// The key the credential carries.
+        carried_key: CarriedKeyRef,
+        /// The key resolution established, from the issuer.
+        key: KeyRef,
     },
 }
 
@@ -478,6 +482,31 @@ pub enum CritProblem {
     Registered { name: String },
     /// A name that is not a member of the header.
     NotInHeader { name: String },
+}
+
+/// A key a finding concerns: where it came from, how, and its RFC 7638 thumbprint, as
+/// `key_provenance` names it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeyRef {
+    pub source: KeySource,
+    /// How the key was derived from its source, e.g. `did:key`.
+    pub method: Option<&'static str>,
+    pub thumbprint: String,
+}
+
+/// A key the credential carries about itself, as a finding names it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CarriedKeyRef {
+    /// Where it was, e.g. `header.jwk`.
+    pub location: &'static str,
+    pub thumbprint: String,
+}
+
+/// The weak-key criteria of ARCHITECTURE §8's table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WeakKeyCriterion {
+    /// An EdDSA key of small order, such as the identity point (`VerifyingKey::is_weak`).
+    SmallOrder,
 }
 
 /// Why a `jwk` is not a public key vcrd can read (RFC 7517 §4; RFC 7518 §6; RFC 8037

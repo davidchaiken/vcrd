@@ -26,6 +26,7 @@ Proof
  Method       did:key
  Validity     unbounded
  Thumbprint   0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
+ Key JWK      {"crv":"Ed25519","kty":"OKP","x":"mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0"}
 
 Header
  Path | Type   | Value                                                                                                     | Visibility

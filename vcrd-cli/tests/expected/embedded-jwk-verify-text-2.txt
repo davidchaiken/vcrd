@@ -26,8 +26,10 @@ Proof
  Method               did:key
  Validity             unbounded
  Thumbprint           0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
+ Key JWK              {"crv":"Ed25519","kty":"OKP","x":"mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0"}
  Carried key          header.jwk
  Carried thumbprint   _i3gzFWABuHlZnuT9FBtp8CVlJ57CcWpTPwviZ2m1ms
+ Carried key JWK      {"crv":"Ed25519","kty":"OKP","x":"dmVW__tsfsOxTi_nA17JMexgwC2vIwXdN2ouKk5wJDs"}
  Matched              false
  Verifies signature   true
 
@@ -52,10 +54,12 @@ Claims
 
 Findings
  Code                           | Attribution | Severity | Detail
---------------------------------+-------------+----------+-------------------------------------------------------------
- verify.credential_key_mismatch | input       | warning  | credential_key: _i3gzFWABuHlZnuT9FBtp8CVlJ57CcWpTPwviZ2m1ms
-                                |             |          | key: 0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
-                                |             |          | location: header.jwk
+--------------------------------+-------------+----------+---------------------------------------------------------------------
+ verify.credential_key_mismatch | input       | warning  | carried_key.location: header.jwk
+                                |             |          | carried_key.thumbprint: _i3gzFWABuHlZnuT9FBtp8CVlJ57CcWpTPwviZ2m1ms
+                                |             |          | key.method: did:key
+                                |             |          | key.source: issuer_identifier
+                                |             |          | key.thumbprint: 0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
  verify.signature_invalid       | input       | error    | algorithm: EdDSA
 
 Not evaluated

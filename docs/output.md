@@ -30,8 +30,8 @@ complete at levels 1 to 3.
 | Level | `text` and `plain` show |
 |---|---|
 | 0 | nothing, in any format, on either stream: the exit code is the whole answer. `--unsafe` has no effect, since nothing is shown. |
-| 1 | the status; the credential's kind, issuer, types and validity; inspect's outcome, kinds of finding and what blocked it; when verify was requested, the same for verify, and each proof's suite, algorithm, outcome, and where its key came from (`key_provenance.source` and `method`); the claims, masked; every finding; and the checks not evaluated |
-| 2 | everything except the credential's metadata. Level 1, plus: the exit code; the input's size and depth; the format and profile; the validity bounds; the parse phase; each proof's own validity, key thumbprint, and any key the credential carries; and the header |
+| 1 | the status; the credential's kind, issuer, types and validity; inspect's outcome, kinds of finding and what blocked it; when verify was requested, the same for verify, and each proof's suite, algorithm, outcome, and where its key came from (`key_provenance.source` and `method`), with any key the credential carries, whether it matched, and whether the signature verifies under it; the claims, masked; every finding; and the checks not evaluated |
+| 2 | everything except the credential's metadata. Level 1, plus: the exit code; the input's size and depth; the format and profile; the validity bounds; the parse phase; each proof's own validity, and the thumbprint and JWK of each key; and the header |
 | 3 | everything: level 2, plus the credential's metadata |
 
 At levels 1 to 3, a caller error's message is written to standard error as well as
@@ -177,6 +177,22 @@ signature verifies under that key, which vcrd checks for information whether or 
 accepts the key; `outcome` is unaffected. `outcome: not_attempted` with
 `verifies_signature: true` means that the signature is sound under a key vcrd refused to
 rely on (REQUIREMENTS §10).
+
+Each key is named by its JWK Thumbprint (RFC 7638; REQUIREMENTS §15): the SHA-256, in
+base64url, of its public members as a canonical JSON object. Beside the thumbprint is the
+key itself as a JWK, those same members, so that a reader can see which key a thumbprint
+names and compare two keys by eye:
+
+| Key | What it names |
+|---|---|
+| `key_provenance.thumbprint`, `key_provenance.jwk` | the key vcrd verified with: for a `did:key` issuer, the key the identifier encodes |
+| `credential_key.thumbprint`, `credential_key.jwk` | the key the credential carries, at `credential_key.location`, such as the header's `jwk` |
+
+A carried key's private members, if any, are never part of its JWK here. Findings about
+keys name them the same way: `key`, with its `source`, `method` and `thumbprint`, for the
+key vcrd established, and `carried_key`, with its `location` and `thumbprint`, for the
+key the credential carries. `verify.weak_key` adds `criterion`, the weak-key test the key
+fails: for Ed25519, `small_order`.
 
 ## `findings`
 
@@ -401,6 +417,7 @@ vcrd verify fixtures/embedded-jwk-only.jwt --now 2026-10-01T00:00:00Z --format j
         "credential_key": {
           "location": "header.jwk",
           "thumbprint": "0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c",
+          "jwk": { "crv": "Ed25519", "kty": "OKP", "x": "mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0" },
           "matched": false,
           "verifies_signature": true
         }
