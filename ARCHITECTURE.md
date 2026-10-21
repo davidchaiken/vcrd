@@ -1025,7 +1025,7 @@ Each becomes a test observed to fail and then to pass (REQUIREMENTS §11):
   an edit to the file. The team must be visible and have write access to the repository.
   The move changes the repository's URL: update `repository` in `Cargo.toml`, the links
   in `SECURITY.md`, and the git remotes (REQUIREMENTS §12, §14).
-- **[P7] Establish whether the `main` ruleset enforces code-owner review.** It requires
+- ~~**[P7] Establish whether the `main` ruleset enforces code-owner review.** It requires
   code-owner review with zero required approvals, yet pull request #7, which changed
   code-owned files and was authored by the only code owner, merged with no review and no
   bypass. Either zero required approvals leaves nothing to enforce, or GitHub exempts a
@@ -1037,4 +1037,10 @@ Each becomes a test observed to fail and then to pass (REQUIREMENTS §11):
   requiring one approval (with the bypass for the maintainer's own pull requests) and
   accepting CODEOWNERS as review requests only. Either way, a pull request the maintainer
   authors, including one carrying an agent's changes, is not held by this rule
-  (REQUIREMENTS §12; `docs/reviews/milestone-0.md`).
+  (REQUIREMENTS §12; `docs/reviews/milestone-0.md`).~~
+  Resolved 2026-10-21: the rule is enforced, and GitHub exempts a pull request's author.
+  Pull request #14, Dependabot's update to `Cargo.lock` (a code-owned file), could be
+  merged only after the code owner's review or with the bypass; the maintainer reviewed
+  it. The API's `mergeable_state` read `clean` while the review was pending, so the merge
+  box, not that field, is the test. The rule holds every other author's pull requests,
+  and does not hold the maintainer's own, including one carrying an agent's changes.
