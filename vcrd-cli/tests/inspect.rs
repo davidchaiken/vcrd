@@ -69,17 +69,17 @@ fn issuer_missing_blocks_verify_and_says_why() {
     assert_eq!(out["status"], "inspect_failed");
 }
 
-/// A parse failure's block names the document as what is missing, and points at the
-/// parse phase for the findings.
+/// A parse failure's block points at the parse phase, whose findings say why it
+/// failed; it names nothing as missing, since parse failing is the whole reason.
 #[test]
-fn a_parse_block_is_missing_the_document() {
+fn a_parse_block_points_at_parse() {
     let out = json(vcrd().arg("verify").write_stdin("not.a.jws"), 2);
     for phase in ["inspect", "verify"] {
         assert_eq!(
             out["phases"][phase],
             json!({
                 "outcome": "not_reached",
-                "blocked_by": {"phase": "parse", "reason": "impossible", "missing": "document"},
+                "blocked_by": {"phase": "parse", "reason": "impossible"},
                 "findings": [],
             })
         );

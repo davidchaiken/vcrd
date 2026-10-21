@@ -1,0 +1,20 @@
+ Status   parse_failed
+
+Phases
+ Phase   | Outcome     | Findings | Blocked by
+---------+-------------+----------+--------------
+ inspect | not_reached |          | parse failed
+ verify  | not_reached |          | parse failed
+
+Findings
+ Code                    | Attribution | Severity | Detail
+-------------------------+-------------+----------+--------------------------------
+ parse.base64url_invalid | input       | error    | problem: nonzero_trailing_bits
+                         |             |          | segment: header
+ parse.base64url_invalid | input       | error    | problem: invalid_length
+                         |             |          | segment: payload
+
+Not evaluated
+ Check                | Reason
+----------------------+--------------
+ issuer_accreditation | out_of_scope

@@ -1,12 +1,98 @@
-# vcrd's JSON output
+# vcrd's output
 
-Every `vcrd` invocation prints one JSON document on standard output (REQUIREMENTS §9).
-This page explains the keys and values a reader needs to interpret a result. It grows
-as the output does; [ARCHITECTURE.md §6](../ARCHITECTURE.md) lists every key of the
-envelope.
+`vcrd` prints its result on standard output in one of three formats, and writes caller
+errors and warnings to standard error (REQUIREMENTS §8). This page explains how to read a
+result. It grows as the output does; [ARCHITECTURE.md §6](../ARCHITECTURE.md) lists every
+key of the JSON envelope.
 
-The schema is unstable until `schema_version` is no longer `0`: keys and values may
+The JSON schema is unstable until `schema_version` is no longer `0`: keys and values may
 change between releases.
+
+## Formats
+
+| `--format` | What it prints |
+|---|---|
+| `text` (the default) | the result as labeled sections of tables, for a reader at a terminal |
+| `plain` | one line per item, for line-oriented tools: `name: value` for a single value, and `name: column=value …` for a row of a table, such as `phases.verify: outcome=failed findings=verify.proof_expired` |
+| `json` | the complete result as one JSON document (REQUIREMENTS §9), whatever the verbosity level |
+
+The names in `plain` are the JSON keys and paths the values come from. A value in a
+`column=value` pair is quoted as a JSON string when it is empty or contains a space, an
+`=` or a quote. In `text` and `plain`, every control character and every character that
+reorders bidirectional text is printed as an escape such as `\u{001b}`, so that a
+credential's content cannot act on the terminal or disguise what surrounds it.
+
+## Verbosity
+
+`--verbosity` (0 to 3, default 1) chooses how much `text` and `plain` show. JSON is
+complete at levels 1 to 3.
+
+| Level | `text` and `plain` show |
+|---|---|
+| 0 | nothing, in any format, on either stream: the exit code is the whole answer. `--unsafe` has no effect, since nothing is shown. |
+| 1 | the status; the credential's kind, issuer, types and validity; inspect's outcome, kinds of finding and what blocked it; when verify was requested, the same for verify, and each proof's suite, algorithm, outcome, and where its key came from (`key_provenance.source` and `method`), with any key the credential carries, whether it matched, and whether the signature verifies under it; the claims, masked; every finding; and the checks not evaluated |
+| 2 | everything except the credential's metadata. Level 1, plus: the exit code; the input's size and depth; the format and profile; the validity bounds; the parse phase; each proof's own validity, and the thumbprint and JWK of each key; and the header |
+| 3 | everything: level 2, plus the credential's metadata |
+
+At levels 1 to 3, a caller error's message is written to standard error as well as
+reported in the result. A parse failure is shown at level 1 by the later phases'
+`blocked_by`, which names parse.
+
+## Masked values and `--unsafe`
+
+Claim values are masked by default (REQUIREMENTS §8). `--unsafe` shows them:
+
+| Flag | Shown in cleartext |
+|---|---|
+| none, or `--unsafe=0` | metadata only |
+| `--unsafe`, `--unsafe=1` or `--unsafe 1` | metadata and claims |
+| `--unsafe=2` or `--unsafe 2` | metadata, claims, and cryptographic secrets, such as the private-key members of a `jwk` the credential carries |
+
+A level is read after `--unsafe` only when it is `0`, `1` or `2`, so `vcrd --unsafe f.jwt`
+means level 1; a file with one of those names is written `./2`.
+
+With `--unsafe=1` or `=2`, a warning says what is shown, on standard error and in the
+result, so that a reader of standard output alone sees it too. In JSON it is an entry in
+`warnings`, `{code, message}` with code `unsafe`. `text` prints it in a Warnings table,
+and `plain` as `warnings[0]: code=unsafe message="…"`, both after the findings: in
+`text` and `plain` the first line is always the status.
+
+## Values and their visibility
+
+The credential's claims (`credential.claims`), its metadata (`credential.metadata`) and
+the header (`format.header`) are each a list of values, one per JSON scalar, in input
+order:
+
+| Key | Present | Value |
+|---|---|---|
+| `path` | always | where the value is, such as `credentialSubject.degree.name` or `jwk.d` |
+| `type` | always | its JSON type: `string`, `number`, `bool` or `null` |
+| `visibility` | always | whether it is sensitive and, if so, whether it is shown; see below |
+| `value` | unless masked | the value |
+
+| `visibility` | Meaning |
+|---|---|
+| `non_sensitive` | metadata, such as an issuer, a type or a date: always shown |
+| `masked` | a claim, or a cryptographic secret, not shown |
+| `revealed` | a claim or a secret shown because `--unsafe` asked for it |
+
+`text` shows the same in a Visibility column, with `(masked)` in place of a masked value,
+and `plain` adds `visibility=…` to each value's line. A secret stays `masked` at
+`--unsafe=1`, while the claims beside it are `revealed`.
+
+Every revealed value is also listed in `reveals`, as `{path, location, visibility}`, so
+that a script can tell whether anything was revealed without reading every value.
+`location` is the key the path is relative to: `credential.claims` or `format.header`;
+`visibility` is `revealed`, as on the value itself.
+
+## `format.header`
+
+The securing mechanism's header: for VC-JOSE-COSE, the JOSE header, every member
+included, listed as values as the claims are. A member whose name is repeated is listed
+once for each occurrence. The list is empty when the input has no header or it did not
+decode. `text` and `plain` show the header from level 2. In `text`, a `kid` that is a DID
+URL is broken onto two lines before its fragment (`#`), since the DID part alone is as
+wide as most terminals allow; `plain` keeps it on one line.
 
 ## `status` and `exit_code`
 
@@ -17,6 +103,9 @@ change between releases.
 | `parse_failed` | 2, 5 or 6 | the earliest failed phase is parse |
 | `inspect_failed` | 3, 5 or 6 | the earliest failed phase is inspect |
 | `verify_failed` | 4, 5 or 6 | the earliest failed phase is verify |
+
+No output setting changes the exit code: whatever the format, the verbosity level or
+the `--unsafe` level, it is the result's.
 
 `status` names the earliest failed phase. `exit_code` is 6 when any error finding is
 attributed to vcrd (something vcrd does not support), otherwise 5 when any is attributed
@@ -50,14 +139,13 @@ A failed phase does not stop the next one unless running it is impossible or dan
 
 | Key | Present | Value |
 |---|---|---|
-| `phase` | always | the phase whose findings prevented this one: `parse` or `inspect`. That phase's own `findings` say what was wrong. |
+| `phase` | always | the phase whose findings prevented this one: `parse` or `inspect`. That phase's own `findings` say what was wrong. A block by `parse` means parse failed: whatever the cause, nothing that fails to parse can be inspected or verified. |
 | `reason` | always | `impossible`: what the phase needs is not available. `dangerous`: running it could expose vcrd to an exploit, or would fetch material such as a key from an untrustworthy source. No input produces `dangerous` yet. |
-| `missing` | when `reason` is `impossible` | what the phase lacks: `document` or `key_material` |
+| `missing` | when `reason` is `impossible` and the blocking phase is not `parse` | what the phase lacks: `key_material` |
 | `consulted` | when `missing` is `key_material` | the key sources vcrd considered, none of them usable; values below |
 
 | `missing` | Meaning |
 |---|---|
-| `document` | Parsing failed, so there is nothing to inspect or verify. |
 | `key_material` | No key can be found to check the signature with. The credential names no usable issuer identifier (no `issuer`, or one that is not a URL, or an encoding vcrd does not read), and no other source of keys is available. A credential that carries a key about itself is not blocked: verify runs and reports that it refused that key (`verify.embedded_key_refused`). |
 
 | `consulted` value | The source |
@@ -67,6 +155,9 @@ A failed phase does not stop the next one unless running it is impossible or dan
 | `credential_embedded` | a key the credential carries about itself, which vcrd uses only if the caller opts in (not available yet) |
 
 The list may gain values; a consumer should accept values it does not recognize.
+
+`text` and `plain` say the same in the Blocked by column, in the reader's terms: "parse
+failed", or "inspect: no key for verify; looked in: issuer identifier".
 
 ## `proofs`
 
@@ -89,6 +180,22 @@ accepts the key; `outcome` is unaffected. `outcome: not_attempted` with
 `verifies_signature: true` means that the signature is sound under a key vcrd refused to
 rely on (REQUIREMENTS §10).
 
+Each key is named by its JWK Thumbprint (RFC 7638; REQUIREMENTS §15): the SHA-256, in
+base64url, of its public members as a canonical JSON object. Beside the thumbprint is the
+key itself as a JWK, those same members, so that a reader can see which key a thumbprint
+names and compare two keys by eye:
+
+| Key | What it names |
+|---|---|
+| `key_provenance.thumbprint`, `key_provenance.jwk` | the key vcrd verified with: for a `did:key` issuer, the key the identifier encodes |
+| `credential_key.thumbprint`, `credential_key.jwk` | the key the credential carries, at `credential_key.location`, such as the header's `jwk` |
+
+A carried key's private members, if any, are never part of its JWK here. Findings about
+keys name them the same way: `key`, with its `source`, `method` and `thumbprint`, for the
+key vcrd established, and `carried_key`, with its `location` and `thumbprint`, for the
+key the credential carries. `verify.weak_key` adds `criterion`, the weak-key test the key
+fails: for Ed25519, `small_order`.
+
 ## `findings`
 
 One entry for each condition found, in phase order. A phase's `findings` list names each
@@ -104,10 +211,83 @@ kind of condition once; this list has every occurrence.
 
 ## Examples
 
+The curated example in `text`, at the default level. Every phase passes, and the claims'
+names are shown with their values masked.
+
+```bash
+vcrd verify examples/ed25519.jwt --now 2026-10-01T00:00:00Z
+```
+
+```text
+ Status     passed
+ Kind       credential
+ Issuer     did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N
+ Types      VerifiableCredential, ExampleDegreeCredential
+ Validity   current
+
+Phases
+ Phase   | Outcome | Findings | Blocked by
+---------+---------+----------+------------
+ inspect | passed  |          |
+ verify  | passed  |          |
+
+Proof
+ Suite        jws
+ Algorithm    EdDSA
+ Outcome      verified
+ Key source   issuer_identifier
+ Method       did:key
+
+Claims
+ Path                          | Type   | Value    | Visibility
+-------------------------------+--------+----------+------------
+ credentialSubject.degree.name | string | (masked) | masked
+ credentialSubject.degree.type | string | (masked) | masked
+ credentialSubject.id          | string | (masked) | masked
+ id                            | string | (masked) | masked
+
+Not evaluated
+ Check                | Reason
+----------------------+-----------------
+ issuer_accreditation | out_of_scope
+ context_resolution   | not_implemented
+```
+
+A signature that has expired, in `plain`. Each line names the JSON key or path its
+values come from, and the finding's detail follows its code.
+
+```bash
+vcrd verify fixtures/exp-past.jwt --now 2026-10-01T00:00:00Z --format plain
+```
+
+```text
+status: verify_failed
+credential.kind: credential
+credential.issuer: did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N
+credential.types: VerifiableCredential, ExampleDegreeCredential
+credential.validity: current
+phases.inspect: outcome=passed
+phases.verify: outcome=failed findings=verify.proof_expired
+proofs[0].suite: jws
+proofs[0].algorithm: EdDSA
+proofs[0].outcome: verified
+proofs[0].key_provenance.source: issuer_identifier
+proofs[0].key_provenance.method: did:key
+credential.claims.credentialSubject.degree.name: type=string value=(masked) visibility=masked
+credential.claims.credentialSubject.degree.type: type=string value=(masked) visibility=masked
+credential.claims.credentialSubject.id: type=string value=(masked) visibility=masked
+credential.claims.id: type=string value=(masked) visibility=masked
+findings[0]: code=verify.proof_expired attribution=input severity=error claim=exp now=2026-10-01T00:00:00Z skew_seconds=0 value=1780272000 value_date_time=2026-06-01T00:00:00Z
+not_evaluated.issuer_accreditation: reason=out_of_scope
+not_evaluated.context_resolution: reason=not_implemented
+```
+
+The JSON examples below select keys with `jq`.
+
 The curated example, inside its validity period: every phase passes.
 
 ```bash
-vcrd verify examples/ed25519.jwt --now 2026-10-01T00:00:00Z | jq '{status, exit_code, phases}'
+vcrd verify examples/ed25519.jwt --now 2026-10-01T00:00:00Z --format json | jq '{status, exit_code, phases}'
 ```
 
 ```json
@@ -128,7 +308,7 @@ verify still runs and finds the signature sound. `status` reports only the inspe
 failure; `phases` shows both results.
 
 ```bash
-vcrd verify fixtures/validity-reversed.jwt --now 2026-10-01T00:00:00Z | jq '{status, exit_code, phases}'
+vcrd verify fixtures/validity-reversed.jwt --now 2026-10-01T00:00:00Z --format json | jq '{status, exit_code, phases}'
 ```
 
 ```json
@@ -147,11 +327,11 @@ vcrd verify fixtures/validity-reversed.jwt --now 2026-10-01T00:00:00Z | jq '{sta
 ```
 
 A credential with no `issuer`: inspect fails, and verify is blocked because there is no
-key to verify with. `blocked_by.phase` points at inspect, whose findings, here one,
+key for verify to use. `blocked_by.phase` points at inspect, whose findings, here one,
 say what was wrong; the top-level `findings` list has each one in full.
 
 ```bash
-vcrd verify fixtures/issuer-missing.jwt --now 2026-10-01T00:00:00Z | jq '{status, exit_code, phases, findings}'
+vcrd verify fixtures/issuer-missing.jwt --now 2026-10-01T00:00:00Z --format json | jq '{status, exit_code, phases, findings}'
 ```
 
 ```json
@@ -189,7 +369,7 @@ the clock, and `validUntil` is later. Inspect passes and the signature verifies;
 proof's `validity` is `expired`, and verify fails.
 
 ```bash
-vcrd verify fixtures/exp-past.jwt --now 2026-10-01T00:00:00Z | jq '{status, exit_code, credential: .credential.validity, proofs: [.proofs[] | {outcome, validity}], findings: [.findings[] | {code, detail}]}'
+vcrd verify fixtures/exp-past.jwt --now 2026-10-01T00:00:00Z --format json | jq '{status, exit_code, credential: .credential.validity, proofs: [.proofs[] | {outcome, validity}], findings: [.findings[] | {code, detail}]}'
 ```
 
 ```json
@@ -225,7 +405,7 @@ key, which is all a key the credential asserts about itself can show. `matched: 
 because there is no other key to match.
 
 ```bash
-vcrd verify fixtures/embedded-jwk-only.jwt --now 2026-10-01T00:00:00Z | jq '{status, exit_code, proofs: [.proofs[] | {outcome, key_provenance}], findings: [.findings[] | {code, attribution}]}'
+vcrd verify fixtures/embedded-jwk-only.jwt --now 2026-10-01T00:00:00Z --format json | jq '{status, exit_code, proofs: [.proofs[] | {outcome, key_provenance}], findings: [.findings[] | {code, attribution}]}'
 ```
 
 ```json
@@ -239,6 +419,7 @@ vcrd verify fixtures/embedded-jwk-only.jwt --now 2026-10-01T00:00:00Z | jq '{sta
         "credential_key": {
           "location": "header.jwk",
           "thumbprint": "0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c",
+          "jwk": { "crv": "Ed25519", "kty": "OKP", "x": "mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0" },
           "matched": false,
           "verifies_signature": true
         }
@@ -252,14 +433,14 @@ vcrd verify fixtures/embedded-jwk-only.jwt --now 2026-10-01T00:00:00Z | jq '{sta
 }
 ```
 
-An input that does not parse: both later phases are blocked for want of a document.
+An input that does not parse: both later phases are blocked by parse.
 The header, `not`, and the payload, `a`, each fail to decode; the signature, `jws`,
 decodes. Parse lists that kind of finding once, and the top-level `findings` list has one
 entry for each segment, with its problem. In `not`, the `t` leaves non-zero bits after
 the last whole byte; `a` is too short to encode a byte.
 
 ```bash
-printf 'not.a.jws' | vcrd verify | jq '{phases, findings: [.findings[] | {code, segment: .detail.segment, problem: .detail.problem}]}'
+printf 'not.a.jws' | vcrd verify --format json | jq '{phases, findings: [.findings[] | {code, segment: .detail.segment, problem: .detail.problem}]}'
 ```
 
 ```json
@@ -268,12 +449,12 @@ printf 'not.a.jws' | vcrd verify | jq '{phases, findings: [.findings[] | {code, 
     "parse": { "outcome": "failed", "findings": ["parse.base64url_invalid"] },
     "inspect": {
       "outcome": "not_reached",
-      "blocked_by": { "phase": "parse", "reason": "impossible", "missing": "document" },
+      "blocked_by": { "phase": "parse", "reason": "impossible" },
       "findings": []
     },
     "verify": {
       "outcome": "not_reached",
-      "blocked_by": { "phase": "parse", "reason": "impossible", "missing": "document" },
+      "blocked_by": { "phase": "parse", "reason": "impossible" },
       "findings": []
     }
   },
@@ -296,7 +477,7 @@ A caller error: no phase ran, so no phase has `blocked_by`. `error.code` names t
 of error; `error.message` has the text, which vcrd also writes to standard error.
 
 ```bash
-vcrd --no-such-flag 2>/dev/null | jq '{status, exit_code, error: .error.code, verify: .phases.verify}'
+vcrd --format json --no-such-flag 2>/dev/null | jq '{status, exit_code, error: .error.code, verify: .phases.verify}'
 ```
 
 ```json

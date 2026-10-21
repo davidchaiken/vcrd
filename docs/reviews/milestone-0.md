@@ -134,14 +134,14 @@ failed; then against the unmodified copy, and passed. The working tree was not m
    there, and passed for the wrong reason; in a copy with no `target/debug` it failed with
    "target/debug/vcrd: No such file or directory". Fixed by asking `cargo metadata` for
    the target directory; the same copy then passed.
-5. **`lints fire` failed in CI, where colour is forced.** Found by the manual run. The
+5. **`lints fire` failed in CI, where color is forced.** Found by the manual run. The
    workflow sets `CARGO_TERM_COLOR=always`, and the compiler then prints the location
    arrow as `ESC[1m ESC[94m --> ESC[0m` followed by the path, so the script's search for
    `--> vcrd-core/src/lib.rs:` found nothing, although clippy had flagged the planted
    `unwrap()`. Reproduced on macOS with
    `CARGO_TERM_COLOR=always scripts/check-lints-fire.sh`, which failed the same way. Fixed
    by `--color never` on the cargo commands whose output the scripts search; the same
-   command then passed, and faults M1 and M4 still failed with colour forced.
+   command then passed, and faults M1 and M4 still failed with color forced.
 6. **The Actions permissions change of 2026-09-22 had not been saved.** Found by runs #1
    and #2, which refused `actions/checkout` under the earlier owner-only policy. Each
    section of Settings → Actions → General has its own Save button; this one was saved

@@ -7,7 +7,7 @@ vcrd's tests use four kinds of input (REQUIREMENTS §11):
 | Curated examples | [`examples/`](../examples) | One canonical, self-signed, known-good credential per supported proof format. The README points at them, and they are the tests' positive inputs. |
 | Negative fixtures | this directory | Inputs that each exercise one condition. A test asserts the finding code, attribution and exit code vcrd gives for each. |
 | Generated inputs | inside the tests | Inputs too large or too trivial to be worth a file, such as the one over the size limit. |
-| Vendored conformance fixtures | not yet present | Copies of third-party test suites (W3C VC Test Suite, DID Test Suite, RDFC-1.0 vectors). They will be kept apart from these, with each source's repository, commit and licence recorded. |
+| Vendored conformance fixtures | not yet present | Copies of third-party test suites (W3C VC Test Suite, DID Test Suite, RDFC-1.0 vectors). They will be kept apart from these, with each source's repository, commit and license recorded. |
 
 An input is committed here when it is small and useful beyond its test, for example to
 run by hand or to step through in a debugger. Otherwise its test generates it.
@@ -49,4 +49,5 @@ it says otherwise.
 | `embedded-jwk.jwt` | Key substitution (ARCHITECTURE §8): the issuer is the example's `did:key`, but the header carries another key in `jwk`, and that key signed. `key_provenance.credential_key` has `matched: false` and `verifies_signature: true`, with the warning `verify.credential_key_mismatch`. | `verify.signature_invalid` | input | 4 |
 | `embedded-jwk-only.jwt` | No `issuer`, and the signer's key in the header's `jwk`. vcrd refuses a key the credential asserts about itself unless the caller opts in (REQUIREMENTS §10), so verify runs and says so rather than being blocked; inspect also reports `inspect.issuer_missing`. | `verify.embedded_key_refused` | policy | 5 |
 | `exp-past.jwt` | `exp` is 2026-06-01, before the tests' clock, while `validUntil` is 2031-01-01: the signature has expired and the credential has not (RFC 7519 §4.1.4; ARCHITECTURE §10 [S6]). Inspect passes. | `verify.proof_expired` | input | 4 |
+| `canary.jwt` | For the redaction tests (ARCHITECTURE §7): every claim leaf holds a distinct canary string, `CANARY-C1` to `CANARY-C6`, and the header's `jwk` carries a private member, `d`, holding `CANARY-S1`. No canary may be printed without `--unsafe`, and `CANARY-S1` only with `--unsafe=2`. | `inspect.jwk_private_key` | input | 3 |
 | `crit-unsupported.jwt` | A well-formed `crit` naming `urn:example:unimplemented`, an extension vcrd does not implement (RFC 7515 §4.1.11). The signature is still checked, and verifies; the extension alone fails verify. | `verify.crit_unsupported` | vcrd | 6 |

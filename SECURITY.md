@@ -39,7 +39,7 @@ nothing is backported.
 
 ## Reliance on vcrd's results
 
-vcrd is pre-1.0 software. Do not rely on it for production trust decisions. Its licences
+vcrd is pre-1.0 software. Do not rely on it for production trust decisions. Its licenses
 ([MIT](LICENSE-MIT), [Apache-2.0](LICENSE-APACHE)) disclaim any warranty, but that is only
 the legal floor: vcrd is still being built and reviewed against the standards it
 implements, and its results may be wrong. Even when they are right, vcrd reports facts

@@ -64,7 +64,7 @@ done
 
 for i in "${!roots[@]}"; do cp "${roots[$i]}" "$orig/$i"; done
 
-# --color never: the checks below search clippy's output, and colour codes
+# --color never: the checks below search clippy's output, and color codes
 # (CARGO_TERM_COLOR=always, as CI sets) split `--> file` into pieces.
 clippy_out=""
 run_clippy() {

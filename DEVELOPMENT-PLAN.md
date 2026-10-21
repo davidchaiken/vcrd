@@ -115,8 +115,11 @@ every other `alg` exercise the by-name rejection path from day one.
     subjects, is an error ([S5]).
   - A missing or malformed `issuer` blocks verify as impossible, and the block names
     what is missing (`key_material`) and where vcrd looked (`consulted`); a parse
-    failure's block names the `document` (REQUIREMENTS §16 item 20; docs/output.md). A
-    URL issuer vcrd cannot resolve does not block.
+    failure's block names only the parse phase (REQUIREMENTS §16 item 20;
+    docs/output.md). A URL issuer vcrd cannot resolve does not block. Decided
+    2026-10-21, after review: a parse block no longer names a missing `document`, which
+    described vcrd's internals rather than what the reader needs, that parse failed;
+    `text` and `plain` say "parse failed" and "no key for verify".
   - VCDM 1.1's JWT encoding (`vc` or `vp` with no VCDM 2.0 `@context`) is named and
     attributed to vcrd, blocks verify, and skips VCDM 2.0's checks; reading it is
     ARCHITECTURE §10 [F2], in milestone 5. `vc` or `vp` beside a VCDM 2.0 payload is the
@@ -163,7 +166,38 @@ every other `alg` exercise the by-name rejection path from day one.
   exit codes 0–6; `vcrd <file>` and piped input default to `inspect`. Caller errors are
   emitted as the one JSON document: parse arguments with `clap`'s fallible entry point,
   because `clap`'s own usage-error exit status collides with vcrd's code 2 (not verified
-  that review; check `clap::Error::exit` at implementation).
+  that review; check `clap::Error::exit` at implementation). Decided 2026-10-08
+  (docs/output.md documents the result):
+  - `text` is the default format, whether or not stdout is a terminal. `text` is tables;
+    `plain` is one `name: value` line per item, a finding on one line with its detail as
+    `name=value` pairs (kept on trial). No color.
+  - `--verbosity` never changes JSON; 0 prints nothing in any format. For `text` and
+    `plain`: level 1 shows the status, the credential's kind, issuer, types and validity,
+    the inspect and verify phases with `blocked_by`, each proof's outcome and key
+    source, the claims, the findings and `not_evaluated`; level 2 everything except
+    `credential.metadata`, the header included; level 3 everything. How level 1 presents
+    `not_evaluated`, key provenance, and the types and validity is to be revisited.
+  - Every value carries its visibility, `non_sensitive`, `masked` or `revealed`: in JSON
+    on each value, in a Visibility column in `text` and `plain` (decided 2026-10-21,
+    after review, in place of an Unmasked column and JSON's `treatment`). JSON keeps
+    `reveals`, each entry naming the key its path is relative to and its visibility,
+    `revealed`; milestone 3's hashed designation adds `hashed`.
+  - Each key is shown with its JWK beside its thumbprint (`key_provenance.jwk`,
+    `credential_key.jwk`), and key findings say where each key came from: `key` with
+    its source, method and thumbprint, `carried_key` with its location and thumbprint;
+    `verify.weak_key` adds the `criterion` it fails. A carried key, and whether the
+    signature verifies under it, is shown at level 1 (decided 2026-10-21, after review).
+  - `--unsafe` has three levels: 0 masks claims and secrets, 1 (`--unsafe`) shows claims,
+    2 also shows cryptographic secrets, such as a header `jwk`'s private members.
+    Caller errors and the warning are the only stderr output; milestone 3 adds
+    diagnostics. Decided 2026-10-21, after review: no output setting changes the exit
+    code, so `--verbosity 0` with `--unsafe` is accepted and prints nothing, and a test
+    checks every input at every format and level; the warning is repeated in the result
+    (`warnings` in JSON; in `text` and `plain` after the findings, so that the status is
+    always the first line); `--unsafe 2` is accepted beside `--unsafe=2`.
+  - The JOSE header (`format.header`) is listed as values, as the claims are (decided
+    2026-10-21, after review: the header as written, with a masked value as `null`,
+    could not mark a masked value unambiguously). `credential.metadata` stays as it is.
 - *Fixtures, negative first* (REQUIREMENTS §11), committed under `fixtures/` except the
   over-size input, which its test generates: happy Ed25519; tampered signature;
   expired; not yet valid; `validUntil` before `validFrom`; `alg: none`; `alg: Ed448`
@@ -262,7 +296,11 @@ ES384, ES256K and the PS and RS384/RS512 families ([C3]), implementing what is d
 caller-supplied JWK set (flag name is implementation-time), matched by `kid` else the sole
 key. The full precedence of REQUIREMENTS §10 with RFC 7638 thumbprint matching, the
 embedded-key opt-in, and the `credential_key` block with `matched` and `verifies_signature`
-(ARCHITECTURE §8). The algorithm allowlist as a `Context` input and a CLI flag; policy
+(ARCHITECTURE §8). A `kid` that is a `did:key` URL, in a credential whose issuer gives no
+key, as a key the credential carries about itself: refused without the opt-in and
+reported as an embedded `jwk` is, with `credential_key.location: header.kid`, so that
+such a credential is not blocked for want of key material (milestone 1's review of
+slice 5, N12: nothing binds such a key to an issuer). The algorithm allowlist as a `Context` input and a CLI flag; policy
 rejection (exit 5) distinct from unsupported (exit 6), both reported when both apply.
 Binding of each algorithm to key type *and curve*. Weak-key criteria at resolution: RSA
 modulus of at least 2048 bits (RFC 7518 §3.3 **[verified]**), HS256 key of at least 256
@@ -301,7 +339,7 @@ and treat P-521 `did:key` as an extension beyond the method spec's table.
 **Scope.** The configuration file (TOML in the per-OS directory) and environment variables,
 with the precedence flag > env > config > default resolved per path for designations
 (REQUIREMENTS §8). Per-path show/hash/mask designations with the `reveals` list; an initial
-hash construction chosen and labelled provisional (REQUIREMENTS §16 item 18 stays open).
+hash construction chosen and labeled provisional (REQUIREMENTS §16 item 18 stays open).
 `vcrd formats` and `vcrd suites`. Man pages and completions from `clap`. [Q2] decided.
 Stderr diagnostics per verbosity level. [T2] `cargo-fuzz` targets for the JWS parser and
 the depth prescan, seeded from fixtures, in a workspace-excluded `fuzz/` on a nightly job.

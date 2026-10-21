@@ -1,0 +1,41 @@
+ Status     verify_failed
+ Kind       credential
+ Issuer     did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N
+ Types      VerifiableCredential, ExampleDegreeCredential
+ Validity   current
+
+Phases
+ Phase   | Outcome | Findings             | Blocked by
+---------+---------+----------------------+------------
+ inspect | passed  |                      |
+ verify  | failed  | verify.proof_expired |
+
+Proof
+ Suite        jws
+ Algorithm    EdDSA
+ Outcome      verified
+ Key source   issuer_identifier
+ Method       did:key
+
+Claims
+ Path                          | Type   | Value    | Visibility
+-------------------------------+--------+----------+------------
+ credentialSubject.degree.name | string | (masked) | masked
+ credentialSubject.degree.type | string | (masked) | masked
+ credentialSubject.id          | string | (masked) | masked
+ id                            | string | (masked) | masked
+
+Findings
+ Code                 | Attribution | Severity | Detail
+----------------------+-------------+----------+---------------------------------------
+ verify.proof_expired | input       | error    | claim: exp
+                      |             |          | now: 2026-10-01T00:00:00Z
+                      |             |          | skew_seconds: 0
+                      |             |          | value: 1780272000
+                      |             |          | value_date_time: 2026-06-01T00:00:00Z
+
+Not evaluated
+ Check                | Reason
+----------------------+-----------------
+ issuer_accreditation | out_of_scope
+ context_resolution   | not_implemented

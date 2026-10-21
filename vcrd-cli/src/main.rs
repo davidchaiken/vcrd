@@ -13,6 +13,7 @@ compile_error!("vcrd-cli needs at least one proof suite feature, such as `jws`")
 
 mod args;
 mod exit;
+mod text;
 mod view;
 
 use std::ffi::OsString;
@@ -29,7 +30,7 @@ use args::{Cli, Operation, OutputFormat};
 use view::Envelope;
 
 fn main() -> ExitCode {
-    let raw: Vec<OsString> = std::env::args_os().collect();
+    let raw = args::normalize(std::env::args_os().collect());
     // The fallible entry point: clap's own exit would use status 2, which vcrd
     // assigns to a parse failure (ARCHITECTURE §6).
     let cli = match Cli::try_parse_from(&raw) {
@@ -38,10 +39,26 @@ fn main() -> ExitCode {
     };
     let format = cli.options.format;
     let verbosity = cli.options.verbosity;
+    let unsafe_level = cli.options.unsafe_level;
     let (operation, file) = cli.operation();
 
+    let designations = match unsafe_level {
+        0 => Designations::mask_claims(),
+        1 => Designations::show_claims(),
+        _ => Designations::show_claims_and_secrets(),
+    };
+    // At --verbosity 0 nothing is printed, so nothing is unmasked and there is
+    // nothing to warn of. Neither level changes the exit code.
+    let warnings = if unsafe_level > 0 && verbosity > 0 {
+        vec![view::unsafe_warning(unsafe_level)]
+    } else {
+        Vec::new()
+    };
+    for warning in &warnings {
+        eprintln!("vcrd: WARNING: {}", warning.message);
+    }
+
     let skew = Duration::from_secs(cli.options.clock_skew);
-    let designations = Designations::mask_claims();
     let ctx = match cli.options.now {
         Some(now) => Context::builder(FixedClock(now)),
         None => Context::builder(SystemClock),
@@ -54,7 +71,8 @@ fn main() -> ExitCode {
         Ok(input) => input,
         Err((code, message)) => {
             eprintln_unless_quiet(verbosity, &message);
-            return emit(&view::caller_error(code, message), format, verbosity);
+            let envelope = view::caller_error(code, message).with_warnings(warnings);
+            return emit(&envelope, format, verbosity);
         }
     };
     let bytes = input.bytes;
@@ -64,7 +82,7 @@ fn main() -> ExitCode {
         Operation::Verify => vcrd_core::verify(&bytes, &ctx, &registry),
     };
     emit(
-        &view::envelope(&report, &ctx, input.size),
+        &view::envelope(&report, &ctx, input.size).with_warnings(warnings),
         format,
         verbosity,
     )
@@ -153,20 +171,21 @@ fn eprintln_unless_quiet(verbosity: u8, message: &str) {
 }
 
 /// Prints the envelope unless `--verbosity 0` asks for silence, and returns its exit
-/// code. Pretty-printed whether or not stdout is a terminal.
+/// code. JSON is complete and pretty-printed at every other level; `text` and `plain`
+/// show more as the level rises.
 fn emit(envelope: &Envelope, format: OutputFormat, verbosity: u8) -> ExitCode {
     if verbosity > 0 {
-        match format {
-            OutputFormat::Json => {
-                let mut stdout = std::io::stdout().lock();
-                let written = serde_json::to_writer_pretty(&mut stdout, envelope)
-                    .map_err(std::io::Error::from)
-                    .and_then(|()| writeln!(stdout));
-                if let Err(error) = written {
-                    eprintln!("vcrd: cannot write the result: {error}");
-                    return ExitCode::from(exit::CALLER_ERROR);
-                }
-            }
+        let mut stdout = std::io::stdout().lock();
+        let written = match format {
+            OutputFormat::Json => serde_json::to_writer_pretty(&mut stdout, envelope)
+                .map_err(std::io::Error::from)
+                .and_then(|()| writeln!(stdout)),
+            OutputFormat::Text => stdout.write_all(text::text(envelope, verbosity).as_bytes()),
+            OutputFormat::Plain => stdout.write_all(text::plain(envelope, verbosity).as_bytes()),
+        };
+        if let Err(error) = written {
+            eprintln!("vcrd: cannot write the result: {error}");
+            return ExitCode::from(exit::CALLER_ERROR);
         }
     }
     ExitCode::from(envelope.exit_code)

@@ -516,7 +516,8 @@ a novice gets a useful answer without reading documentation first.
 **Cross-cutting flags**: `--verbose`/`--verbosity` (diagnostic detail level, down to a
 `0` setting that suppresses all output and relies solely on the exit code — useful for
 scripting that only cares whether something passed) and `--format json|text|plain`
-(output shape). stdout is reserved for the actual result (so output stays pipeable);
+(output shape). The level changes what `text` and `plain` show; JSON, the structured
+contract (§9), is always complete. stdout is reserved for the actual result (so output stays pipeable);
 stderr carries diagnostics and progress. Distinct exit codes let a calling script branch
 on which kind of failure occurred rather than just "something went wrong." The code is
 determined first by the *attribution* of the failure (§6) and only then by the phase that
@@ -525,7 +526,8 @@ its own code whichever phase reported it, because "vcrd cannot do this" and "you
 forbade this" call for different responses from a caller than "this credential is
 bad". Failures attributed to the input take a code naming the phase — parse, inspect, or
 verify. One integer cannot express a graduated result, so a script that needs more than
-the headline reason reads the per-phase outcomes in the structured output (§9).
+the headline reason reads the per-phase outcomes in the structured output (§9). No output
+setting — format, verbosity, or what is revealed — changes the exit code.
 
 **Redaction-aware output by default; revealing values is an explicit opt-in.** vcrd's own
 output is a leak surface: printing full claim sets — including PII and, for SD-JWT,
@@ -548,8 +550,9 @@ below. Paths use the same notation vcrd prints in its own output, so a path copi
 masked output designates that field. A hashed value is a deterministic hash truncated to
 a short, human-scannable form, so a caller can tell whether a field matches or differs
 across two credentials/transactions without seeing the plaintext. `--unsafe` (global,
-same family as the network opt-in flags, §6) shows every claim value in cleartext and
-triggers a human-visible stderr warning banner. Every reveal — a designated path or
+same family as the network opt-in flags, §6) shows every claim value in cleartext, and
+`--unsafe=2` also shows every cryptographic secret the credential carries, such as a
+private key; either triggers a human-visible stderr warning banner. Every reveal — a designated path or
 `--unsafe` — is reported by a structured marker in the result itself (e.g. a top-level
 field in JSON output listing each path shown in cleartext or hashed), so a script or
 agent consuming stdout — not just a human reading a terminal — can detect that the
@@ -1382,8 +1385,9 @@ with its tag there, so references to either stay valid.
     fixed — only when verification would be impossible or dangerous. Two of its three
     details were settled on 2026-10-01 by the first case, a credential with no usable
     issuer identifier. A result reports a block with the phase whose findings caused it,
-    the reason, and what is missing: the document, or key material together with the key
-    sources considered. And a failure whose impossibility depends
+    the reason, and, when the phase's name does not already say it, what is missing: key
+    material, together with the key sources considered. A block by parse means parse
+    failed. And a failure whose impossibility depends
     on what the caller supplied is judged against it: a credential without a usable
     issuer identifier blocks verify only when no other source of key material remains.
     Still open: how a condition that is dangerous but conforming — a token header telling

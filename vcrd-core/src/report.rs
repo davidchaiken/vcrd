@@ -1,6 +1,6 @@
 //! The result of an operation (ARCHITECTURE §3).
 
-use crate::document::{ContainedInput, Document};
+use crate::document::{ClassedJson, ContainedInput, Document};
 use crate::finding::{Finding, KeySourceKind, Severity};
 use crate::keys::KeyProvenance;
 use crate::registry::{FormatId, ProfileId, SuiteId};
@@ -143,6 +143,10 @@ pub struct ParseOutput {
     pub depth: Option<usize>,
     /// Credentials found inside this one, for the runner to dispatch (ARCHITECTURE §4).
     pub contained: Vec<ContainedInput>,
+    /// The securing mechanism's header, such as a JOSE header, when the format has
+    /// one and it decoded. Shown whole rather than flattened, each value classed by
+    /// the format; present even when the rest did not parse.
+    pub header: Option<ClassedJson>,
 }
 
 /// One variant per format. Not `#[non_exhaustive]`: a new variant must break every

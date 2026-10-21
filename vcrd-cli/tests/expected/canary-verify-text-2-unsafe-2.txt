@@ -1,0 +1,74 @@
+ Status        inspect_failed
+ Exit code     3
+ Bytes         1054
+ Depth         3
+ Format        vc-jose
+ Profile       vc-jose-cose
+ Kind          credential
+ Issuer        did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N
+ Types         VerifiableCredential, ExampleDegreeCredential
+ Validity      current
+ Valid from    2026-01-01T00:00:00Z
+ Valid until   2031-01-01T00:00:00Z
+
+Phases
+ Phase   | Outcome | Findings                | Blocked by
+---------+---------+-------------------------+------------
+ parse   | passed  |                         |
+ inspect | failed  | inspect.jwk_private_key |
+ verify  | passed  |                         |
+
+Proof
+ Suite                jws
+ Algorithm            EdDSA
+ Outcome              verified
+ Key source           issuer_identifier
+ Method               did:key
+ Validity             unbounded
+ Thumbprint           0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
+ Key JWK              {"crv":"Ed25519","kty":"OKP","x":"mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0"}
+ Carried key          header.jwk
+ Carried thumbprint   0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
+ Carried key JWK      {"crv":"Ed25519","kty":"OKP","x":"mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0"}
+ Matched              true
+ Verifies signature   true
+
+Header
+ Path    | Type   | Value                                                    | Visibility
+---------+--------+----------------------------------------------------------+---------------
+ alg     | string | EdDSA                                                    | non_sensitive
+ cty     | string | vc                                                       | non_sensitive
+ jwk.crv | string | Ed25519                                                  | non_sensitive
+ jwk.d   | string | CANARY-S1                                                | revealed
+ jwk.kty | string | OKP                                                      | non_sensitive
+ jwk.x   | string | mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0              | non_sensitive
+ kid     | string | did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N | non_sensitive
+         |        | #z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N        |
+ typ     | string | vc+jwt                                                   | non_sensitive
+
+Claims
+ Path                             | Type   | Value                 | Visibility
+----------------------------------+--------+-----------------------+------------
+ credentialSubject.alsoKnownAs[0] | string | CANARY-C5             | revealed
+ credentialSubject.alsoKnownAs[1] | string | CANARY-C6             | revealed
+ credentialSubject.degree.name    | string | CANARY-C4             | revealed
+ credentialSubject.degree.type    | string | CANARY-C3             | revealed
+ credentialSubject.id             | string | did:example:CANARY-C2 | revealed
+ id                               | string | urn:example:CANARY-C1 | revealed
+
+Findings
+ Code                    | Attribution | Severity | Detail
+-------------------------+-------------+----------+------------
+ inspect.jwk_private_key | input       | error    | members: d
+
+Warnings
+ Code   | Message
+--------+----------------------------------------------------------------------
+ unsafe | --unsafe=2: claim values and cryptographic secrets, such as private
+        | keys, are printed in cleartext. Treat this output as sensitive.
+
+Not evaluated
+ Check                | Reason
+----------------------+-----------------
+ issuer_accreditation | out_of_scope
+ context_resolution   | not_implemented

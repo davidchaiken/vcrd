@@ -1,0 +1,70 @@
+ Status        verify_failed
+ Exit code     4
+ Bytes         1036
+ Depth         3
+ Format        vc-jose
+ Profile       vc-jose-cose
+ Kind          credential
+ Issuer        did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N
+ Types         VerifiableCredential, ExampleDegreeCredential
+ Validity      current
+ Valid from    2026-01-01T00:00:00Z
+ Valid until   2031-01-01T00:00:00Z
+
+Phases
+ Phase   | Outcome | Findings                                                 | Blocked by
+---------+---------+----------------------------------------------------------+------------
+ parse   | passed  |                                                          |
+ inspect | passed  |                                                          |
+ verify  | failed  | verify.credential_key_mismatch, verify.signature_invalid |
+
+Proof
+ Suite                jws
+ Algorithm            EdDSA
+ Outcome              failed
+ Key source           issuer_identifier
+ Method               did:key
+ Validity             unbounded
+ Thumbprint           0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
+ Key JWK              {"crv":"Ed25519","kty":"OKP","x":"mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0"}
+ Carried key          header.jwk
+ Carried thumbprint   _i3gzFWABuHlZnuT9FBtp8CVlJ57CcWpTPwviZ2m1ms
+ Carried key JWK      {"crv":"Ed25519","kty":"OKP","x":"dmVW__tsfsOxTi_nA17JMexgwC2vIwXdN2ouKk5wJDs"}
+ Matched              false
+ Verifies signature   true
+
+Header
+ Path    | Type   | Value                                                    | Visibility
+---------+--------+----------------------------------------------------------+---------------
+ alg     | string | EdDSA                                                    | non_sensitive
+ cty     | string | vc                                                       | non_sensitive
+ jwk.crv | string | Ed25519                                                  | non_sensitive
+ jwk.kty | string | OKP                                                      | non_sensitive
+ jwk.x   | string | dmVW__tsfsOxTi_nA17JMexgwC2vIwXdN2ouKk5wJDs              | non_sensitive
+ kid     | string | did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N | non_sensitive
+         |        | #z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N        |
+ typ     | string | vc+jwt                                                   | non_sensitive
+
+Claims
+ Path                          | Type   | Value    | Visibility
+-------------------------------+--------+----------+------------
+ credentialSubject.degree.name | string | (masked) | masked
+ credentialSubject.degree.type | string | (masked) | masked
+ credentialSubject.id          | string | (masked) | masked
+ id                            | string | (masked) | masked
+
+Findings
+ Code                           | Attribution | Severity | Detail
+--------------------------------+-------------+----------+---------------------------------------------------------------------
+ verify.credential_key_mismatch | input       | warning  | carried_key.location: header.jwk
+                                |             |          | carried_key.thumbprint: _i3gzFWABuHlZnuT9FBtp8CVlJ57CcWpTPwviZ2m1ms
+                                |             |          | key.method: did:key
+                                |             |          | key.source: issuer_identifier
+                                |             |          | key.thumbprint: 0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
+ verify.signature_invalid       | input       | error    | algorithm: EdDSA
+
+Not evaluated
+ Check                | Reason
+----------------------+-----------------
+ issuer_accreditation | out_of_scope
+ context_resolution   | not_implemented

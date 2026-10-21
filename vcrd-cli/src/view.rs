@@ -10,10 +10,11 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use vcrd_core::{
     Attribution, Base64urlProblem, BlockReason, Check, Context, CritProblem, DateField,
-    DidKeyProblem, Document, DocumentKind, Finding, FindingDetail, FormatDetail, IssLocation,
-    IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment, KeySourceKind, LeafClass, Missing,
-    NotEvaluatedReason, Phase, PhaseOutcome, ProofOutcome, Rendered, Report, Revealed, Severity,
-    Validity, render,
+    DidKeyProblem, Document, DocumentKind, Finding, FindingDetail, IssLocation, IssuerProblem,
+    JwkProblem, JwsJsonSyntax, JwsSegment, KeyRef, KeySourceKind, LeafClass, Missing,
+    NotEvaluatedReason, Phase, PhaseOutcome, ProofOutcome, PublicJwk, Rendered, RenderedJson,
+    Report, RevealLocation, Revealed, Severity, Treatment, Validity, ValueKind, WeakKeyCriterion,
+    render,
 };
 
 /// `0` until the schema is declared stable (REQUIREMENTS §9).
@@ -28,10 +29,42 @@ pub struct Envelope {
     pub exit_code: u8,
     /// Every claim path shown in cleartext (ARCHITECTURE §7).
     pub reveals: Vec<RevealView>,
+    /// What vcrd also writes to standard error as a warning, repeated here for a
+    /// reader of standard output alone.
+    pub warnings: Vec<WarningView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<ErrorView>,
     #[serde(flatten)]
     pub result: ResultView,
+}
+
+impl Envelope {
+    pub fn with_warnings(mut self, warnings: Vec<WarningView>) -> Self {
+        self.warnings = warnings;
+        self
+    }
+}
+
+/// A warning: code and message (docs/output.md).
+#[derive(Clone, Debug, Serialize)]
+pub struct WarningView {
+    pub code: &'static str,
+    pub message: String,
+}
+
+/// The warning `--unsafe` gives, at level 1 or 2 (REQUIREMENTS §8).
+pub fn unsafe_warning(level: u8) -> WarningView {
+    let shown = if level >= 2 {
+        "claim values and cryptographic secrets, such as private keys,"
+    } else {
+        "claim values"
+    };
+    WarningView {
+        code: "unsafe",
+        message: format!(
+            "--unsafe={level}: {shown} are printed in cleartext. Treat this output as sensitive."
+        ),
+    }
 }
 
 /// A caller error: code and message (ARCHITECTURE §6).
@@ -59,7 +92,11 @@ pub struct ResultView {
 #[derive(Debug, Serialize)]
 pub struct RevealView {
     pub path: String,
-    pub treatment: &'static str,
+    /// The key the path is relative to: `credential.claims` or `format.header`.
+    pub location: &'static str,
+    /// As on the value itself: `revealed`. Milestone 3's hashed designation adds
+    /// `hashed` (REQUIREMENTS §8).
+    pub visibility: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -93,7 +130,8 @@ pub struct PhaseView {
 pub struct BlockedView {
     pub phase: &'static str,
     pub reason: &'static str,
-    /// What an impossible phase lacks: `document` or `key_material`.
+    /// What an impossible phase lacks, when the blocking phase's name does not already
+    /// say: `key_material`. A block by parse means only that parse failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub missing: Option<&'static str>,
     /// The key sources considered, when `missing` is `key_material`.
@@ -119,8 +157,12 @@ pub struct ProvenanceView {
     pub source: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub method: Option<&'static str>,
+    /// The key used, as an RFC 7638 thumbprint.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thumbprint: Option<String>,
+    /// The key used, as a JWK: the members the thumbprint covers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jwk: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential_key: Option<CredentialKeyView>,
 }
@@ -129,6 +171,8 @@ pub struct ProvenanceView {
 pub struct CredentialKeyView {
     pub location: String,
     pub thumbprint: String,
+    /// The carried key's public members, which its thumbprint covers.
+    pub jwk: Value,
     pub matched: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verifies_signature: Option<bool>,
@@ -154,8 +198,10 @@ pub struct FormatView {
     pub id: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<&'static str>,
-    /// The format's own fields, such as the JOSE header.
-    pub header: Value,
+    /// The securing mechanism's header, such as the JOSE header: one entry per value,
+    /// in input order, as for the claims; empty when there is none or it did not
+    /// decode.
+    pub header: Vec<LeafView>,
 }
 
 #[derive(Debug, Serialize)]
@@ -176,31 +222,51 @@ pub struct CredentialView {
     pub claims: Vec<LeafView>,
 }
 
+/// One value, with whether it is sensitive and whether it is shown.
 #[derive(Debug, Serialize)]
 pub struct LeafView {
     pub path: String,
     #[serde(rename = "type")]
     pub kind: &'static str,
-    pub treatment: &'static str,
+    /// `non_sensitive`: metadata, always shown; `masked`: a claim or secret, not shown;
+    /// `revealed`: a claim or secret shown because `--unsafe` asked for it.
+    pub visibility: &'static str,
+    /// Absent where the value is masked.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<Value>,
+}
+
+/// A value's visibility, from its class and whether rendering showed it.
+fn leaf_view(path: &str, class: LeafClass, kind: ValueKind, value: Option<&Revealed>) -> LeafView {
+    LeafView {
+        path: path.to_owned(),
+        kind: kind.as_str(),
+        visibility: match (class, value) {
+            (LeafClass::Metadata, _) => "non_sensitive",
+            (LeafClass::Claim | LeafClass::Secret, None) => "masked",
+            (LeafClass::Claim | LeafClass::Secret, Some(_)) => "revealed",
+        },
+        value: value.map(revealed),
+    }
 }
 
 /// The envelope for a report. `size` is the input file's size, when the frontend
 /// knows it; it may exceed what core was given (ARCHITECTURE §4).
 pub fn envelope(report: &Report, ctx: &Context, size: Option<u64>) -> Envelope {
     let (exit_code, status) = crate::exit::exit_code(report);
-    let rendered = report
-        .parse
-        .output()
-        .and_then(|p| p.document.as_ref())
-        .map(|document| (document, render(document, ctx)));
-    let reveals = rendered.as_ref().map_or_else(Vec::new, |(_, r)| {
+    let rendered = report.parse.output().map(|parsed| render(parsed, ctx));
+    let reveals = rendered.as_ref().map_or_else(Vec::new, |r| {
         r.reveals
             .iter()
             .map(|r| RevealView {
                 path: r.path.clone(),
-                treatment: "shown",
+                location: match r.location {
+                    RevealLocation::Leaves => "credential.claims",
+                    RevealLocation::Header => "format.header",
+                },
+                visibility: match r.treatment {
+                    Treatment::Shown => "revealed",
+                },
             })
             .collect()
     });
@@ -209,6 +275,7 @@ pub fn envelope(report: &Report, ctx: &Context, size: Option<u64>) -> Envelope {
         status,
         exit_code,
         reveals,
+        warnings: Vec::new(),
         error: None,
         result: result(report, rendered.as_ref(), size),
     }
@@ -226,6 +293,7 @@ pub fn caller_error(code: &'static str, message: String) -> Envelope {
         status: "caller_error",
         exit_code: crate::exit::CALLER_ERROR,
         reveals: Vec::new(),
+        warnings: Vec::new(),
         error: Some(ErrorView { code, message }),
         result: ResultView {
             input: InputView {
@@ -248,12 +316,9 @@ pub fn caller_error(code: &'static str, message: String) -> Envelope {
     }
 }
 
-fn result(
-    report: &Report,
-    rendered: Option<&(&Document, Rendered)>,
-    size: Option<u64>,
-) -> ResultView {
+fn result(report: &Report, rendered: Option<&Rendered>, size: Option<u64>) -> ResultView {
     let validity = report.inspect.output().map(|i| i.validity);
+    let document = report.parse.output().and_then(|p| p.document.as_ref());
     ResultView {
         input: InputView {
             bytes: report.input.bytes,
@@ -282,8 +347,10 @@ fn result(
             .iter()
             .map(|c| result(c, None, None))
             .collect(),
-        format: format(report),
-        credential: rendered.map(|(document, rendered)| credential(document, rendered, validity)),
+        format: format(report, rendered),
+        credential: document
+            .zip(rendered)
+            .map(|(document, rendered)| credential(document, rendered, validity)),
     }
 }
 
@@ -304,7 +371,7 @@ fn phase<T>(outcome: &PhaseOutcome<T>) -> PhaseView {
             let (reason, missing, consulted) = match &blocked.reason {
                 BlockReason::Impossible {
                     missing: Missing::Document,
-                } => ("impossible", Some("document"), None),
+                } => ("impossible", None, None),
                 BlockReason::Impossible {
                     missing: Missing::KeyMaterial { consulted },
                 } => (
@@ -364,10 +431,12 @@ fn proofs(report: &Report) -> Vec<ProofView> {
                     source: p.key_provenance.source.map(|s| s.as_str()),
                     method: p.key_provenance.method,
                     thumbprint: p.key_provenance.thumbprint.clone(),
+                    jwk: p.key_provenance.jwk.as_ref().map(jwk),
                     credential_key: p.key_provenance.credential_key.as_ref().map(|k| {
                         CredentialKeyView {
                             location: k.location.clone(),
                             thumbprint: k.thumbprint.clone(),
+                            jwk: jwk(&k.jwk),
                             matched: k.matched,
                             verifies_signature: k.verifies_signature,
                         }
@@ -389,6 +458,7 @@ fn proofs(report: &Report) -> Vec<ProofView> {
                     source: None,
                     method: None,
                     thumbprint: None,
+                    jwk: None,
                     credential_key: None,
                 },
                 validity: None,
@@ -727,23 +797,41 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
             "codec": format!("0x{codec:x}"),
             "name": name,
         }),
-        FindingDetail::WeakKey { thumbprint } => {
-            json!({"type": "weak_key", "thumbprint": thumbprint})
-        }
+        FindingDetail::WeakKey { key, criterion } => json!({
+            "type": "weak_key",
+            "key": key_ref(key),
+            "criterion": match criterion {
+                WeakKeyCriterion::SmallOrder => "small_order",
+            },
+        }),
         FindingDetail::EmbeddedKeyRefused { location } => {
             json!({"type": "embedded_key_refused", "location": location})
         }
-        FindingDetail::CredentialKeyMismatch {
-            location,
-            credential_key,
-            key,
-        } => json!({
+        FindingDetail::CredentialKeyMismatch { carried_key, key } => json!({
             "type": "credential_key_mismatch",
-            "location": location,
-            "credential_key": credential_key,
-            "key": key,
+            "carried_key": {
+                "location": carried_key.location,
+                "thumbprint": carried_key.thumbprint,
+            },
+            "key": key_ref(key),
         }),
     }
+}
+
+/// A key as a finding names it: where it came from, as `key_provenance` says, and its
+/// thumbprint.
+fn key_ref(key: &KeyRef) -> Value {
+    json!({"source": key.source.as_str(), "method": key.method, "thumbprint": key.thumbprint})
+}
+
+/// A public key's JWK members as a JSON object.
+fn jwk(jwk: &PublicJwk) -> Value {
+    Value::Object(
+        jwk.members
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), Value::String(value.clone())))
+            .collect(),
+    )
 }
 
 /// A proof's time and the clock it was compared with. `value` is the JSON number as
@@ -850,18 +938,13 @@ fn rfc3339(t: OffsetDateTime) -> Value {
     t.format(&Rfc3339).map_or(Value::Null, Value::String)
 }
 
-fn format(report: &Report) -> Option<FormatView> {
+fn format(report: &Report, rendered: Option<&Rendered>) -> Option<FormatView> {
     let id = report.input.format?.0;
     let profile = report.inspect.output().and_then(|i| i.profile).map(|p| p.0);
-    let header = match report.parse.output().and_then(|p| p.detail.as_ref()) {
-        None => Value::Null,
-        #[cfg(feature = "vc-jose")]
-        // `null` when the header did not decode.
-        Some(FormatDetail::VcJose(detail)) => detail.header.as_ref().map_or(
-            Value::Null,
-            |h| json!({"alg": h.alg, "kid": h.kid, "typ": h.typ, "cty": h.cty}),
-        ),
-    };
+    let mut header = Vec::new();
+    if let Some(rendered) = rendered.and_then(|r| r.header.as_ref()) {
+        header_leaves(rendered, &mut header);
+    }
     Some(FormatView {
         id,
         profile,
@@ -869,22 +952,32 @@ fn format(report: &Report) -> Option<FormatView> {
     })
 }
 
+/// The header's scalars in input order, as the claims are listed. A repeated member
+/// name lists each occurrence, as the input has them.
+fn header_leaves(json: &RenderedJson, out: &mut Vec<LeafView>) {
+    match json {
+        RenderedJson::Scalar {
+            path,
+            class,
+            kind,
+            value,
+        } => out.push(leaf_view(path, *class, *kind, value.as_ref())),
+        RenderedJson::Array(items) => items.iter().for_each(|i| header_leaves(i, out)),
+        RenderedJson::Object(members) => members.iter().for_each(|(_, v)| header_leaves(v, out)),
+    }
+}
+
 fn credential(
     document: &Document,
     rendered: &Rendered,
     validity: Option<Validity>,
 ) -> CredentialView {
-    let leaf = |l: &vcrd_core::RenderedLeaf| LeafView {
-        path: l.path.clone(),
-        kind: l.kind.as_str(),
-        treatment: if l.value.is_some() { "shown" } else { "masked" },
-        value: l.value.as_ref().map(revealed),
-    };
-    let of_class = |class| {
+    let leaf = |l: &vcrd_core::RenderedLeaf| leaf_view(&l.path, l.class, l.kind, l.value.as_ref());
+    let of_class = |wanted: fn(LeafClass) -> bool| {
         rendered
             .leaves
             .iter()
-            .filter(|l| l.class == class)
+            .filter(|l| wanted(l.class))
             .map(leaf)
             .collect()
     };
@@ -901,8 +994,10 @@ fn credential(
             .as_ref()
             .and_then(|t| t.lexical.clone()),
         validity: validity.map(validity_name),
-        metadata: of_class(LeafClass::Metadata),
-        claims: of_class(LeafClass::Claim),
+        metadata: of_class(|c| c == LeafClass::Metadata),
+        // A secret among a document's leaves is masked with the claims; formats
+        // class header members, not leaves, as secrets today.
+        claims: of_class(|c| c != LeafClass::Metadata),
     }
 }
 

@@ -55,7 +55,7 @@ ones it does not. `vcrd-core` depends on:
 
 | Role | Crate | Used for |
 |---|---|---|
-| EdDSA | `ed25519-dalek` | Ed25519 verification |
+| EdDSA | `ed25519-dalek`, `curve25519-dalek` | Ed25519 verification, and whether a signature's R has small order (§8) |
 | ECDSA | `p256`, `p521` | ES256, ES512 |
 | RSA | `rsa` | RS256 (PKCS #1 v1.5) |
 | MAC | `hmac` | HS256 |
@@ -80,8 +80,14 @@ Milestone 1 also added `url` and `regex`, rather than writing either check by ha
 (decided 2026-10-01): VCDM 2.0 defines a URL by the WHATWG URL Standard, which `url`
 implements, and the network milestones need a URL parser regardless. `url` brings 28
 crates, most of them the Unicode tables `idna` uses for internationalized domain names;
-their licences are MIT, Apache-2.0 or Unicode-3.0. `regex` was already in the lockfile, as
+their licenses are MIT, Apache-2.0 or Unicode-3.0. `regex` was already in the lockfile, as
 a test dependency, and is built without its Unicode tables, since the patterns are ASCII.
+
+For `vcrd-cli`'s `text` output, milestone 1 added `tabled` 0.22, built with `std` alone:
+the tables are built row by row, since their columns change with the verbosity level, so
+the derive macro is not used, and there is no color. It brings five crates, `tabled`,
+`papergrid`, `bytecount`, `fnv` and `unicode-width`, under MIT or Apache-2.0; a sixth,
+`testing_table`, is in the lockfile but never built.
 
 **No JOSE library.** REQUIREMENTS §10 has vcrd implement the JWS layer itself, so the
 graph contains no JOSE crate: vcrd's own code does algorithm policy, by-name rejection, and
@@ -273,7 +279,7 @@ format's decision (REQUIREMENTS §8).
 Its known limit: it cannot represent a claim that exists but was withheld under selective
 disclosure, which is neither present nor absent (§10 [Q3]).
 
-### Catalogue
+### Catalog
 
 | Type | Purpose | Produced by | Invariant |
 |---|---|---|---|
@@ -449,7 +455,7 @@ cap bounded nothing; it also reported the depth of the *encoded* token, which is
 
   `valid_rfc3339` in the finding marks a value `time`'s RFC 3339 parser accepts, which
   follows §5.6's notes as well as its grammar. If such values turn up in credentials in
-  use, the rule is to be revisited in favour of RFC 3339.
+  use, the rule is to be revisited in favor of RFC 3339.
 
 ### Where injected items are consulted
 
@@ -475,7 +481,9 @@ a resolved key; a format that resolved keys would be deciding what to trust (fin
    caller's key file, and so on.
 5. Call core's `inspect` or `verify`.
 6. Map the `Report` to the output schema (§6).
-7. Render it as `json`, `text`, or `plain`, and print the stderr warning for any reveal.
+7. Render it as `json`, `text`, or `plain`, at the verbosity level asked for. The stderr
+   warning for `--unsafe` is printed once the arguments are read, before any output, and
+   repeated in the result's `warnings`. No output setting changes the exit code.
 8. Compute the exit code (§6) and exit.
 
 An error in steps 1–3 skips to step 6 with the error slot filled, so the output is still
@@ -589,7 +597,8 @@ prototype's name where it differs:
 | `schema_version` | `0` during initial development (REQUIREMENTS §9) |
 | `status` | a one-word summary naming the earliest failed phase — lossy: it cannot express "expired but correctly signed", and consumers should read `phases` |
 | `exit_code` | the process exit code, so that stdout alone carries it |
-| `reveals` | every path shown in cleartext or hashed (§7); the prototype had a boolean, `unsafe_cleartext` |
+| `reveals` | every path shown in cleartext or hashed (§7), with the key it is relative to (`credential.claims` or `format.header`); the prototype had a boolean, `unsafe_cleartext` |
+| `warnings` | each warning vcrd also writes to stderr, such as `--unsafe`'s, as a code and message; `[]` when there are none |
 | `input` | byte length, nesting depth of the decoded payload, detected format |
 | `phases` | per phase: outcome, what blocked it if not reached, and each kind of finding once, by code |
 | `proofs` | per proof: suite, declared algorithm, outcome, key provenance, and the proof's validity against its own times — present for failed verification too |
@@ -602,7 +611,7 @@ prototype's name where it differs:
 | Key | Content |
 |---|---|
 | `error` | a caller error: code and message |
-| `format` | format identifier, profile, and format-specific header fields |
+| `format` | format identifier, profile, and the securing mechanism's header, one entry per value as for the claims |
 | `credential` | the `Document` fields for this object — a credential or a presentation, per its `kind` — with claims rendered per §7 |
 
 Whether inapplicable keys are omitted, as in the prototype, or emitted as `null` is open
@@ -618,8 +627,12 @@ of silently changing the schema. In the prototype this was 390 lines in one file
 mechanical (finding 2).
 
 All three renderers — `json`, `text` (tables), and `plain` — consume this same view, so no
-format can bypass redaction or show data another lacks. Accessibility conventions are in
-REQUIREMENTS §8.
+format can bypass redaction or show data another lacks. JSON prints all of it; `text` and
+`plain` print the sections `--verbosity` chooses, from one list (`vcrd-cli/src/text.rs`),
+so the two always show the same information, and they escape every control and
+bidirectional-reordering character taken from the input. `text` is the default format.
+[docs/output.md](docs/output.md) documents the formats and levels. Accessibility
+conventions are in REQUIREMENTS §8; there is no color.
 
 ### Exit codes
 
@@ -656,9 +669,17 @@ pub struct ClaimValue(/* one scalar leaf */);   // no Serialize; Debug prints on
   one. The prototype's is at `vcrd-core/src/redact.rs:56` on the spike branch.
 - **Core exposes no public accessor for a claim's plaintext.** Its one rendering operation
   takes the designations — each path mapped to show, hash, or mask, defaulting to mask —
-  and returns the rendered claims together with a record of every path shown or hashed.
-  That record is the output's `reveals` key (§6), so a reveal cannot happen without being
-  reported. `--unsafe` designates every path as shown.
+  and returns the rendered claims and header together with a record of every path shown
+  or hashed. That record is the output's `reveals` key (§6), so a reveal cannot happen
+  without being reported. `--unsafe` (level 1) designates every claim as shown, and
+  `--unsafe=2` every cryptographic secret as well.
+- **Three classes of value.** The format classes each value as metadata, always shown; a
+  claim, masked by default; or a cryptographic secret, masked unless the caller asks for
+  secrets as well as claims. Every value in the output carries its visibility:
+  `non_sensitive` for metadata, and `masked` or `revealed` for a claim or a secret. The secrets vcrd recognizes are the private-key members of a
+  `jwk` in a JOSE header; a secret among the claims is indistinguishable from any other
+  claim, and is masked as one. The header is rendered whole, each scalar classed, rather
+  than flattened to leaves.
 - This tightens the prototype, where a frontend obtained plaintext by constructing a
   public capability token and set the reveal marker separately, in a different function,
   with nothing requiring the two to agree (finding 3).
@@ -675,12 +696,13 @@ pub struct ClaimValue(/* one scalar leaf */);   // no Serialize; Debug prints on
 resolved per path by `vcrd-cli` (REQUIREMENTS §8), into the `Context`, and from there to
 the rendering operation.
 
-**Testing.** A fixture carries a unique canary string in every claim leaf. For each of the
-three output formats, a test asserts that by default no canary reaches stdout or stderr,
-that with designations exactly the designated canaries do, and that under `--unsafe` all of
-them do. The expected sets are computed from the designations, so the test stays correct
-as they change. The prototype's only such test covered JSON alone and checked two literal
-values (finding 3).
+**Testing.** A fixture, `fixtures/canary.jwt`, carries a unique canary string in every
+claim leaf and one in a private member of its header's `jwk`. For each of the three output
+formats, each verbosity level and each `--unsafe` level, a test
+(`vcrd-cli/tests/redaction.rs`) asserts that exactly the canaries that should be printed
+are, and that none reaches stderr. The expected sets are computed from the levels, so the
+test stays correct as they change; milestone 3 extends it to per-path designations. The
+prototype's only such test covered JSON alone and checked two literal values (finding 3).
 
 **What the mechanism cannot cover.** Its guarantee is about output channels — `Display`,
 `Debug`, and serialization. A debugger reads memory directly: in the prototype, the
@@ -724,9 +746,11 @@ key, which signed it, but names a `did:key` issuer for a different key:
   "source": "issuer_identifier",
   "method": "did:key",
   "thumbprint": "0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c",
+  "jwk": { "crv": "Ed25519", "kty": "OKP", "x": "mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0" },
   "credential_key": {
     "location": "header.jwk",
     "thumbprint": "_i3gzFWABuHlZnuT9FBtp8CVlJ57CcWpTPwviZ2m1ms",
+    "jwk": { "crv": "Ed25519", "kty": "OKP", "x": "dmVW__tsfsOxTi_nA17JMexgwC2vIwXdN2ouKk5wJDs" },
     "matched": false,
     "verifies_signature": true
   }
@@ -1006,7 +1030,7 @@ Each becomes a test observed to fail and then to pass (REQUIREMENTS §11):
   an edit to the file. The team must be visible and have write access to the repository.
   The move changes the repository's URL: update `repository` in `Cargo.toml`, the links
   in `SECURITY.md`, and the git remotes (REQUIREMENTS §12, §14).
-- **[P7] Establish whether the `main` ruleset enforces code-owner review.** It requires
+- ~~**[P7] Establish whether the `main` ruleset enforces code-owner review.** It requires
   code-owner review with zero required approvals, yet pull request #7, which changed
   code-owned files and was authored by the only code owner, merged with no review and no
   bypass. Either zero required approvals leaves nothing to enforce, or GitHub exempts a
@@ -1018,4 +1042,10 @@ Each becomes a test observed to fail and then to pass (REQUIREMENTS §11):
   requiring one approval (with the bypass for the maintainer's own pull requests) and
   accepting CODEOWNERS as review requests only. Either way, a pull request the maintainer
   authors, including one carrying an agent's changes, is not held by this rule
-  (REQUIREMENTS §12; `docs/reviews/milestone-0.md`).
+  (REQUIREMENTS §12; `docs/reviews/milestone-0.md`).~~
+  Resolved 2026-10-21: the rule is enforced, and GitHub exempts a pull request's author.
+  Pull request #14, Dependabot's update to `Cargo.lock` (a code-owned file), could be
+  merged only after the code owner's review or with the bypass; the maintainer reviewed
+  it. The API's `mergeable_state` read `clean` while the review was pending, so the merge
+  box, not that field, is the test. The rule holds every other author's pull requests,
+  and does not hold the maintainer's own, including one carrying an agent's changes.

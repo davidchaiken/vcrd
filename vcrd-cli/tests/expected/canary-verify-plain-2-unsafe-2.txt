@@ -1,0 +1,46 @@
+status: inspect_failed
+exit_code: 3
+input.bytes: 1054
+input.depth: 3
+format.id: vc-jose
+format.profile: vc-jose-cose
+credential.kind: credential
+credential.issuer: did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N
+credential.types: VerifiableCredential, ExampleDegreeCredential
+credential.validity: current
+credential.valid_from: 2026-01-01T00:00:00Z
+credential.valid_until: 2031-01-01T00:00:00Z
+phases.parse: outcome=passed
+phases.inspect: outcome=failed findings=inspect.jwk_private_key
+phases.verify: outcome=passed
+proofs[0].suite: jws
+proofs[0].algorithm: EdDSA
+proofs[0].outcome: verified
+proofs[0].key_provenance.source: issuer_identifier
+proofs[0].key_provenance.method: did:key
+proofs[0].validity: unbounded
+proofs[0].key_provenance.thumbprint: 0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
+proofs[0].key_provenance.jwk: {"crv":"Ed25519","kty":"OKP","x":"mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0"}
+proofs[0].key_provenance.credential_key.location: header.jwk
+proofs[0].key_provenance.credential_key.thumbprint: 0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
+proofs[0].key_provenance.credential_key.jwk: {"crv":"Ed25519","kty":"OKP","x":"mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0"}
+proofs[0].key_provenance.credential_key.matched: true
+proofs[0].key_provenance.credential_key.verifies_signature: true
+format.header.alg: type=string value=EdDSA visibility=non_sensitive
+format.header.cty: type=string value=vc visibility=non_sensitive
+format.header.jwk.crv: type=string value=Ed25519 visibility=non_sensitive
+format.header.jwk.d: type=string value=CANARY-S1 visibility=revealed
+format.header.jwk.kty: type=string value=OKP visibility=non_sensitive
+format.header.jwk.x: type=string value=mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0 visibility=non_sensitive
+format.header.kid: type=string value=did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N#z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N visibility=non_sensitive
+format.header.typ: type=string value=vc+jwt visibility=non_sensitive
+credential.claims.credentialSubject.alsoKnownAs[0]: type=string value=CANARY-C5 visibility=revealed
+credential.claims.credentialSubject.alsoKnownAs[1]: type=string value=CANARY-C6 visibility=revealed
+credential.claims.credentialSubject.degree.name: type=string value=CANARY-C4 visibility=revealed
+credential.claims.credentialSubject.degree.type: type=string value=CANARY-C3 visibility=revealed
+credential.claims.credentialSubject.id: type=string value=did:example:CANARY-C2 visibility=revealed
+credential.claims.id: type=string value=urn:example:CANARY-C1 visibility=revealed
+findings[0]: code=inspect.jwk_private_key attribution=input severity=error members=d
+warnings[0]: code=unsafe message="--unsafe=2: claim values and cryptographic secrets, such as private keys, are printed in cleartext. Treat this output as sensitive."
+not_evaluated.issuer_accreditation: reason=out_of_scope
+not_evaluated.context_resolution: reason=not_implemented
