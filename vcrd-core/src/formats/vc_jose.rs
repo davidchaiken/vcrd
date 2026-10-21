@@ -6,8 +6,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
 use crate::context::{Context, Limits};
 use crate::document::{
-    ContextEntry, DateTimeProblem, Document, DocumentKind, EmbeddedKey, KeyHints, Leaf, LeafClass,
-    NumericDate, ProofDescriptor, ProofMaterial, ProofTime, ProofTimes, Timestamp,
+    ClassedJson, ContextEntry, DateTimeProblem, Document, DocumentKind, EmbeddedKey, KeyHints,
+    Leaf, LeafClass, NumericDate, ProofDescriptor, ProofMaterial, ProofTime, ProofTimes, Timestamp,
 };
 use crate::finding::{
     Attribution, Base64urlProblem, CritProblem, Finding, FindingDetail, IssLocation, JwkProblem,
@@ -539,9 +539,56 @@ fn parse_compact(bytes: &[u8], limits: &Limits, findings: &mut Vec<Finding>) -> 
     }
     ParseOutput {
         document,
+        header: header.as_ref().map(|h| classed_header(&h.parsed)),
         detail: Some(FormatDetail::VcJose(VcJoseDetail { header, payload })),
         depth,
         contained: Vec::new(),
+    }
+}
+
+/// The header, whole, for rendering. Header values are metadata, shown in full,
+/// except the private-key members of a `jwk`, which are cryptographic secrets (RFC 7518
+/// §6; RFC 8037 §2). Everything inside one, such as the items of `oth`, is too.
+fn classed_header(header: &Json) -> ClassedJson {
+    let Json::Object(members) = header else {
+        return classed(header, LeafClass::Metadata);
+    };
+    let member = |name: &str, value: &Json| match value {
+        Json::Object(jwk) if name == "jwk" => ClassedJson::Object(
+            jwk.iter()
+                .map(|m| {
+                    let class = if PRIVATE_MEMBERS.contains(&m.name.as_str()) {
+                        LeafClass::Secret
+                    } else {
+                        LeafClass::Metadata
+                    };
+                    (m.name.clone(), classed(&m.value, class))
+                })
+                .collect(),
+        ),
+        other => classed(other, LeafClass::Metadata),
+    };
+    ClassedJson::Object(
+        members
+            .iter()
+            .map(|m| (m.name.clone(), member(&m.name, &m.value)))
+            .collect(),
+    )
+}
+
+/// Every scalar in `json` in one class.
+fn classed(json: &Json, class: LeafClass) -> ClassedJson {
+    match json {
+        Json::Scalar(value) => ClassedJson::Scalar(class, value.clone()),
+        Json::Array(items) => {
+            ClassedJson::Array(items.iter().map(|item| classed(item, class)).collect())
+        }
+        Json::Object(members) => ClassedJson::Object(
+            members
+                .iter()
+                .map(|m| (m.name.clone(), classed(&m.value, class)))
+                .collect(),
+        ),
     }
 }
 

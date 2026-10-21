@@ -13,6 +13,7 @@ compile_error!("vcrd-cli needs at least one proof suite feature, such as `jws`")
 
 mod args;
 mod exit;
+mod text;
 mod view;
 
 use std::ffi::OsString;
@@ -38,10 +39,29 @@ fn main() -> ExitCode {
     };
     let format = cli.options.format;
     let verbosity = cli.options.verbosity;
+    let unsafe_level = cli.options.unsafe_level;
     let (operation, file) = cli.operation();
 
+    // Nothing to unmask when nothing is printed: a contradiction, so a caller error,
+    // reported by the exit code alone, as everything is at --verbosity 0.
+    if verbosity == 0 && unsafe_level > 0 {
+        let message = "--unsafe shows masked values, and --verbosity 0 prints nothing";
+        return emit(
+            &view::caller_error("usage", message.to_owned()),
+            format,
+            verbosity,
+        );
+    }
+    let designations = match unsafe_level {
+        0 => Designations::mask_claims(),
+        1 => Designations::show_claims(),
+        _ => Designations::show_claims_and_secrets(),
+    };
+    if unsafe_level > 0 {
+        warn_unsafe(unsafe_level);
+    }
+
     let skew = Duration::from_secs(cli.options.clock_skew);
-    let designations = Designations::mask_claims();
     let ctx = match cli.options.now {
         Some(now) => Context::builder(FixedClock(now)),
         None => Context::builder(SystemClock),
@@ -146,6 +166,19 @@ fn unreadable(path: &Path, error: &std::io::Error) -> (&'static str, String) {
     ("input_unreadable", format!("{}: {error}", path.display()))
 }
 
+/// The banner REQUIREMENTS §8 asks for, on standard error, whatever the format.
+fn warn_unsafe(level: u8) {
+    let shown = if level >= 2 {
+        "claim values and cryptographic secrets, such as private keys,"
+    } else {
+        "claim values"
+    };
+    eprintln!(
+        "vcrd: WARNING: --unsafe={level}: {shown} are printed in cleartext. \
+         Treat this output as sensitive."
+    );
+}
+
 fn eprintln_unless_quiet(verbosity: u8, message: &str) {
     if verbosity > 0 {
         eprintln!("vcrd: {message}");
@@ -153,20 +186,21 @@ fn eprintln_unless_quiet(verbosity: u8, message: &str) {
 }
 
 /// Prints the envelope unless `--verbosity 0` asks for silence, and returns its exit
-/// code. Pretty-printed whether or not stdout is a terminal.
+/// code. JSON is complete and pretty-printed at every other level; `text` and `plain`
+/// show more as the level rises.
 fn emit(envelope: &Envelope, format: OutputFormat, verbosity: u8) -> ExitCode {
     if verbosity > 0 {
-        match format {
-            OutputFormat::Json => {
-                let mut stdout = std::io::stdout().lock();
-                let written = serde_json::to_writer_pretty(&mut stdout, envelope)
-                    .map_err(std::io::Error::from)
-                    .and_then(|()| writeln!(stdout));
-                if let Err(error) = written {
-                    eprintln!("vcrd: cannot write the result: {error}");
-                    return ExitCode::from(exit::CALLER_ERROR);
-                }
-            }
+        let mut stdout = std::io::stdout().lock();
+        let written = match format {
+            OutputFormat::Json => serde_json::to_writer_pretty(&mut stdout, envelope)
+                .map_err(std::io::Error::from)
+                .and_then(|()| writeln!(stdout)),
+            OutputFormat::Text => stdout.write_all(text::text(envelope, verbosity).as_bytes()),
+            OutputFormat::Plain => stdout.write_all(text::plain(envelope, verbosity).as_bytes()),
+        };
+        if let Err(error) = written {
+            eprintln!("vcrd: cannot write the result: {error}");
+            return ExitCode::from(exit::CALLER_ERROR);
         }
     }
     ExitCode::from(envelope.exit_code)

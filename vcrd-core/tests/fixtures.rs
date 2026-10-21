@@ -110,6 +110,7 @@ mod generate {
             ("fixtures/embedded-jwk-only.jwt", embedded_jwk_only()),
             ("fixtures/exp-past.jwt", exp_past()),
             ("fixtures/crit-unsupported.jwt", crit_unsupported()),
+            ("fixtures/canary.jwt", canary()),
         ]
     }
 
@@ -365,6 +366,22 @@ mod generate {
         let (key, mut header, payload) = example_parts();
         header["crit"] = json!(["urn:example:unimplemented"]);
         header["urn:example:unimplemented"] = json!(true);
+        sign(&key, &header, &payload)
+    }
+
+    /// For the redaction tests (ARCHITECTURE §7): every claim leaf holds a distinct
+    /// canary string, `CANARY-C1` to `CANARY-C6`, and the header's `jwk`, the issuer's
+    /// own key, carries a private member holding `CANARY-S1`. Correctly signed.
+    fn canary() -> Vec<u8> {
+        let (key, mut header, mut payload) = example_parts();
+        payload["id"] = json!("urn:example:CANARY-C1");
+        payload["credentialSubject"] = json!({
+            "id": "did:example:CANARY-C2",
+            "degree": {"type": "CANARY-C3", "name": "CANARY-C4"},
+            "alsoKnownAs": ["CANARY-C5", "CANARY-C6"],
+        });
+        header["jwk"] = jwk(&key);
+        header["jwk"]["d"] = json!("CANARY-S1");
         sign(&key, &header, &payload)
     }
 

@@ -29,8 +29,9 @@ mod vcdm;
 pub use context::SystemClock;
 pub use context::{Clock, Context, ContextBuilder, FixedClock, Limits};
 pub use document::{
-    ContainedInput, ContextEntry, DateTimeProblem, Document, DocumentKind, EmbeddedKey, KeyHints,
-    Leaf, LeafClass, NumericDate, ProofDescriptor, ProofMaterial, ProofTime, ProofTimes, Timestamp,
+    ClassedJson, ContainedInput, ContextEntry, DateTimeProblem, Document, DocumentKind,
+    EmbeddedKey, KeyHints, Leaf, LeafClass, NumericDate, ProofDescriptor, ProofMaterial, ProofTime,
+    ProofTimes, Timestamp,
 };
 pub use finding::{
     Attribution, Base64urlProblem, CritProblem, DateField, DidKeyProblem, Finding, FindingDetail,
@@ -39,8 +40,8 @@ pub use finding::{
 pub use json::{DuplicateName, Json, Member, nesting_depth};
 pub use keys::{CredentialKey, Jwk, KeyProvenance, KeySource, PublicKey};
 pub use redact::{
-    ClaimValue, Designations, Rendered, RenderedLeaf, Reveal, Revealed, Treatment, ValueKind,
-    render,
+    ClaimValue, Designations, Rendered, RenderedJson, RenderedLeaf, Reveal, RevealLocation,
+    Revealed, Treatment, ValueKind, render,
 };
 pub use registry::{
     CredentialFormat, Detection, FormatId, ProfileId, ProofInput, ProofSuite, Registry, SuiteId,

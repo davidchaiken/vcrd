@@ -1,0 +1,18 @@
+status: passed
+credential.kind: credential
+credential.issuer: did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N
+credential.types: VerifiableCredential, ExampleDegreeCredential
+credential.validity: current
+phases.inspect: outcome=passed
+phases.verify: outcome=passed
+proofs[0].suite: jws
+proofs[0].algorithm: EdDSA
+proofs[0].outcome: verified
+proofs[0].key_provenance.source: issuer_identifier
+proofs[0].key_provenance.method: did:key
+credential.claims.credentialSubject.degree.name: type=string value=(masked)
+credential.claims.credentialSubject.degree.type: type=string value=(masked)
+credential.claims.credentialSubject.id: type=string value=(masked)
+credential.claims.id: type=string value=(masked)
+not_evaluated.issuer_accreditation: reason=out_of_scope
+not_evaluated.context_resolution: reason=not_implemented

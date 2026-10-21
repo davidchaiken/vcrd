@@ -12,8 +12,8 @@ yanked = "deny"
 ignore = []
 
 [licenses]
-# Permissive licences only. MPL-2.0, the GPL family and non-open-source licences
-# are excluded. Any licence not listed fails the check and is discussed case by
+# Permissive licenses only. MPL-2.0, the GPL family and non-open-source licenses
+# are excluded. Any license not listed fails the check and is discussed case by
 # case before it is added.
 allow = [
     "Apache-2.0",

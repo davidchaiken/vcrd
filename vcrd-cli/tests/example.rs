@@ -8,10 +8,7 @@ use support::{EXAMPLE, NOW, json, vcrd};
 
 #[test]
 fn verify_exits_0_with_one_json_document() {
-    let out = json(
-        vcrd().args(["verify", EXAMPLE, "--now", NOW, "--format", "json"]),
-        0,
-    );
+    let out = json(vcrd().args(["verify", EXAMPLE, "--now", NOW]), 0);
     assert_eq!(out["schema_version"], 0);
     assert_eq!(out["status"], "passed");
     assert_eq!(out["exit_code"], 0);
@@ -43,7 +40,7 @@ fn verify_exits_0_with_one_json_document() {
 #[test]
 fn claims_are_masked_and_metadata_shown() {
     let output = vcrd()
-        .args(["verify", EXAMPLE, "--now", NOW])
+        .args(["verify", EXAMPLE, "--now", NOW, "--format", "json"])
         .output()
         .unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();

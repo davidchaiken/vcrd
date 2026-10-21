@@ -10,10 +10,10 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use vcrd_core::{
     Attribution, Base64urlProblem, BlockReason, Check, Context, CritProblem, DateField,
-    DidKeyProblem, Document, DocumentKind, Finding, FindingDetail, FormatDetail, IssLocation,
-    IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment, KeySourceKind, LeafClass, Missing,
-    NotEvaluatedReason, Phase, PhaseOutcome, ProofOutcome, Rendered, Report, Revealed, Severity,
-    Validity, render,
+    DidKeyProblem, Document, DocumentKind, Finding, FindingDetail, IssLocation, IssuerProblem,
+    JwkProblem, JwsJsonSyntax, JwsSegment, KeySourceKind, LeafClass, Missing, NotEvaluatedReason,
+    Phase, PhaseOutcome, ProofOutcome, Rendered, RenderedJson, Report, RevealLocation, Revealed,
+    Severity, Treatment, Validity, render,
 };
 
 /// `0` until the schema is declared stable (REQUIREMENTS §9).
@@ -59,6 +59,8 @@ pub struct ResultView {
 #[derive(Debug, Serialize)]
 pub struct RevealView {
     pub path: String,
+    /// The key the path is relative to: `credential.claims` or `format.header`.
+    pub location: &'static str,
     pub treatment: &'static str,
 }
 
@@ -154,8 +156,26 @@ pub struct FormatView {
     pub id: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<&'static str>,
-    /// The format's own fields, such as the JOSE header.
+    /// The securing mechanism's header as written, such as the JOSE header; `null`
+    /// when there is none or it did not decode. A masked value is `null`, and its
+    /// path is in `header_masked`.
     pub header: Value,
+    /// The paths of the header values that are masked, such as a private key's.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub header_masked: Vec<String>,
+    /// The header's values one per row, in input order, for `text` and `plain`.
+    #[serde(skip)]
+    pub header_rows: Vec<HeaderRow>,
+}
+
+/// One header value, for `text` and `plain`.
+#[derive(Debug)]
+pub struct HeaderRow {
+    pub path: String,
+    /// `None` where the value is masked.
+    pub value: Option<Value>,
+    /// Shown though it is a secret, as `--unsafe=2` asks.
+    pub unmasked: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -190,17 +210,19 @@ pub struct LeafView {
 /// knows it; it may exceed what core was given (ARCHITECTURE §4).
 pub fn envelope(report: &Report, ctx: &Context, size: Option<u64>) -> Envelope {
     let (exit_code, status) = crate::exit::exit_code(report);
-    let rendered = report
-        .parse
-        .output()
-        .and_then(|p| p.document.as_ref())
-        .map(|document| (document, render(document, ctx)));
-    let reveals = rendered.as_ref().map_or_else(Vec::new, |(_, r)| {
+    let rendered = report.parse.output().map(|parsed| render(parsed, ctx));
+    let reveals = rendered.as_ref().map_or_else(Vec::new, |r| {
         r.reveals
             .iter()
             .map(|r| RevealView {
                 path: r.path.clone(),
-                treatment: "shown",
+                location: match r.location {
+                    RevealLocation::Leaves => "credential.claims",
+                    RevealLocation::Header => "format.header",
+                },
+                treatment: match r.treatment {
+                    Treatment::Shown => "shown",
+                },
             })
             .collect()
     });
@@ -248,12 +270,9 @@ pub fn caller_error(code: &'static str, message: String) -> Envelope {
     }
 }
 
-fn result(
-    report: &Report,
-    rendered: Option<&(&Document, Rendered)>,
-    size: Option<u64>,
-) -> ResultView {
+fn result(report: &Report, rendered: Option<&Rendered>, size: Option<u64>) -> ResultView {
     let validity = report.inspect.output().map(|i| i.validity);
+    let document = report.parse.output().and_then(|p| p.document.as_ref());
     ResultView {
         input: InputView {
             bytes: report.input.bytes,
@@ -282,8 +301,10 @@ fn result(
             .iter()
             .map(|c| result(c, None, None))
             .collect(),
-        format: format(report),
-        credential: rendered.map(|(document, rendered)| credential(document, rendered, validity)),
+        format: format(report, rendered),
+        credential: document
+            .zip(rendered)
+            .map(|(document, rendered)| credential(document, rendered, validity)),
     }
 }
 
@@ -850,23 +871,54 @@ fn rfc3339(t: OffsetDateTime) -> Value {
     t.format(&Rfc3339).map_or(Value::Null, Value::String)
 }
 
-fn format(report: &Report) -> Option<FormatView> {
+fn format(report: &Report, rendered: Option<&Rendered>) -> Option<FormatView> {
     let id = report.input.format?.0;
     let profile = report.inspect.output().and_then(|i| i.profile).map(|p| p.0);
-    let header = match report.parse.output().and_then(|p| p.detail.as_ref()) {
-        None => Value::Null,
-        #[cfg(feature = "vc-jose")]
-        // `null` when the header did not decode.
-        Some(FormatDetail::VcJose(detail)) => detail.header.as_ref().map_or(
-            Value::Null,
-            |h| json!({"alg": h.alg, "kid": h.kid, "typ": h.typ, "cty": h.cty}),
-        ),
-    };
+    let mut header_masked = Vec::new();
+    let mut header_rows = Vec::new();
+    let header = rendered
+        .and_then(|r| r.header.as_ref())
+        .map_or(Value::Null, |h| {
+            header_json(h, &mut header_masked, &mut header_rows)
+        });
     Some(FormatView {
         id,
         profile,
         header,
+        header_masked,
+        header_rows,
     })
+}
+
+/// The header as written, a masked value as `null` with its path in `masked`. Members
+/// come out in serde_json's order, which is sorted by name, and a repeated name keeps
+/// the last value, as the parse does (RFC 7515 §4).
+fn header_json(json: &RenderedJson, masked: &mut Vec<String>, rows: &mut Vec<HeaderRow>) -> Value {
+    match json {
+        RenderedJson::Scalar {
+            path, class, value, ..
+        } => {
+            let value = value.as_ref().map(revealed);
+            if value.is_none() {
+                masked.push(path.clone());
+            }
+            rows.push(HeaderRow {
+                path: path.clone(),
+                value: value.clone(),
+                unmasked: value.is_some() && *class != LeafClass::Metadata,
+            });
+            value.unwrap_or(Value::Null)
+        }
+        RenderedJson::Array(items) => {
+            Value::Array(items.iter().map(|i| header_json(i, masked, rows)).collect())
+        }
+        RenderedJson::Object(members) => Value::Object(
+            members
+                .iter()
+                .map(|(name, value)| (name.clone(), header_json(value, masked, rows)))
+                .collect(),
+        ),
+    }
 }
 
 fn credential(
@@ -880,11 +932,11 @@ fn credential(
         treatment: if l.value.is_some() { "shown" } else { "masked" },
         value: l.value.as_ref().map(revealed),
     };
-    let of_class = |class| {
+    let of_class = |wanted: fn(LeafClass) -> bool| {
         rendered
             .leaves
             .iter()
-            .filter(|l| l.class == class)
+            .filter(|l| wanted(l.class))
             .map(leaf)
             .collect()
     };
@@ -901,8 +953,10 @@ fn credential(
             .as_ref()
             .and_then(|t| t.lexical.clone()),
         validity: validity.map(validity_name),
-        metadata: of_class(LeafClass::Metadata),
-        claims: of_class(LeafClass::Claim),
+        metadata: of_class(|c| c == LeafClass::Metadata),
+        // A secret among a document's leaves is masked with the claims; formats
+        // class header members, not leaves, as secrets today.
+        claims: of_class(|c| c != LeafClass::Metadata),
     }
 }
 

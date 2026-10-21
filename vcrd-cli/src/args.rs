@@ -38,7 +38,7 @@ pub enum Command {
 #[derive(Debug, Args)]
 pub struct Options {
     /// Output format.
-    #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Json)]
+    #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Text)]
     pub format: OutputFormat,
     /// Evaluate validity periods at this RFC 3339 date-time instead of the system clock.
     #[arg(long, global = true, value_name = "DATE-TIME", value_parser = rfc3339)]
@@ -46,8 +46,8 @@ pub struct Options {
     /// Tolerance applied to validity periods.
     #[arg(long, global = true, value_name = "SECONDS", default_value_t = 0)]
     pub clock_skew: u64,
-    /// Diagnostic detail, 0 to 3. At 0 nothing is printed and the exit code is the
-    /// whole answer.
+    /// Detail in `text` and `plain` output, 0 to 3; JSON is always complete. At 0
+    /// nothing is printed in any format and the exit code is the whole answer.
     #[arg(
         long,
         global = true,
@@ -55,12 +55,30 @@ pub struct Options {
         value_parser = clap::value_parser!(u8).range(0..=3)
     )]
     pub verbosity: u8,
+    /// Show masked values in cleartext: 1, or the flag alone, shows every claim; 2
+    /// also shows cryptographic secrets, such as a private key the credential carries.
+    /// A warning on standard error says so.
+    #[arg(
+        long = "unsafe",
+        global = true,
+        value_name = "LEVEL",
+        num_args = 0..=1,
+        require_equals = true,
+        default_value_t = 0,
+        default_missing_value = "1",
+        value_parser = clap::value_parser!(u8).range(0..=2)
+    )]
+    pub unsafe_level: u8,
 }
 
-/// Milestone 1 renders JSON only; `text` and `plain` follow (DEVELOPMENT-PLAN.md).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
 pub enum OutputFormat {
+    /// Tables, for a reader at a terminal.
     #[default]
+    Text,
+    /// One `name: value` line per item, for line-oriented tools.
+    Plain,
+    /// The complete result as one JSON document (docs/output.md).
     Json,
 }
 
@@ -133,15 +151,15 @@ mod tests {
         );
         assert_eq!(
             prescan(&args("vcrd --verbosity=2")),
-            (OutputFormat::Json, 2)
+            (OutputFormat::Text, 2)
         );
         assert_eq!(
             prescan(&args("vcrd -- --verbosity 0")),
-            (OutputFormat::Json, 1)
+            (OutputFormat::Text, 1)
         );
         assert_eq!(
-            prescan(&args("vcrd --verbosity 9")),
-            (OutputFormat::Json, 1)
+            prescan(&args("vcrd --verbosity 9 --format plain")),
+            (OutputFormat::Plain, 1)
         );
     }
 }

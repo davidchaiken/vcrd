@@ -7,7 +7,9 @@
 use std::fmt;
 
 use crate::context::Context;
-use crate::document::{Document, LeafClass};
+use crate::document::{ClassedJson, LeafClass};
+use crate::json::{Step, path_string};
+use crate::report::ParseOutput;
 
 /// One scalar value taken from an input.
 #[derive(Clone, PartialEq)]
@@ -105,34 +107,54 @@ impl fmt::Debug for ClaimValue {
     }
 }
 
-/// Which claims to show. Milestone 1 has the two settings below; per-path
-/// designations come later (DEVELOPMENT-PLAN.md).
+/// Which values to show. Milestone 1 has the three settings below, one for each level
+/// of `--unsafe`; per-path designations come later (DEVELOPMENT-PLAN.md).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Designations {
-    show_all_claims: bool,
+    show_claims: bool,
+    show_secrets: bool,
 }
 
 impl Designations {
-    /// Every claim masked: the default.
+    /// Every claim and every secret masked: the default.
     pub fn mask_claims() -> Self {
+        Designations::default()
+    }
+
+    /// Every claim shown, and every cryptographic secret still masked.
+    pub fn show_claims() -> Self {
         Designations {
-            show_all_claims: false,
+            show_claims: true,
+            show_secrets: false,
         }
     }
 
-    /// Every claim shown, as `--unsafe` asks.
-    pub fn show_all() -> Self {
+    /// Every claim and every cryptographic secret shown.
+    pub fn show_claims_and_secrets() -> Self {
         Designations {
-            show_all_claims: true,
+            show_claims: true,
+            show_secrets: true,
+        }
+    }
+
+    fn shows(self, class: LeafClass) -> bool {
+        match class {
+            LeafClass::Metadata => true,
+            LeafClass::Claim => self.show_claims,
+            LeafClass::Secret => self.show_secrets,
         }
     }
 }
 
-/// A document's leaves as they may be shown, and the record of every claim shown.
+/// A document's values as they may be shown, and the record of every claim or secret
+/// shown.
 #[derive(Clone, Debug)]
 pub struct Rendered {
     pub leaves: Vec<RenderedLeaf>,
-    /// Every claim shown, in leaf order. Metadata is always shown and not listed.
+    /// The securing mechanism's header, whole, when the format has one.
+    pub header: Option<RenderedJson>,
+    /// Every claim or secret shown, leaves first, then the header. Metadata is always
+    /// shown and not listed.
     pub reveals: Vec<Reveal>,
 }
 
@@ -145,6 +167,23 @@ pub struct RenderedLeaf {
     pub value: Option<Revealed>,
 }
 
+/// A JSON structure as it may be shown: every member and item kept, each scalar shown
+/// or masked.
+#[derive(Clone, Debug)]
+pub enum RenderedJson {
+    Scalar {
+        /// Where it is, in the notation of [`RenderedLeaf::path`].
+        path: String,
+        class: LeafClass,
+        kind: ValueKind,
+        /// The plaintext, or `None` where the value is masked.
+        value: Option<Revealed>,
+    },
+    Array(Vec<RenderedJson>),
+    /// Members in input order, duplicate names included.
+    Object(Vec<(String, RenderedJson)>),
+}
+
 /// A shown value.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Revealed {
@@ -155,11 +194,21 @@ pub enum Revealed {
     String(String),
 }
 
-/// One claim shown in cleartext; the output's `reveals` key (ARCHITECTURE §6).
+/// One claim or secret shown in cleartext; the output's `reveals` key (ARCHITECTURE §6).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Reveal {
     pub path: String,
+    pub location: RevealLocation,
     pub treatment: Treatment,
+}
+
+/// Which part of the document a revealed path is in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RevealLocation {
+    /// The document's leaves, such as a credential's claims.
+    Leaves,
+    /// The securing mechanism's header.
+    Header,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -167,21 +216,23 @@ pub enum Treatment {
     Shown,
 }
 
-/// Renders a document's leaves under the context's designations: metadata shown,
-/// claims masked unless designated. The only way to a claim's plaintext outside
-/// this crate, and it records every claim it shows.
-pub fn render(document: &Document, ctx: &Context) -> Rendered {
-    let designations = ctx.designations();
-    let mut leaves = Vec::with_capacity(document.leaves.len());
+/// Renders what parsing found under the context's designations: the document's leaves
+/// and the header, metadata shown, claims and secrets masked unless designated. The
+/// only way to their plaintext outside this crate, and it records every one it shows.
+pub fn render(parsed: &ParseOutput, ctx: &Context) -> Rendered {
+    let designations = *ctx.designations();
+    let document_leaves = parsed
+        .document
+        .as_ref()
+        .map_or(&[][..], |d| d.leaves.as_slice());
+    let mut leaves = Vec::with_capacity(document_leaves.len());
     let mut reveals = Vec::new();
-    for leaf in &document.leaves {
-        let shown = match leaf.class {
-            LeafClass::Metadata => true,
-            LeafClass::Claim => designations.show_all_claims,
-        };
-        if shown && leaf.class == LeafClass::Claim {
+    for leaf in document_leaves {
+        let shown = designations.shows(leaf.class);
+        if shown && leaf.class != LeafClass::Metadata {
             reveals.push(Reveal {
                 path: leaf.path.clone(),
+                location: RevealLocation::Leaves,
                 treatment: Treatment::Shown,
             });
         }
@@ -192,5 +243,63 @@ pub fn render(document: &Document, ctx: &Context) -> Rendered {
             value: shown.then(|| leaf.value.reveal()),
         });
     }
-    Rendered { leaves, reveals }
+    let header = parsed
+        .header
+        .as_ref()
+        .map(|h| render_json(h, designations, &mut Vec::new(), &mut reveals));
+    Rendered {
+        leaves,
+        header,
+        reveals,
+    }
+}
+
+fn render_json<'a>(
+    json: &'a ClassedJson,
+    designations: Designations,
+    path: &mut Vec<Step<'a>>,
+    reveals: &mut Vec<Reveal>,
+) -> RenderedJson {
+    match json {
+        ClassedJson::Scalar(class, value) => {
+            let shown = designations.shows(*class);
+            let path = path_string(path);
+            if shown && *class != LeafClass::Metadata {
+                reveals.push(Reveal {
+                    path: path.clone(),
+                    location: RevealLocation::Header,
+                    treatment: Treatment::Shown,
+                });
+            }
+            RenderedJson::Scalar {
+                path,
+                class: *class,
+                kind: value.kind(),
+                value: shown.then(|| value.reveal()),
+            }
+        }
+        ClassedJson::Array(items) => RenderedJson::Array(
+            items
+                .iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    path.push(Step::Index(index));
+                    let rendered = render_json(item, designations, path, reveals);
+                    path.pop();
+                    rendered
+                })
+                .collect(),
+        ),
+        ClassedJson::Object(members) => RenderedJson::Object(
+            members
+                .iter()
+                .map(|(name, value)| {
+                    path.push(Step::Name(name));
+                    let rendered = render_json(value, designations, path, reveals);
+                    path.pop();
+                    (name.clone(), rendered)
+                })
+                .collect(),
+        ),
+    }
 }

@@ -1,0 +1,3 @@
+ Status    caller_error
+ Error     usage
+ Message   error: invalid value 'yesterday' for '--now <DATE-TIME>': the 'year' component could not be parsed For more information, try '--help'.

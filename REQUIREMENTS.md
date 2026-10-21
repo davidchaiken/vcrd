@@ -516,7 +516,8 @@ a novice gets a useful answer without reading documentation first.
 **Cross-cutting flags**: `--verbose`/`--verbosity` (diagnostic detail level, down to a
 `0` setting that suppresses all output and relies solely on the exit code — useful for
 scripting that only cares whether something passed) and `--format json|text|plain`
-(output shape). stdout is reserved for the actual result (so output stays pipeable);
+(output shape). The level changes what `text` and `plain` show; JSON, the structured
+contract (§9), is always complete. stdout is reserved for the actual result (so output stays pipeable);
 stderr carries diagnostics and progress. Distinct exit codes let a calling script branch
 on which kind of failure occurred rather than just "something went wrong." The code is
 determined first by the *attribution* of the failure (§6) and only then by the phase that
@@ -548,8 +549,9 @@ below. Paths use the same notation vcrd prints in its own output, so a path copi
 masked output designates that field. A hashed value is a deterministic hash truncated to
 a short, human-scannable form, so a caller can tell whether a field matches or differs
 across two credentials/transactions without seeing the plaintext. `--unsafe` (global,
-same family as the network opt-in flags, §6) shows every claim value in cleartext and
-triggers a human-visible stderr warning banner. Every reveal — a designated path or
+same family as the network opt-in flags, §6) shows every claim value in cleartext, and
+`--unsafe=2` also shows every cryptographic secret the credential carries, such as a
+private key; either triggers a human-visible stderr warning banner. Every reveal — a designated path or
 `--unsafe` — is reported by a structured marker in the result itself (e.g. a top-level
 field in JSON output listing each path shown in cleartext or hashed), so a script or
 agent consuming stdout — not just a human reading a terminal — can detect that the

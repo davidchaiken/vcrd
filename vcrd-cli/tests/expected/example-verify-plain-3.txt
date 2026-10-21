@@ -1,0 +1,39 @@
+status: passed
+exit_code: 0
+input.bytes: 921
+input.depth: 3
+format.id: vc-jose
+format.profile: vc-jose-cose
+credential.kind: credential
+credential.issuer: did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N
+credential.types: VerifiableCredential, ExampleDegreeCredential
+credential.validity: current
+credential.valid_from: 2026-01-01T00:00:00Z
+credential.valid_until: 2031-01-01T00:00:00Z
+phases.parse: outcome=passed
+phases.inspect: outcome=passed
+phases.verify: outcome=passed
+proofs[0].suite: jws
+proofs[0].algorithm: EdDSA
+proofs[0].outcome: verified
+proofs[0].key_provenance.source: issuer_identifier
+proofs[0].key_provenance.method: did:key
+proofs[0].validity: unbounded
+proofs[0].key_provenance.thumbprint: 0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
+format.header.alg: value=EdDSA
+format.header.cty: value=vc
+format.header.kid: value=did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N#z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N
+format.header.typ: value=vc+jwt
+credential.claims.credentialSubject.degree.name: type=string value=(masked)
+credential.claims.credentialSubject.degree.type: type=string value=(masked)
+credential.claims.credentialSubject.id: type=string value=(masked)
+credential.claims.id: type=string value=(masked)
+credential.metadata.@context[0]: type=string value=https://www.w3.org/ns/credentials/v2
+credential.metadata.@context[1]: type=string value=https://www.w3.org/ns/credentials/examples/v2
+credential.metadata.issuer: type=string value=did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N
+credential.metadata.type[0]: type=string value=VerifiableCredential
+credential.metadata.type[1]: type=string value=ExampleDegreeCredential
+credential.metadata.validFrom: type=string value=2026-01-01T00:00:00Z
+credential.metadata.validUntil: type=string value=2031-01-01T00:00:00Z
+not_evaluated.issuer_accreditation: reason=out_of_scope
+not_evaluated.context_resolution: reason=not_implemented

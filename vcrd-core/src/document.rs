@@ -70,10 +70,23 @@ pub struct Leaf {
 }
 
 /// Claims are masked by default; metadata is always shown (REQUIREMENTS §8).
+/// Cryptographic secrets, such as a private key a credential carries, stay masked
+/// unless the caller asks for them as well as for the claims.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LeafClass {
     Claim,
     Metadata,
+    Secret,
+}
+
+/// A JSON value whose scalars are each classed as a leaf is: for a structure shown
+/// whole, such as a JOSE header. Every scalar is a [`ClaimValue`] (ARCHITECTURE §7).
+#[derive(Clone, Debug)]
+pub enum ClassedJson {
+    Scalar(LeafClass, ClaimValue),
+    Array(Vec<ClassedJson>),
+    /// Members in input order, duplicate names included.
+    Object(Vec<(String, ClassedJson)>),
 }
 
 /// Where a proof is and what it covers. Carries hints about key material, never a

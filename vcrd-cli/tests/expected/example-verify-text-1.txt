@@ -1,0 +1,32 @@
+ Status     passed
+ Kind       credential
+ Issuer     did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N
+ Types      VerifiableCredential, ExampleDegreeCredential
+ Validity   current
+
+Phases
+ Phase   | Outcome | Findings | Blocked by
+---------+---------+----------+------------
+ inspect | passed  |          |
+ verify  | passed  |          |
+
+Proof
+ Suite        jws
+ Algorithm    EdDSA
+ Outcome      verified
+ Key source   issuer_identifier
+ Method       did:key
+
+Claims
+ Path                          | Type   | Value    | Unmasked
+-------------------------------+--------+----------+----------
+ credentialSubject.degree.name | string | (masked) |
+ credentialSubject.degree.type | string | (masked) |
+ credentialSubject.id          | string | (masked) |
+ id                            | string | (masked) |
+
+Not evaluated
+ Check                | Reason
+----------------------+-----------------
+ issuer_accreditation | out_of_scope
+ context_resolution   | not_implemented

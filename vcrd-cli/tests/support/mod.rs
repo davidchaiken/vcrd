@@ -23,9 +23,10 @@ pub fn vcrd() -> Command {
     Command::cargo_bin("vcrd").unwrap()
 }
 
-/// Runs vcrd, asserts the exit code, and parses stdout as the one JSON document.
+/// Runs vcrd with `--format json` added, asserts the exit code, and parses stdout as
+/// the one JSON document.
 pub fn json(command: &mut Command, code: i32) -> Value {
-    let output = command.output().unwrap();
+    let output = command.args(["--format", "json"]).output().unwrap();
     assert_eq!(
         output.status.code(),
         Some(code),
