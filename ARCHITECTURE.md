@@ -482,7 +482,8 @@ a resolved key; a format that resolved keys would be deciding what to trust (fin
 5. Call core's `inspect` or `verify`.
 6. Map the `Report` to the output schema (§6).
 7. Render it as `json`, `text`, or `plain`, at the verbosity level asked for. The stderr
-   warning for `--unsafe` is printed once the arguments are read, before any output.
+   warning for `--unsafe` is printed once the arguments are read, before any output, and
+   repeated in the result's `warnings`. No output setting changes the exit code.
 8. Compute the exit code (§6) and exit.
 
 An error in steps 1–3 skips to step 6 with the error slot filled, so the output is still
@@ -597,6 +598,7 @@ prototype's name where it differs:
 | `status` | a one-word summary naming the earliest failed phase — lossy: it cannot express "expired but correctly signed", and consumers should read `phases` |
 | `exit_code` | the process exit code, so that stdout alone carries it |
 | `reveals` | every path shown in cleartext or hashed (§7), with the key it is relative to (`credential.claims` or `format.header`); the prototype had a boolean, `unsafe_cleartext` |
+| `warnings` | each warning vcrd also writes to stderr, such as `--unsafe`'s, as a code and message; `[]` when there are none |
 | `input` | byte length, nesting depth of the decoded payload, detected format |
 | `phases` | per phase: outcome, what blocked it if not reached, and each kind of finding once, by code |
 | `proofs` | per proof: suite, declared algorithm, outcome, key provenance, and the proof's validity against its own times — present for failed verification too |

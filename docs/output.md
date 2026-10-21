@@ -29,7 +29,7 @@ complete at levels 1 to 3.
 
 | Level | `text` and `plain` show |
 |---|---|
-| 0 | nothing, in any format: the exit code is the whole answer. Asking for `--unsafe` as well is a caller error, since nothing would be shown. |
+| 0 | nothing, in any format, on either stream: the exit code is the whole answer. `--unsafe` has no effect, since nothing is shown. |
 | 1 | the status; the credential's kind, issuer, types and validity; inspect's outcome, kinds of finding and what blocked it; when verify was requested, the same for verify, and each proof's suite, algorithm, outcome, and where its key came from (`key_provenance.source` and `method`); the claims, masked; every finding; and the checks not evaluated |
 | 2 | everything except the credential's metadata. Level 1, plus: the exit code; the input's size and depth; the format and profile; the validity bounds; the parse phase; each proof's own validity, key thumbprint, and any key the credential carries; and the header |
 | 3 | everything: level 2, plus the credential's metadata |
@@ -45,11 +45,18 @@ Claim values are masked by default (REQUIREMENTS §8). `--unsafe` shows them:
 | Flag | Shown in cleartext |
 |---|---|
 | none, or `--unsafe=0` | metadata only |
-| `--unsafe`, or `--unsafe=1` | metadata and claims |
-| `--unsafe=2` | metadata, claims, and cryptographic secrets, such as the private-key members of a `jwk` the credential carries |
+| `--unsafe`, `--unsafe=1` or `--unsafe 1` | metadata and claims |
+| `--unsafe=2` or `--unsafe 2` | metadata, claims, and cryptographic secrets, such as the private-key members of a `jwk` the credential carries |
 
-With `--unsafe=1` or `=2`, a warning on standard error says what is shown, in every
-format. Every value shown that would otherwise be masked is reported in the result:
+A level is read after `--unsafe` only when it is `0`, `1` or `2`, so `vcrd --unsafe f.jwt`
+means level 1; a file with one of those names is written `./2`.
+
+With `--unsafe=1` or `=2`, a warning says what is shown, on standard error and in the
+result, so that a reader of standard output alone sees it too. It comes first: in JSON
+it is an entry in `warnings`, `{code, message}` with code `unsafe`; `text` prints it in a
+Warnings table before everything else; `plain` prints it as the first line,
+`warnings[0]: code=unsafe message="…"`. Every value shown that would otherwise be masked
+is reported in the result as well:
 
 - JSON lists each in `reveals`, as `{path, location, treatment}`. `location` is the key
   the path is relative to: `credential.claims`, or `format.header`.
@@ -76,6 +83,9 @@ the header from level 2, one value per row.
 | `parse_failed` | 2, 5 or 6 | the earliest failed phase is parse |
 | `inspect_failed` | 3, 5 or 6 | the earliest failed phase is inspect |
 | `verify_failed` | 4, 5 or 6 | the earliest failed phase is verify |
+
+No output setting changes the exit code: whatever the format, the verbosity level or
+the `--unsafe` level, it is the result's.
 
 `status` names the earliest failed phase. `exit_code` is 6 when any error finding is
 attributed to vcrd (something vcrd does not support), otherwise 5 when any is attributed

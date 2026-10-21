@@ -10,7 +10,8 @@ use std::fmt::Write as _;
 
 use serde_json::Value;
 use tabled::builder::Builder;
-use tabled::settings::Style;
+use tabled::settings::object::{Cell as TableCell, Columns};
+use tabled::settings::{Style, Width};
 
 use crate::view::{Envelope, LeafView, PhaseView, ProofView, ResultView};
 
@@ -31,14 +32,28 @@ pub fn text(envelope: &Envelope, verbosity: u8) -> String {
                 for field in fields {
                     builder.push_record([field.label.to_owned(), printable(&field.value)]);
                 }
-                builder.build().with(Style::blank()).to_string()
+                let mut table = builder.build();
+                table.with(Style::blank());
+                for (row, field) in fields.iter().enumerate() {
+                    if field.prose {
+                        table.modify(TableCell::new(row, 1), wrap());
+                    }
+                }
+                table.to_string()
             }
             Body::Table { columns, rows, .. } => {
                 builder.push_record(columns.iter().map(|c| c.label.to_owned()));
                 for row in rows {
                     builder.push_record(row.cells.iter().map(Cell::text));
                 }
-                builder.build().with(Style::psql()).to_string()
+                let mut table = builder.build();
+                table.with(Style::psql());
+                for (index, column) in columns.iter().enumerate() {
+                    if column.prose {
+                        table.modify(Columns::one(index), wrap());
+                    }
+                }
+                table.to_string()
             }
         };
         // tabled pads every cell, the last included.
@@ -109,12 +124,24 @@ struct Field {
     name: String,
     label: &'static str,
     value: String,
+    /// Wrapped at word boundaries in `text`; see [`PROSE_WIDTH`].
+    prose: bool,
 }
 
 struct Column {
     label: &'static str,
     /// The name in `plain`.
     key: &'static str,
+    /// Wrapped at word boundaries in `text`; see [`PROSE_WIDTH`].
+    prose: bool,
+}
+
+/// The width at which `text` wraps prose, such as a warning. Values are never wrapped:
+/// an identifier split across lines is hard to copy or search for.
+const PROSE_WIDTH: usize = 72;
+
+fn wrap() -> tabled::settings::width::Wrap<usize> {
+    Width::wrap(PROSE_WIDTH).keep_words(true)
 }
 
 struct Row {
@@ -163,11 +190,30 @@ fn field(name: &str, label: &'static str, value: impl Into<String>) -> Field {
         name: name.to_owned(),
         label,
         value: value.into(),
+        prose: false,
+    }
+}
+
+fn prose_field(name: &str, label: &'static str, value: impl Into<String>) -> Field {
+    Field {
+        prose: true,
+        ..field(name, label, value)
     }
 }
 
 fn column(label: &'static str, key: &'static str) -> Column {
-    Column { label, key }
+    Column {
+        label,
+        key,
+        prose: false,
+    }
+}
+
+fn prose_column(label: &'static str, key: &'static str) -> Column {
+    Column {
+        prose: true,
+        ..column(label, key)
+    }
 }
 
 fn text_cell(value: impl Into<String>) -> Cell {
@@ -180,11 +226,33 @@ fn text_cell(value: impl Into<String>) -> Cell {
 fn sections(envelope: &Envelope, verbosity: u8) -> Vec<Section> {
     let full = verbosity >= 2;
     let result = &envelope.result;
-    let mut sections = vec![Section {
+    let mut sections = Vec::new();
+    // First, so that a reader of only the first lines sees them.
+    if !envelope.warnings.is_empty() {
+        let rows = envelope
+            .warnings
+            .iter()
+            .enumerate()
+            .map(|(index, w)| Row {
+                name: format!("[{index}]"),
+                cells: vec![text_cell(w.code), text_cell(w.message.clone())],
+            })
+            .collect();
+        sections.push(Section {
+            name: "warnings".to_owned(),
+            title: Some("Warnings"),
+            body: Body::Table {
+                columns: vec![column("Code", "code"), prose_column("Message", "message")],
+                rows,
+                named_by_first: false,
+            },
+        });
+    }
+    sections.push(Section {
         name: String::new(),
         title: None,
         body: Body::Fields(summary(envelope, full)),
-    }];
+    });
     // No phase ran: the error says why.
     if envelope.error.is_some() && !full {
         return sections;
@@ -293,7 +361,7 @@ fn summary(envelope: &Envelope, full: bool) -> Vec<Field> {
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
-        fields.push(field("error.message", "Message", message));
+        fields.push(prose_field("error.message", "Message", message));
     }
     if full {
         fields.push(field(

@@ -526,7 +526,8 @@ its own code whichever phase reported it, because "vcrd cannot do this" and "you
 forbade this" call for different responses from a caller than "this credential is
 bad". Failures attributed to the input take a code naming the phase — parse, inspect, or
 verify. One integer cannot express a graduated result, so a script that needs more than
-the headline reason reads the per-phase outcomes in the structured output (§9).
+the headline reason reads the per-phase outcomes in the structured output (§9). No output
+setting — format, verbosity, or what is revealed — changes the exit code.
 
 **Redaction-aware output by default; revealing values is an explicit opt-in.** vcrd's own
 output is a leak surface: printing full claim sets — including PII and, for SD-JWT,

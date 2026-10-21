@@ -28,10 +28,42 @@ pub struct Envelope {
     pub exit_code: u8,
     /// Every claim path shown in cleartext (ARCHITECTURE §7).
     pub reveals: Vec<RevealView>,
+    /// What vcrd also writes to standard error as a warning, repeated here for a
+    /// reader of standard output alone.
+    pub warnings: Vec<WarningView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<ErrorView>,
     #[serde(flatten)]
     pub result: ResultView,
+}
+
+impl Envelope {
+    pub fn with_warnings(mut self, warnings: Vec<WarningView>) -> Self {
+        self.warnings = warnings;
+        self
+    }
+}
+
+/// A warning: code and message (docs/output.md).
+#[derive(Clone, Debug, Serialize)]
+pub struct WarningView {
+    pub code: &'static str,
+    pub message: String,
+}
+
+/// The warning `--unsafe` gives, at level 1 or 2 (REQUIREMENTS §8).
+pub fn unsafe_warning(level: u8) -> WarningView {
+    let shown = if level >= 2 {
+        "claim values and cryptographic secrets, such as private keys,"
+    } else {
+        "claim values"
+    };
+    WarningView {
+        code: "unsafe",
+        message: format!(
+            "--unsafe={level}: {shown} are printed in cleartext. Treat this output as sensitive."
+        ),
+    }
 }
 
 /// A caller error: code and message (ARCHITECTURE §6).
@@ -231,6 +263,7 @@ pub fn envelope(report: &Report, ctx: &Context, size: Option<u64>) -> Envelope {
         status,
         exit_code,
         reveals,
+        warnings: Vec::new(),
         error: None,
         result: result(report, rendered.as_ref(), size),
     }
@@ -248,6 +281,7 @@ pub fn caller_error(code: &'static str, message: String) -> Envelope {
         status: "caller_error",
         exit_code: crate::exit::CALLER_ERROR,
         reveals: Vec::new(),
+        warnings: Vec::new(),
         error: Some(ErrorView { code, message }),
         result: ResultView {
             input: InputView {

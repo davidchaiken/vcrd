@@ -30,7 +30,7 @@ use args::{Cli, Operation, OutputFormat};
 use view::Envelope;
 
 fn main() -> ExitCode {
-    let raw: Vec<OsString> = std::env::args_os().collect();
+    let raw = args::normalize(std::env::args_os().collect());
     // The fallible entry point: clap's own exit would use status 2, which vcrd
     // assigns to a parse failure (ARCHITECTURE §6).
     let cli = match Cli::try_parse_from(&raw) {
@@ -42,23 +42,20 @@ fn main() -> ExitCode {
     let unsafe_level = cli.options.unsafe_level;
     let (operation, file) = cli.operation();
 
-    // Nothing to unmask when nothing is printed: a contradiction, so a caller error,
-    // reported by the exit code alone, as everything is at --verbosity 0.
-    if verbosity == 0 && unsafe_level > 0 {
-        let message = "--unsafe shows masked values, and --verbosity 0 prints nothing";
-        return emit(
-            &view::caller_error("usage", message.to_owned()),
-            format,
-            verbosity,
-        );
-    }
     let designations = match unsafe_level {
         0 => Designations::mask_claims(),
         1 => Designations::show_claims(),
         _ => Designations::show_claims_and_secrets(),
     };
-    if unsafe_level > 0 {
-        warn_unsafe(unsafe_level);
+    // At --verbosity 0 nothing is printed, so nothing is unmasked and there is
+    // nothing to warn of. Neither level changes the exit code.
+    let warnings = if unsafe_level > 0 && verbosity > 0 {
+        vec![view::unsafe_warning(unsafe_level)]
+    } else {
+        Vec::new()
+    };
+    for warning in &warnings {
+        eprintln!("vcrd: WARNING: {}", warning.message);
     }
 
     let skew = Duration::from_secs(cli.options.clock_skew);
@@ -74,7 +71,8 @@ fn main() -> ExitCode {
         Ok(input) => input,
         Err((code, message)) => {
             eprintln_unless_quiet(verbosity, &message);
-            return emit(&view::caller_error(code, message), format, verbosity);
+            let envelope = view::caller_error(code, message).with_warnings(warnings);
+            return emit(&envelope, format, verbosity);
         }
     };
     let bytes = input.bytes;
@@ -84,7 +82,7 @@ fn main() -> ExitCode {
         Operation::Verify => vcrd_core::verify(&bytes, &ctx, &registry),
     };
     emit(
-        &view::envelope(&report, &ctx, input.size),
+        &view::envelope(&report, &ctx, input.size).with_warnings(warnings),
         format,
         verbosity,
     )
@@ -164,19 +162,6 @@ fn read_input(
 
 fn unreadable(path: &Path, error: &std::io::Error) -> (&'static str, String) {
     ("input_unreadable", format!("{}: {error}", path.display()))
-}
-
-/// The banner REQUIREMENTS §8 asks for, on standard error, whatever the format.
-fn warn_unsafe(level: u8) {
-    let shown = if level >= 2 {
-        "claim values and cryptographic secrets, such as private keys,"
-    } else {
-        "claim values"
-    };
-    eprintln!(
-        "vcrd: WARNING: --unsafe={level}: {shown} are printed in cleartext. \
-         Treat this output as sensitive."
-    );
 }
 
 fn eprintln_unless_quiet(verbosity: u8, message: &str) {

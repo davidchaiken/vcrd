@@ -68,31 +68,40 @@ fn exactly_the_unmasked_canaries_are_printed() {
                 for canary in CLAIMS.iter().chain([&SECRET]) {
                     assert!(!stderr.contains(canary), "{canary} on stderr, {case}");
                 }
+                // The warning is on stderr and, for a reader of stdout alone, in the
+                // result too.
+                let warned = unsafe_level > 0;
                 assert_eq!(
                     stderr.contains("WARNING: --unsafe"),
-                    unsafe_level > 0,
-                    "banner, {case}"
+                    warned,
+                    "stderr, {case}"
+                );
+                // The message starts with the flag; `text` may wrap the rest.
+                assert_eq!(
+                    stdout.contains(&format!("--unsafe={unsafe_level}:")),
+                    warned,
+                    "stdout, {case}"
                 );
             }
         }
     }
 }
 
-/// `--verbosity 0` prints nothing, so there is nothing to unmask: asking for both is
-/// a caller error, reported by the exit code alone.
+/// `--verbosity 0` prints nothing, so `--unsafe` unmasks nothing and warns of nothing,
+/// and the exit code is the result's: neither level changes it.
 #[test]
-fn unsafe_with_verbosity_0_is_a_caller_error() {
+fn unsafe_with_verbosity_0_prints_nothing() {
     let output = support::vcrd()
         .args([
             "verify",
             &support::fixture("canary.jwt"),
-            "--verbosity",
-            "0",
-            "--unsafe",
+            "--now",
+            support::NOW,
         ])
+        .args(["--verbosity", "0", "--unsafe", "2"])
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(3));
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
 }

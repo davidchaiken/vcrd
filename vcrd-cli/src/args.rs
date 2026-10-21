@@ -57,7 +57,8 @@ pub struct Options {
     pub verbosity: u8,
     /// Show masked values in cleartext: 1, or the flag alone, shows every claim; 2
     /// also shows cryptographic secrets, such as a private key the credential carries.
-    /// A warning on standard error says so.
+    /// Write the level as `--unsafe=2` or `--unsafe 2`. A warning says so, on standard
+    /// error and in the result.
     #[arg(
         long = "unsafe",
         global = true,
@@ -103,6 +104,32 @@ fn rfc3339(s: &str) -> Result<OffsetDateTime, time::error::Parse> {
     OffsetDateTime::parse(s, &Rfc3339)
 }
 
+/// Joins `--unsafe 2` into `--unsafe=2`, so that both spellings work. clap reads the
+/// optional level only after `=`, and would take a separate `2` for the file. Only `0`,
+/// `1` or `2` is joined, so `vcrd --unsafe file.jwt` still means level 1; a file that
+/// has one of those names is written `./2`. Nothing after `--` is changed.
+pub fn normalize(args: Vec<OsString>) -> Vec<OsString> {
+    let mut out = Vec::with_capacity(args.len());
+    let mut args = args.into_iter().peekable();
+    while let Some(arg) = args.next() {
+        if arg == "--" {
+            out.push(arg);
+            out.extend(args);
+            break;
+        }
+        if arg == "--unsafe"
+            && let Some(level) = args.next_if(|next| matches!(next.to_str(), Some("0" | "1" | "2")))
+        {
+            let mut joined = OsString::from("--unsafe=");
+            joined.push(level);
+            out.push(joined);
+            continue;
+        }
+        out.push(arg);
+    }
+    out
+}
+
 /// The output format and verbosity a command line asks for, read without clap. Used
 /// only when clap has rejected the command line, so that the error is still reported
 /// in the format asked for. Unreadable values fall back to the defaults.
@@ -141,6 +168,27 @@ mod tests {
 
     fn args(line: &str) -> Vec<OsString> {
         line.split(' ').map(OsString::from).collect()
+    }
+
+    #[test]
+    fn joins_a_level_given_after_a_space() {
+        assert_eq!(
+            normalize(args("vcrd verify f.jwt --unsafe 2")),
+            args("vcrd verify f.jwt --unsafe=2")
+        );
+        // A file name is not a level.
+        assert_eq!(
+            normalize(args("vcrd --unsafe f.jwt")),
+            args("vcrd --unsafe f.jwt")
+        );
+        assert_eq!(
+            normalize(args("vcrd --unsafe=1 2")),
+            args("vcrd --unsafe=1 2")
+        );
+        assert_eq!(
+            normalize(args("vcrd -- --unsafe 2")),
+            args("vcrd -- --unsafe 2")
+        );
     }
 
     #[test]

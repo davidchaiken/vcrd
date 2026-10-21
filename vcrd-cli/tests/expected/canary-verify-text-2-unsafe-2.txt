@@ -1,3 +1,9 @@
+Warnings
+ Code   | Message
+--------+----------------------------------------------------------------------
+ unsafe | --unsafe=2: claim values and cryptographic secrets, such as private
+        | keys, are printed in cleartext. Treat this output as sensitive.
+
  Status        inspect_failed
  Exit code     3
  Bytes         1054

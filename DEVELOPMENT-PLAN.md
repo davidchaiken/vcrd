@@ -178,8 +178,11 @@ every other `alg` exercise the by-name rejection path from day one.
     each entry now naming the key its path is relative to.
   - `--unsafe` has three levels: 0 masks claims and secrets, 1 (`--unsafe`) shows claims,
     2 also shows cryptographic secrets, such as a header `jwk`'s private members.
-    `--verbosity 0` with `--unsafe` is a caller error. Caller errors and the banner are
-    the only stderr output; milestone 3 adds diagnostics.
+    Caller errors and the warning are the only stderr output; milestone 3 adds
+    diagnostics. Decided 2026-10-21, after review: no output setting changes the exit
+    code, so `--verbosity 0` with `--unsafe` is accepted and prints nothing, and a test
+    checks every input at every format and level; the warning is repeated in the result,
+    first (`warnings` in JSON); `--unsafe 2` is accepted beside `--unsafe=2`.
   - The JOSE header is shown as written (`format.header`), a masked value as `null`
     with its path in `header_masked`, to be replaced by the leaf list the claims use if
     that proves confusing. `credential.metadata` stays as it is.
