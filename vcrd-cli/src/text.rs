@@ -156,6 +156,8 @@ enum Cell {
     /// A finding's detail: one `name: value` line each in `text`, `name=value` in
     /// `plain`.
     Pairs(Vec<(String, String)>),
+    /// One value on several lines in `text`, and on one in `plain`.
+    Lines(Vec<String>),
 }
 
 impl Cell {
@@ -165,6 +167,11 @@ impl Cell {
             Cell::Pairs(pairs) => pairs
                 .iter()
                 .map(|(k, v)| format!("{}: {}", printable(k), printable(v)))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            Cell::Lines(lines) => lines
+                .iter()
+                .map(|l| printable(l))
                 .collect::<Vec<_>>()
                 .join("\n"),
         }
@@ -180,6 +187,9 @@ impl Cell {
                 for (k, v) in pairs {
                     let _ = write!(line, " {}={}", quoted(k), quoted(v));
                 }
+            }
+            Cell::Lines(lines) => {
+                let _ = write!(line, " {key}={}", quoted(&lines.concat()));
             }
         }
     }
@@ -227,27 +237,6 @@ fn sections(envelope: &Envelope, verbosity: u8) -> Vec<Section> {
     let full = verbosity >= 2;
     let result = &envelope.result;
     let mut sections = Vec::new();
-    // First, so that a reader of only the first lines sees them.
-    if !envelope.warnings.is_empty() {
-        let rows = envelope
-            .warnings
-            .iter()
-            .enumerate()
-            .map(|(index, w)| Row {
-                name: format!("[{index}]"),
-                cells: vec![text_cell(w.code), text_cell(w.message.clone())],
-            })
-            .collect();
-        sections.push(Section {
-            name: "warnings".to_owned(),
-            title: Some("Warnings"),
-            body: Body::Table {
-                columns: vec![column("Code", "code"), prose_column("Message", "message")],
-                rows,
-                named_by_first: false,
-            },
-        });
-    }
     sections.push(Section {
         name: String::new(),
         title: None,
@@ -255,6 +244,7 @@ fn sections(envelope: &Envelope, verbosity: u8) -> Vec<Section> {
     });
     // No phase ran: the error says why.
     if envelope.error.is_some() && !full {
+        sections.extend(warnings(envelope));
         return sections;
     }
     let verify_requested = result.phases.verify.outcome != "not_requested";
@@ -285,6 +275,8 @@ fn sections(envelope: &Envelope, verbosity: u8) -> Vec<Section> {
     if !result.findings.is_empty() {
         sections.push(findings(result));
     }
+    // After the findings: the status is always the first line.
+    sections.extend(warnings(envelope));
     if !result.not_evaluated.is_empty() {
         let rows = result
             .not_evaluated
@@ -318,6 +310,31 @@ fn sections(envelope: &Envelope, verbosity: u8) -> Vec<Section> {
         });
     }
     sections
+}
+
+/// What vcrd also wrote to stderr as a warning, such as `--unsafe`'s.
+fn warnings(envelope: &Envelope) -> Option<Section> {
+    if envelope.warnings.is_empty() {
+        return None;
+    }
+    let rows = envelope
+        .warnings
+        .iter()
+        .enumerate()
+        .map(|(index, w)| Row {
+            name: format!("[{index}]"),
+            cells: vec![text_cell(w.code), text_cell(w.message.clone())],
+        })
+        .collect();
+    Some(Section {
+        name: "warnings".to_owned(),
+        title: Some("Warnings"),
+        body: Body::Table {
+            columns: vec![column("Code", "code"), prose_column("Message", "message")],
+            rows,
+            named_by_first: false,
+        },
+    })
 }
 
 fn summary(envelope: &Envelope, full: bool) -> Vec<Field> {
@@ -541,7 +558,7 @@ fn leaves(name: &'static str, title: &'static str, leaves: &[LeafView]) -> Secti
             cells: vec![
                 text_cell(leaf.path.clone()),
                 text_cell(leaf.kind),
-                text_cell(leaf.value.as_ref().map_or_else(|| MASKED.to_owned(), show)),
+                value_cell(name, leaf),
                 text_cell(leaf.visibility),
             ],
         })
@@ -617,6 +634,20 @@ fn detail_pairs(detail: &Value) -> Vec<(String, String)> {
         walk("", detail, &mut out);
     }
     out
+}
+
+/// A value's cell. The header's `kid` breaks before its fragment, at `#`: a DID URL
+/// such as a `did:key` key's repeats the DID after it, and on one line it widens the
+/// Header table past a terminal's width. `plain` keeps it on one line.
+fn value_cell(section: &str, leaf: &LeafView) -> Cell {
+    let value = leaf.value.as_ref().map_or_else(|| MASKED.to_owned(), show);
+    if section == "format.header"
+        && leaf.path == "kid"
+        && let Some((did, fragment)) = value.split_once('#')
+    {
+        return Cell::Lines(vec![did.to_owned(), format!("#{fragment}")]);
+    }
+    text_cell(value)
 }
 
 /// How a masked value prints.

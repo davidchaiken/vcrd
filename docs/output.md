@@ -52,10 +52,10 @@ A level is read after `--unsafe` only when it is `0`, `1` or `2`, so `vcrd --uns
 means level 1; a file with one of those names is written `./2`.
 
 With `--unsafe=1` or `=2`, a warning says what is shown, on standard error and in the
-result, so that a reader of standard output alone sees it too. It comes first: in JSON
-it is an entry in `warnings`, `{code, message}` with code `unsafe`; `text` prints it in a
-Warnings table before everything else; `plain` prints it as the first line,
-`warnings[0]: code=unsafe message="…"`.
+result, so that a reader of standard output alone sees it too. In JSON it is an entry in
+`warnings`, `{code, message}` with code `unsafe`. `text` prints it in a Warnings table,
+and `plain` as `warnings[0]: code=unsafe message="…"`, both after the findings: in
+`text` and `plain` the first line is always the status.
 
 ## Values and their visibility
 
@@ -90,7 +90,9 @@ that a script can tell whether anything was revealed without reading every value
 The securing mechanism's header: for VC-JOSE-COSE, the JOSE header, every member
 included, listed as values as the claims are. A member whose name is repeated is listed
 once for each occurrence. The list is empty when the input has no header or it did not
-decode. `text` and `plain` show the header from level 2.
+decode. `text` and `plain` show the header from level 2. In `text`, a `kid` that is a DID
+URL is broken onto two lines before its fragment (`#`), since the DID part alone is as
+wide as most terminals allow; `plain` keeps it on one line.
 
 ## `status` and `exit_code`
 

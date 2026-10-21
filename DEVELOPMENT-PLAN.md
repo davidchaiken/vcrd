@@ -192,8 +192,9 @@ every other `alg` exercise the by-name rejection path from day one.
     Caller errors and the warning are the only stderr output; milestone 3 adds
     diagnostics. Decided 2026-10-21, after review: no output setting changes the exit
     code, so `--verbosity 0` with `--unsafe` is accepted and prints nothing, and a test
-    checks every input at every format and level; the warning is repeated in the result,
-    first (`warnings` in JSON); `--unsafe 2` is accepted beside `--unsafe=2`.
+    checks every input at every format and level; the warning is repeated in the result
+    (`warnings` in JSON; in `text` and `plain` after the findings, so that the status is
+    always the first line); `--unsafe 2` is accepted beside `--unsafe=2`.
   - The JOSE header (`format.header`) is listed as values, as the claims are (decided
     2026-10-21, after review: the header as written, with a masked value as `null`,
     could not mark a masked value unambiguously). `credential.metadata` stays as it is.

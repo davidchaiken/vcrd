@@ -76,6 +76,13 @@ fn exactly_the_unmasked_canaries_are_printed() {
                     warned,
                     "stderr, {case}"
                 );
+                // The status is always the first line; any warning comes later.
+                let first = stdout.lines().next().unwrap_or_default();
+                match format {
+                    "text" => assert!(first.trim_start().starts_with("Status"), "{case}"),
+                    "plain" => assert!(first.starts_with("status: "), "{case}"),
+                    _ => {}
+                }
                 // The message starts with the flag; `text` may wrap the rest.
                 assert_eq!(
                     stdout.contains(&format!("--unsafe={unsafe_level}:")),
@@ -128,4 +135,17 @@ fn reveals_lists_each_revealed_value() {
     ] {
         assert!(reveals.contains(&expected), "{expected} not in {out}");
     }
+}
+
+/// A caller error still reports the warning, after its status and message.
+#[test]
+fn a_caller_error_still_reports_the_unsafe_warning() {
+    let output = support::vcrd()
+        .args(["--unsafe", "no-such-file.jwt"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.trim_start().starts_with("Status"), "{stdout}");
+    assert!(stdout.contains("--unsafe=1:"), "{stdout}");
 }
