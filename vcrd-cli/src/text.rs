@@ -266,49 +266,19 @@ fn sections(envelope: &Envelope, verbosity: u8) -> Vec<Section> {
     }
     if full
         && let Some(format) = &result.format
-        && !format.header_rows.is_empty()
+        && !format.header.is_empty()
     {
-        let rows = format
-            .header_rows
-            .iter()
-            .map(|h| Row {
-                name: h.path.clone(),
-                cells: vec![
-                    text_cell(h.path.clone()),
-                    text_cell(h.value.as_ref().map_or_else(|| MASKED.to_owned(), show)),
-                    text_cell(if h.unmasked { "yes" } else { "" }),
-                ],
-            })
-            .collect();
-        sections.push(Section {
-            name: "format.header".to_owned(),
-            title: Some("Header"),
-            body: Body::Table {
-                columns: vec![
-                    column("Path", "path"),
-                    column("Value", "value"),
-                    column("Unmasked", "unmasked"),
-                ],
-                rows,
-                named_by_first: true,
-            },
-        });
+        sections.push(leaves("format.header", "Header", &format.header));
     }
     if let Some(credential) = &result.credential {
         if !credential.claims.is_empty() {
-            sections.push(leaves(
-                "credential.claims",
-                "Claims",
-                &credential.claims,
-                true,
-            ));
+            sections.push(leaves("credential.claims", "Claims", &credential.claims));
         }
         if verbosity >= 3 && !credential.metadata.is_empty() {
             sections.push(leaves(
                 "credential.metadata",
                 "Metadata",
                 &credential.metadata,
-                false,
             ));
         }
     }
@@ -535,36 +505,26 @@ fn proof_section(index: usize, proof: &ProofView, full: bool) -> Section {
     }
 }
 
-/// Claims or metadata. `unmasked` adds the column that marks a claim shown in
-/// cleartext, which is how `text` and `plain` report a reveal.
-fn leaves(name: &'static str, title: &'static str, leaves: &[LeafView], unmasked: bool) -> Section {
-    let mut columns = vec![
+/// Values: the claims, the metadata or the header. The Visibility column says
+/// whether each is sensitive and, if so, whether it is shown, which is how `text` and
+/// `plain` report a reveal.
+fn leaves(name: &'static str, title: &'static str, leaves: &[LeafView]) -> Section {
+    let columns = vec![
         column("Path", "path"),
         column("Type", "type"),
         column("Value", "value"),
+        column("Visibility", "visibility"),
     ];
-    if unmasked {
-        columns.push(column("Unmasked", "unmasked"));
-    }
     let rows = leaves
         .iter()
-        .map(|leaf| {
-            let mut cells = vec![
+        .map(|leaf| Row {
+            name: leaf.path.clone(),
+            cells: vec![
                 text_cell(leaf.path.clone()),
                 text_cell(leaf.kind),
                 text_cell(leaf.value.as_ref().map_or_else(|| MASKED.to_owned(), show)),
-            ];
-            if unmasked {
-                cells.push(text_cell(if leaf.treatment == "shown" {
-                    "yes"
-                } else {
-                    ""
-                }));
-            }
-            Row {
-                name: leaf.path.clone(),
-                cells,
-            }
+                text_cell(leaf.visibility),
+            ],
         })
         .collect();
     Section {

@@ -611,7 +611,7 @@ prototype's name where it differs:
 | Key | Content |
 |---|---|
 | `error` | a caller error: code and message |
-| `format` | format identifier, profile, and the securing mechanism's header as written, a masked value `null` with its path in `header_masked` |
+| `format` | format identifier, profile, and the securing mechanism's header, one entry per value as for the claims |
 | `credential` | the `Document` fields for this object — a credential or a presentation, per its `kind` — with claims rendered per §7 |
 
 Whether inapplicable keys are omitted, as in the prototype, or emitted as `null` is open
@@ -675,7 +675,8 @@ pub struct ClaimValue(/* one scalar leaf */);   // no Serialize; Debug prints on
   `--unsafe=2` every cryptographic secret as well.
 - **Three classes of value.** The format classes each value as metadata, always shown; a
   claim, masked by default; or a cryptographic secret, masked unless the caller asks for
-  secrets as well as claims. The secrets vcrd recognizes are the private-key members of a
+  secrets as well as claims. Every value in the output carries its visibility:
+  `non_sensitive` for metadata, and `masked` or `revealed` for a claim or a secret. The secrets vcrd recognizes are the private-key members of a
   `jwk` in a JOSE header; a secret among the claims is indistinguishable from any other
   claim, and is masked as one. The header is rendered whole, each scalar classed, rather
   than flattened to leaves.

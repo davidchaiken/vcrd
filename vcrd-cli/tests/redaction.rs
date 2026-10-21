@@ -105,3 +105,27 @@ fn unsafe_with_verbosity_0_prints_nothing() {
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
 }
+
+/// Every revealed value is listed in `reveals`, with the key its path is relative to
+/// and the visibility the value itself carries: six claims and the header's secret.
+#[test]
+fn reveals_lists_each_revealed_value() {
+    let out = support::json(
+        support::vcrd().args([
+            "verify",
+            &support::fixture("canary.jwt"),
+            "--now",
+            support::NOW,
+            "--unsafe=2",
+        ]),
+        3,
+    );
+    let reveals = out["reveals"].as_array().unwrap();
+    assert_eq!(reveals.len(), CLAIMS.len() + 1, "{out}");
+    for expected in [
+        serde_json::json!({"path": "id", "location": "credential.claims", "visibility": "revealed"}),
+        serde_json::json!({"path": "jwk.d", "location": "format.header", "visibility": "revealed"}),
+    ] {
+        assert!(reveals.contains(&expected), "{expected} not in {out}");
+    }
+}

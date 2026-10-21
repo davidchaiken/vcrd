@@ -55,24 +55,42 @@ With `--unsafe=1` or `=2`, a warning says what is shown, on standard error and i
 result, so that a reader of standard output alone sees it too. It comes first: in JSON
 it is an entry in `warnings`, `{code, message}` with code `unsafe`; `text` prints it in a
 Warnings table before everything else; `plain` prints it as the first line,
-`warnings[0]: code=unsafe message="…"`. Every value shown that would otherwise be masked
-is reported in the result as well:
+`warnings[0]: code=unsafe message="…"`.
 
-- JSON lists each in `reveals`, as `{path, location, treatment}`. `location` is the key
-  the path is relative to: `credential.claims`, or `format.header`.
-- `text` marks it `yes` in the Unmasked column of the Claims or Header table, and `plain`
-  adds `unmasked=yes` to its line.
+## Values and their visibility
 
-A masked value prints as `(masked)` in `text` and `plain`. In JSON, a masked claim has
-`treatment: masked` and no `value`, and a masked header value is described below.
+The credential's claims (`credential.claims`), its metadata (`credential.metadata`) and
+the header (`format.header`) are each a list of values, one per JSON scalar, in input
+order:
+
+| Key | Present | Value |
+|---|---|---|
+| `path` | always | where the value is, such as `credentialSubject.degree.name` or `jwk.d` |
+| `type` | always | its JSON type: `string`, `number`, `bool` or `null` |
+| `visibility` | always | whether it is sensitive and, if so, whether it is shown; see below |
+| `value` | unless masked | the value |
+
+| `visibility` | Meaning |
+|---|---|
+| `non_sensitive` | metadata, such as an issuer, a type or a date: always shown |
+| `masked` | a claim, or a cryptographic secret, not shown |
+| `revealed` | a claim or a secret shown because `--unsafe` asked for it |
+
+`text` shows the same in a Visibility column, with `(masked)` in place of a masked value,
+and `plain` adds `visibility=…` to each value's line. A secret stays `masked` at
+`--unsafe=1`, while the claims beside it are `revealed`.
+
+Every revealed value is also listed in `reveals`, as `{path, location, visibility}`, so
+that a script can tell whether anything was revealed without reading every value.
+`location` is the key the path is relative to: `credential.claims` or `format.header`;
+`visibility` is `revealed`, as on the value itself.
 
 ## `format.header`
 
-The securing mechanism's header, as written: for VC-JOSE-COSE, the JOSE header, every
-member included. Members are sorted by name, and a member whose name is repeated keeps
-its last value, as the parse does. A masked value is `null`, and its path is listed in
-`format.header_masked`, which is absent when nothing is masked. `text` and `plain` show
-the header from level 2, one value per row.
+The securing mechanism's header: for VC-JOSE-COSE, the JOSE header, every member
+included, listed as values as the claims are. A member whose name is repeated is listed
+once for each occurrence. The list is empty when the input has no header or it did not
+decode. `text` and `plain` show the header from level 2.
 
 ## `status` and `exit_code`
 
@@ -201,12 +219,12 @@ Proof
  Method       did:key
 
 Claims
- Path                          | Type   | Value    | Unmasked
--------------------------------+--------+----------+----------
- credentialSubject.degree.name | string | (masked) |
- credentialSubject.degree.type | string | (masked) |
- credentialSubject.id          | string | (masked) |
- id                            | string | (masked) |
+ Path                          | Type   | Value    | Visibility
+-------------------------------+--------+----------+------------
+ credentialSubject.degree.name | string | (masked) | masked
+ credentialSubject.degree.type | string | (masked) | masked
+ credentialSubject.id          | string | (masked) | masked
+ id                            | string | (masked) | masked
 
 Not evaluated
  Check                | Reason
@@ -235,10 +253,10 @@ proofs[0].algorithm: EdDSA
 proofs[0].outcome: verified
 proofs[0].key_provenance.source: issuer_identifier
 proofs[0].key_provenance.method: did:key
-credential.claims.credentialSubject.degree.name: type=string value=(masked)
-credential.claims.credentialSubject.degree.type: type=string value=(masked)
-credential.claims.credentialSubject.id: type=string value=(masked)
-credential.claims.id: type=string value=(masked)
+credential.claims.credentialSubject.degree.name: type=string value=(masked) visibility=masked
+credential.claims.credentialSubject.degree.type: type=string value=(masked) visibility=masked
+credential.claims.credentialSubject.id: type=string value=(masked) visibility=masked
+credential.claims.id: type=string value=(masked) visibility=masked
 findings[0]: code=verify.proof_expired attribution=input severity=error claim=exp now=2026-10-01T00:00:00Z skew_seconds=0 value=1780272000 value_date_time=2026-06-01T00:00:00Z
 not_evaluated.issuer_accreditation: reason=out_of_scope
 not_evaluated.context_resolution: reason=not_implemented

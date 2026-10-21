@@ -19,7 +19,13 @@ fn verify_exits_0_with_one_json_document() {
     }
     assert_eq!(out["input"]["format"], "vc-jose");
     assert_eq!(out["format"]["profile"], "vc-jose-cose");
-    assert_eq!(out["format"]["header"]["alg"], "EdDSA");
+    assert!(
+        out["format"]["header"]
+            .as_array()
+            .unwrap()
+            .contains(&json!({"path": "alg", "type": "string", "visibility": "non_sensitive", "value": "EdDSA"})),
+        "{out}"
+    );
     let proof = &out["proofs"][0];
     assert_eq!(proof["outcome"], "verified");
     assert_eq!(proof["key_provenance"]["source"], "issuer_identifier");
@@ -60,7 +66,7 @@ fn claims_are_masked_and_metadata_shown() {
         .unwrap();
     assert_eq!(
         *subject_id,
-        json!({"path": "credentialSubject.id", "type": "string", "treatment": "masked"})
+        json!({"path": "credentialSubject.id", "type": "string", "visibility": "masked"})
     );
     let valid_from = out["credential"]["metadata"]
         .as_array()
@@ -69,6 +75,7 @@ fn claims_are_masked_and_metadata_shown() {
         .find(|m| m["path"] == "validFrom")
         .unwrap();
     assert_eq!(valid_from["value"], "2026-01-01T00:00:00Z");
+    assert_eq!(valid_from["visibility"], "non_sensitive");
 }
 
 /// `vcrd <file>` and piped input default to `inspect` (REQUIREMENTS §8).

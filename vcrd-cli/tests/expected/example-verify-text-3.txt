@@ -28,31 +28,31 @@ Proof
  Thumbprint   0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
 
 Header
- Path | Value                                                                                                     | Unmasked
-------+-----------------------------------------------------------------------------------------------------------+----------
- alg  | EdDSA                                                                                                     |
- cty  | vc                                                                                                        |
- kid  | did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N#z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N |
- typ  | vc+jwt                                                                                                    |
+ Path | Type   | Value                                                                                                     | Visibility
+------+--------+-----------------------------------------------------------------------------------------------------------+---------------
+ alg  | string | EdDSA                                                                                                     | non_sensitive
+ cty  | string | vc                                                                                                        | non_sensitive
+ kid  | string | did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N#z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N | non_sensitive
+ typ  | string | vc+jwt                                                                                                    | non_sensitive
 
 Claims
- Path                          | Type   | Value    | Unmasked
--------------------------------+--------+----------+----------
- credentialSubject.degree.name | string | (masked) |
- credentialSubject.degree.type | string | (masked) |
- credentialSubject.id          | string | (masked) |
- id                            | string | (masked) |
+ Path                          | Type   | Value    | Visibility
+-------------------------------+--------+----------+------------
+ credentialSubject.degree.name | string | (masked) | masked
+ credentialSubject.degree.type | string | (masked) | masked
+ credentialSubject.id          | string | (masked) | masked
+ id                            | string | (masked) | masked
 
 Metadata
- Path        | Type   | Value
--------------+--------+----------------------------------------------------------
- @context[0] | string | https://www.w3.org/ns/credentials/v2
- @context[1] | string | https://www.w3.org/ns/credentials/examples/v2
- issuer      | string | did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N
- type[0]     | string | VerifiableCredential
- type[1]     | string | ExampleDegreeCredential
- validFrom   | string | 2026-01-01T00:00:00Z
- validUntil  | string | 2031-01-01T00:00:00Z
+ Path        | Type   | Value                                                    | Visibility
+-------------+--------+----------------------------------------------------------+---------------
+ @context[0] | string | https://www.w3.org/ns/credentials/v2                     | non_sensitive
+ @context[1] | string | https://www.w3.org/ns/credentials/examples/v2            | non_sensitive
+ issuer      | string | did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N | non_sensitive
+ type[0]     | string | VerifiableCredential                                     | non_sensitive
+ type[1]     | string | ExampleDegreeCredential                                  | non_sensitive
+ validFrom   | string | 2026-01-01T00:00:00Z                                     | non_sensitive
+ validUntil  | string | 2031-01-01T00:00:00Z                                     | non_sensitive
 
 Not evaluated
  Check                | Reason

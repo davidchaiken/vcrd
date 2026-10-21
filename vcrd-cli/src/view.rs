@@ -13,7 +13,7 @@ use vcrd_core::{
     DidKeyProblem, Document, DocumentKind, Finding, FindingDetail, IssLocation, IssuerProblem,
     JwkProblem, JwsJsonSyntax, JwsSegment, KeySourceKind, LeafClass, Missing, NotEvaluatedReason,
     Phase, PhaseOutcome, ProofOutcome, Rendered, RenderedJson, Report, RevealLocation, Revealed,
-    Severity, Treatment, Validity, render,
+    Severity, Treatment, Validity, ValueKind, render,
 };
 
 /// `0` until the schema is declared stable (REQUIREMENTS §9).
@@ -93,7 +93,9 @@ pub struct RevealView {
     pub path: String,
     /// The key the path is relative to: `credential.claims` or `format.header`.
     pub location: &'static str,
-    pub treatment: &'static str,
+    /// As on the value itself: `revealed`. Milestone 3's hashed designation adds
+    /// `hashed` (REQUIREMENTS §8).
+    pub visibility: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -188,26 +190,10 @@ pub struct FormatView {
     pub id: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<&'static str>,
-    /// The securing mechanism's header as written, such as the JOSE header; `null`
-    /// when there is none or it did not decode. A masked value is `null`, and its
-    /// path is in `header_masked`.
-    pub header: Value,
-    /// The paths of the header values that are masked, such as a private key's.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub header_masked: Vec<String>,
-    /// The header's values one per row, in input order, for `text` and `plain`.
-    #[serde(skip)]
-    pub header_rows: Vec<HeaderRow>,
-}
-
-/// One header value, for `text` and `plain`.
-#[derive(Debug)]
-pub struct HeaderRow {
-    pub path: String,
-    /// `None` where the value is masked.
-    pub value: Option<Value>,
-    /// Shown though it is a secret, as `--unsafe=2` asks.
-    pub unmasked: bool,
+    /// The securing mechanism's header, such as the JOSE header: one entry per value,
+    /// in input order, as for the claims; empty when there is none or it did not
+    /// decode.
+    pub header: Vec<LeafView>,
 }
 
 #[derive(Debug, Serialize)]
@@ -228,14 +214,32 @@ pub struct CredentialView {
     pub claims: Vec<LeafView>,
 }
 
+/// One value, with whether it is sensitive and whether it is shown.
 #[derive(Debug, Serialize)]
 pub struct LeafView {
     pub path: String,
     #[serde(rename = "type")]
     pub kind: &'static str,
-    pub treatment: &'static str,
+    /// `non_sensitive`: metadata, always shown; `masked`: a claim or secret, not shown;
+    /// `revealed`: a claim or secret shown because `--unsafe` asked for it.
+    pub visibility: &'static str,
+    /// Absent where the value is masked.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<Value>,
+}
+
+/// A value's visibility, from its class and whether rendering showed it.
+fn leaf_view(path: &str, class: LeafClass, kind: ValueKind, value: Option<&Revealed>) -> LeafView {
+    LeafView {
+        path: path.to_owned(),
+        kind: kind.as_str(),
+        visibility: match (class, value) {
+            (LeafClass::Metadata, _) => "non_sensitive",
+            (LeafClass::Claim | LeafClass::Secret, None) => "masked",
+            (LeafClass::Claim | LeafClass::Secret, Some(_)) => "revealed",
+        },
+        value: value.map(revealed),
+    }
 }
 
 /// The envelope for a report. `size` is the input file's size, when the frontend
@@ -252,8 +256,8 @@ pub fn envelope(report: &Report, ctx: &Context, size: Option<u64>) -> Envelope {
                     RevealLocation::Leaves => "credential.claims",
                     RevealLocation::Header => "format.header",
                 },
-                treatment: match r.treatment {
-                    Treatment::Shown => "shown",
+                visibility: match r.treatment {
+                    Treatment::Shown => "revealed",
                 },
             })
             .collect()
@@ -908,50 +912,29 @@ fn rfc3339(t: OffsetDateTime) -> Value {
 fn format(report: &Report, rendered: Option<&Rendered>) -> Option<FormatView> {
     let id = report.input.format?.0;
     let profile = report.inspect.output().and_then(|i| i.profile).map(|p| p.0);
-    let mut header_masked = Vec::new();
-    let mut header_rows = Vec::new();
-    let header = rendered
-        .and_then(|r| r.header.as_ref())
-        .map_or(Value::Null, |h| {
-            header_json(h, &mut header_masked, &mut header_rows)
-        });
+    let mut header = Vec::new();
+    if let Some(rendered) = rendered.and_then(|r| r.header.as_ref()) {
+        header_leaves(rendered, &mut header);
+    }
     Some(FormatView {
         id,
         profile,
         header,
-        header_masked,
-        header_rows,
     })
 }
 
-/// The header as written, a masked value as `null` with its path in `masked`. Members
-/// come out in serde_json's order, which is sorted by name, and a repeated name keeps
-/// the last value, as the parse does (RFC 7515 §4).
-fn header_json(json: &RenderedJson, masked: &mut Vec<String>, rows: &mut Vec<HeaderRow>) -> Value {
+/// The header's scalars in input order, as the claims are listed. A repeated member
+/// name lists each occurrence, as the input has them.
+fn header_leaves(json: &RenderedJson, out: &mut Vec<LeafView>) {
     match json {
         RenderedJson::Scalar {
-            path, class, value, ..
-        } => {
-            let value = value.as_ref().map(revealed);
-            if value.is_none() {
-                masked.push(path.clone());
-            }
-            rows.push(HeaderRow {
-                path: path.clone(),
-                value: value.clone(),
-                unmasked: value.is_some() && *class != LeafClass::Metadata,
-            });
-            value.unwrap_or(Value::Null)
-        }
-        RenderedJson::Array(items) => {
-            Value::Array(items.iter().map(|i| header_json(i, masked, rows)).collect())
-        }
-        RenderedJson::Object(members) => Value::Object(
-            members
-                .iter()
-                .map(|(name, value)| (name.clone(), header_json(value, masked, rows)))
-                .collect(),
-        ),
+            path,
+            class,
+            kind,
+            value,
+        } => out.push(leaf_view(path, *class, *kind, value.as_ref())),
+        RenderedJson::Array(items) => items.iter().for_each(|i| header_leaves(i, out)),
+        RenderedJson::Object(members) => members.iter().for_each(|(_, v)| header_leaves(v, out)),
     }
 }
 
@@ -960,12 +943,7 @@ fn credential(
     rendered: &Rendered,
     validity: Option<Validity>,
 ) -> CredentialView {
-    let leaf = |l: &vcrd_core::RenderedLeaf| LeafView {
-        path: l.path.clone(),
-        kind: l.kind.as_str(),
-        treatment: if l.value.is_some() { "shown" } else { "masked" },
-        value: l.value.as_ref().map(revealed),
-    };
+    let leaf = |l: &vcrd_core::RenderedLeaf| leaf_view(&l.path, l.class, l.kind, l.value.as_ref());
     let of_class = |wanted: fn(LeafClass) -> bool| {
         rendered
             .leaves

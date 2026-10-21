@@ -25,20 +25,20 @@ proofs[0].key_provenance.credential_key.location: header.jwk
 proofs[0].key_provenance.credential_key.thumbprint: 0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
 proofs[0].key_provenance.credential_key.matched: true
 proofs[0].key_provenance.credential_key.verifies_signature: true
-format.header.alg: value=EdDSA
-format.header.cty: value=vc
-format.header.jwk.crv: value=Ed25519
-format.header.jwk.d: value=CANARY-S1 unmasked=yes
-format.header.jwk.kty: value=OKP
-format.header.jwk.x: value=mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0
-format.header.kid: value=did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N#z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N
-format.header.typ: value=vc+jwt
-credential.claims.credentialSubject.alsoKnownAs[0]: type=string value=CANARY-C5 unmasked=yes
-credential.claims.credentialSubject.alsoKnownAs[1]: type=string value=CANARY-C6 unmasked=yes
-credential.claims.credentialSubject.degree.name: type=string value=CANARY-C4 unmasked=yes
-credential.claims.credentialSubject.degree.type: type=string value=CANARY-C3 unmasked=yes
-credential.claims.credentialSubject.id: type=string value=did:example:CANARY-C2 unmasked=yes
-credential.claims.id: type=string value=urn:example:CANARY-C1 unmasked=yes
+format.header.alg: type=string value=EdDSA visibility=non_sensitive
+format.header.cty: type=string value=vc visibility=non_sensitive
+format.header.jwk.crv: type=string value=Ed25519 visibility=non_sensitive
+format.header.jwk.d: type=string value=CANARY-S1 visibility=revealed
+format.header.jwk.kty: type=string value=OKP visibility=non_sensitive
+format.header.jwk.x: type=string value=mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0 visibility=non_sensitive
+format.header.kid: type=string value=did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N#z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N visibility=non_sensitive
+format.header.typ: type=string value=vc+jwt visibility=non_sensitive
+credential.claims.credentialSubject.alsoKnownAs[0]: type=string value=CANARY-C5 visibility=revealed
+credential.claims.credentialSubject.alsoKnownAs[1]: type=string value=CANARY-C6 visibility=revealed
+credential.claims.credentialSubject.degree.name: type=string value=CANARY-C4 visibility=revealed
+credential.claims.credentialSubject.degree.type: type=string value=CANARY-C3 visibility=revealed
+credential.claims.credentialSubject.id: type=string value=did:example:CANARY-C2 visibility=revealed
+credential.claims.id: type=string value=urn:example:CANARY-C1 visibility=revealed
 findings[0]: code=inspect.jwk_private_key attribution=input severity=error members=d
 not_evaluated.issuer_accreditation: reason=out_of_scope
 not_evaluated.context_resolution: reason=not_implemented

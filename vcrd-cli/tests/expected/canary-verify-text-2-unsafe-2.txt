@@ -38,26 +38,26 @@ Proof
  Verifies signature   true
 
 Header
- Path    | Value                                                                                                     | Unmasked
----------+-----------------------------------------------------------------------------------------------------------+----------
- alg     | EdDSA                                                                                                     |
- cty     | vc                                                                                                        |
- jwk.crv | Ed25519                                                                                                   |
- jwk.d   | CANARY-S1                                                                                                 | yes
- jwk.kty | OKP                                                                                                       |
- jwk.x   | mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0                                                               |
- kid     | did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N#z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N |
- typ     | vc+jwt                                                                                                    |
+ Path    | Type   | Value                                                                                                     | Visibility
+---------+--------+-----------------------------------------------------------------------------------------------------------+---------------
+ alg     | string | EdDSA                                                                                                     | non_sensitive
+ cty     | string | vc                                                                                                        | non_sensitive
+ jwk.crv | string | Ed25519                                                                                                   | non_sensitive
+ jwk.d   | string | CANARY-S1                                                                                                 | revealed
+ jwk.kty | string | OKP                                                                                                       | non_sensitive
+ jwk.x   | string | mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0                                                               | non_sensitive
+ kid     | string | did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N#z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N | non_sensitive
+ typ     | string | vc+jwt                                                                                                    | non_sensitive
 
 Claims
- Path                             | Type   | Value                 | Unmasked
-----------------------------------+--------+-----------------------+----------
- credentialSubject.alsoKnownAs[0] | string | CANARY-C5             | yes
- credentialSubject.alsoKnownAs[1] | string | CANARY-C6             | yes
- credentialSubject.degree.name    | string | CANARY-C4             | yes
- credentialSubject.degree.type    | string | CANARY-C3             | yes
- credentialSubject.id             | string | did:example:CANARY-C2 | yes
- id                               | string | urn:example:CANARY-C1 | yes
+ Path                             | Type   | Value                 | Visibility
+----------------------------------+--------+-----------------------+------------
+ credentialSubject.alsoKnownAs[0] | string | CANARY-C5             | revealed
+ credentialSubject.alsoKnownAs[1] | string | CANARY-C6             | revealed
+ credentialSubject.degree.name    | string | CANARY-C4             | revealed
+ credentialSubject.degree.type    | string | CANARY-C3             | revealed
+ credentialSubject.id             | string | did:example:CANARY-C2 | revealed
+ id                               | string | urn:example:CANARY-C1 | revealed
 
 Findings
  Code                    | Attribution | Severity | Detail

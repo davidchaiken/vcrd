@@ -20,20 +20,20 @@ proofs[0].key_provenance.source: issuer_identifier
 proofs[0].key_provenance.method: did:key
 proofs[0].validity: unbounded
 proofs[0].key_provenance.thumbprint: 0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
-format.header.alg: value=EdDSA
-format.header.cty: value=vc
-format.header.kid: value=did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N#z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N
-format.header.typ: value=vc+jwt
-credential.claims.credentialSubject.degree.name: type=string value=(masked)
-credential.claims.credentialSubject.degree.type: type=string value=(masked)
-credential.claims.credentialSubject.id: type=string value=(masked)
-credential.claims.id: type=string value=(masked)
-credential.metadata.@context[0]: type=string value=https://www.w3.org/ns/credentials/v2
-credential.metadata.@context[1]: type=string value=https://www.w3.org/ns/credentials/examples/v2
-credential.metadata.issuer: type=string value=did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N
-credential.metadata.type[0]: type=string value=VerifiableCredential
-credential.metadata.type[1]: type=string value=ExampleDegreeCredential
-credential.metadata.validFrom: type=string value=2026-01-01T00:00:00Z
-credential.metadata.validUntil: type=string value=2031-01-01T00:00:00Z
+format.header.alg: type=string value=EdDSA visibility=non_sensitive
+format.header.cty: type=string value=vc visibility=non_sensitive
+format.header.kid: type=string value=did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N#z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N visibility=non_sensitive
+format.header.typ: type=string value=vc+jwt visibility=non_sensitive
+credential.claims.credentialSubject.degree.name: type=string value=(masked) visibility=masked
+credential.claims.credentialSubject.degree.type: type=string value=(masked) visibility=masked
+credential.claims.credentialSubject.id: type=string value=(masked) visibility=masked
+credential.claims.id: type=string value=(masked) visibility=masked
+credential.metadata.@context[0]: type=string value=https://www.w3.org/ns/credentials/v2 visibility=non_sensitive
+credential.metadata.@context[1]: type=string value=https://www.w3.org/ns/credentials/examples/v2 visibility=non_sensitive
+credential.metadata.issuer: type=string value=did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N visibility=non_sensitive
+credential.metadata.type[0]: type=string value=VerifiableCredential visibility=non_sensitive
+credential.metadata.type[1]: type=string value=ExampleDegreeCredential visibility=non_sensitive
+credential.metadata.validFrom: type=string value=2026-01-01T00:00:00Z visibility=non_sensitive
+credential.metadata.validUntil: type=string value=2031-01-01T00:00:00Z visibility=non_sensitive
 not_evaluated.issuer_accreditation: reason=out_of_scope
 not_evaluated.context_resolution: reason=not_implemented

@@ -10,12 +10,12 @@ Phases
  inspect | passed  |          |
 
 Claims
- Path                          | Type   | Value    | Unmasked
--------------------------------+--------+----------+----------
- credentialSubject.degree.name | string | (masked) |
- credentialSubject.degree.type | string | (masked) |
- credentialSubject.id          | string | (masked) |
- id                            | string | (masked) |
+ Path                          | Type   | Value    | Visibility
+-------------------------------+--------+----------+------------
+ credentialSubject.degree.name | string | (masked) | masked
+ credentialSubject.degree.type | string | (masked) | masked
+ credentialSubject.id          | string | (masked) | masked
+ id                            | string | (masked) | masked
 
 Not evaluated
  Check                | Reason

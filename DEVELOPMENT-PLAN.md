@@ -174,8 +174,11 @@ every other `alg` exercise the by-name rejection path from day one.
     source, the claims, the findings and `not_evaluated`; level 2 everything except
     `credential.metadata`, the header included; level 3 everything. How level 1 presents
     `not_evaluated`, key provenance, and the types and validity is to be revisited.
-  - A reveal is marked in an Unmasked column in `text` and `plain`; JSON keeps `reveals`,
-    each entry now naming the key its path is relative to.
+  - Every value carries its visibility, `non_sensitive`, `masked` or `revealed`: in JSON
+    on each value, in a Visibility column in `text` and `plain` (decided 2026-10-21,
+    after review, in place of an Unmasked column and JSON's `treatment`). JSON keeps
+    `reveals`, each entry naming the key its path is relative to and its visibility,
+    `revealed`; milestone 3's hashed designation adds `hashed`.
   - `--unsafe` has three levels: 0 masks claims and secrets, 1 (`--unsafe`) shows claims,
     2 also shows cryptographic secrets, such as a header `jwk`'s private members.
     Caller errors and the warning are the only stderr output; milestone 3 adds
@@ -183,9 +186,9 @@ every other `alg` exercise the by-name rejection path from day one.
     code, so `--verbosity 0` with `--unsafe` is accepted and prints nothing, and a test
     checks every input at every format and level; the warning is repeated in the result,
     first (`warnings` in JSON); `--unsafe 2` is accepted beside `--unsafe=2`.
-  - The JOSE header is shown as written (`format.header`), a masked value as `null`
-    with its path in `header_masked`, to be replaced by the leaf list the claims use if
-    that proves confusing. `credential.metadata` stays as it is.
+  - The JOSE header (`format.header`) is listed as values, as the claims are (decided
+    2026-10-21, after review: the header as written, with a masked value as `null`,
+    could not mark a masked value unambiguously). `credential.metadata` stays as it is.
 - *Fixtures, negative first* (REQUIREMENTS §11), committed under `fixtures/` except the
   over-size input, which its test generates: happy Ed25519; tampered signature;
   expired; not yet valid; `validUntil` before `validFrom`; `alg: none`; `alg: Ed448`

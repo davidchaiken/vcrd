@@ -10,9 +10,9 @@ proofs[0].algorithm: EdDSA
 proofs[0].outcome: verified
 proofs[0].key_provenance.source: issuer_identifier
 proofs[0].key_provenance.method: did:key
-credential.claims.credentialSubject.degree.name: type=string value=(masked)
-credential.claims.credentialSubject.degree.type: type=string value=(masked)
-credential.claims.credentialSubject.id: type=string value=(masked)
-credential.claims.id: type=string value=(masked)
+credential.claims.credentialSubject.degree.name: type=string value=(masked) visibility=masked
+credential.claims.credentialSubject.degree.type: type=string value=(masked) visibility=masked
+credential.claims.credentialSubject.id: type=string value=(masked) visibility=masked
+credential.claims.id: type=string value=(masked) visibility=masked
 not_evaluated.issuer_accreditation: reason=out_of_scope
 not_evaluated.context_resolution: reason=not_implemented
