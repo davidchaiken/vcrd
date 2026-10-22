@@ -1,0 +1,55 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "vcrd: pick an input",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["build", "--bin=vcrd", "--package=vcrd-cli"],
+        "filter": { "name": "vcrd", "kind": "bin" }
+      },
+      "args": ["${input:command}", "${input:input}", "--now", "2026-10-01T00:00:00Z"],
+      "cwd": "${workspaceFolder}",
+      "sourceLanguages": ["rust"]
+    },
+    {
+      "name": "vcrd: file in editor (current time)",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["build", "--bin=vcrd", "--package=vcrd-cli"],
+        "filter": { "name": "vcrd", "kind": "bin" }
+      },
+      "args": ["${input:command}", "${file}"],
+      "cwd": "${workspaceFolder}",
+      "sourceLanguages": ["rust"]
+    }
+  ],
+  "inputs": [
+    { "id": "command", "type": "pickString", "description": "Subcommand",
+      "options": ["verify", "inspect"], "default": "verify" },
+    { "id": "input", "type": "pickString", "description": "Credential (type to filter)",
+      "options": [
+        "examples/ed25519.jwt",
+        "fixtures/alg-ed448.jwt",
+        "fixtures/alg-none.jwt",
+        "fixtures/canary.jwt",
+        "fixtures/crit-unsupported.jwt",
+        "fixtures/deep-nesting.jwt",
+        "fixtures/embedded-jwk-only.jwt",
+        "fixtures/embedded-jwk.jwt",
+        "fixtures/exp-past.jwt",
+        "fixtures/iss-mismatch.jwt",
+        "fixtures/issuer-missing.jwt",
+        "fixtures/jws-json-flattened.json",
+        "fixtures/kid-missing.jwt",
+        "fixtures/small-order-r.jwt",
+        "fixtures/tampered-claim.jwt",
+        "fixtures/validity-reversed.jwt",
+        "fixtures/vcdm-1.1-encoding.jwt",
+        "fixtures/weak-key.jwt"
+      ],
+      "default": "examples/ed25519.jwt" }
+  ]
+}
