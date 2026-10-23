@@ -6,6 +6,7 @@
 use curve25519_dalek::edwards::CompressedEdwardsY;
 
 use crate::context::Context;
+use crate::document::DeclaredAlgorithm;
 use crate::finding::{Attribution, Finding, FindingDetail};
 use crate::keys::PublicKey;
 use crate::registry::{ProofInput, ProofSuite, SuiteId};
@@ -58,18 +59,24 @@ impl ProofSuite for Jws {
             ));
         }
         // The declared algorithm is checked, never obeyed (ARCHITECTURE §8).
-        let rejected = match *algorithm {
+        let rejected = match algorithm {
             None => Some((Attribution::Input, FindingDetail::AlgorithmMissing)),
-            // Always rejected, never a policy question (ARCHITECTURE §8).
-            Some("none") => Some((Attribution::Input, FindingDetail::AlgorithmNone)),
-            Some(EDDSA) => None,
-            Some(declared) => Some((
-                Attribution::Vcrd,
-                FindingDetail::AlgorithmUnsupported {
-                    declared: declared.to_owned(),
-                    supported: self.algorithms().to_vec(),
-                },
+            Some(DeclaredAlgorithm::NotAName { found }) => Some((
+                Attribution::Input,
+                FindingDetail::AlgorithmInvalid { found },
             )),
+            Some(DeclaredAlgorithm::Name(name)) => match name.as_str() {
+                // Always rejected, never a policy question (ARCHITECTURE §8).
+                "none" => Some((Attribution::Input, FindingDetail::AlgorithmNone)),
+                EDDSA => None,
+                declared => Some((
+                    Attribution::Vcrd,
+                    FindingDetail::AlgorithmUnsupported {
+                        declared: declared.to_owned(),
+                        supported: self.algorithms().to_vec(),
+                    },
+                )),
+            },
         };
         if let Some((attribution, detail)) = rejected {
             findings.push(Finding::error(Phase::Verify, attribution, detail));
@@ -159,8 +166,9 @@ mod tests {
         let key: [u8; 32] = URL_SAFE_NO_PAD.decode(X).unwrap().try_into().unwrap();
         let key = PublicKey::Ed25519(VerifyingKey::from_bytes(&key).unwrap());
         let signature = URL_SAFE_NO_PAD.decode(SIGNATURE).unwrap();
+        let algorithm = algorithm.map(|name| DeclaredAlgorithm::Name(name.to_owned()));
         let input = ProofInput::Jws {
-            algorithm,
+            algorithm: algorithm.as_ref(),
             signing_input,
             signature: &signature,
             critical,

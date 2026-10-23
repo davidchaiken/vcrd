@@ -124,6 +124,17 @@ pub enum FindingDetail {
     },
     /// `crit` (Critical) breaks one of RFC 7515 §4.1.11's rules for its value.
     CritInvalid { problem: CritProblem },
+    /// A Header Parameter RFC 7515 §4.1 defines has a value of the wrong JSON type, such
+    /// as a `kid` that is a number. It is reported as this, not as absent. `jwk` and
+    /// `crit` have findings of their own.
+    HeaderMemberType {
+        member: &'static str,
+        /// `string`, or `array_of_strings` for `x5c`.
+        expected: &'static str,
+        /// The value's JSON type: `null`, `bool`, `number`, `string`, `array` or
+        /// `object`.
+        found: &'static str,
+    },
     /// The header's `jwk` is not a public key in a form RFC 7517, RFC 7518 §6 and
     /// RFC 8037 §2 define; `problem` says how. It does not block verify, which takes
     /// the issuer's key from elsewhere.
@@ -265,6 +276,9 @@ pub enum FindingDetail {
     SuiteUnavailable { suite: SuiteId },
     /// The JWS header has no `alg` (Algorithm) member (RFC 7515 §4.1.1).
     AlgorithmMissing,
+    /// `alg` is present and not a string, so it names no algorithm (RFC 7515 §4.1.1).
+    /// `found` is its JSON type.
+    AlgorithmInvalid { found: &'static str },
     /// `alg` is `none`, which is always rejected (ARCHITECTURE §8).
     AlgorithmNone,
     /// vcrd does not implement the declared algorithm (REQUIREMENTS §10).
@@ -367,6 +381,7 @@ impl FindingDetail {
             FindingDetail::JsonNotObject { .. } => "parse.json_not_object",
             FindingDetail::DuplicateName { .. } => "inspect.duplicate_name",
             FindingDetail::CritInvalid { .. } => "inspect.crit_invalid",
+            FindingDetail::HeaderMemberType { .. } => "inspect.header_member_type",
             FindingDetail::JwkInvalid { .. } => "inspect.jwk_invalid",
             FindingDetail::JwkKtyUnsupported { .. } => "inspect.jwk_kty_unsupported",
             FindingDetail::JwkPrivateKey { .. } => "inspect.jwk_private_key",
@@ -409,6 +424,7 @@ impl FindingDetail {
             FindingDetail::NoProof => "verify.no_proof",
             FindingDetail::SuiteUnavailable { .. } => "verify.suite_unavailable",
             FindingDetail::AlgorithmMissing => "verify.algorithm_missing",
+            FindingDetail::AlgorithmInvalid { .. } => "verify.algorithm_invalid",
             FindingDetail::AlgorithmNone => "verify.algorithm_none",
             FindingDetail::AlgorithmUnsupported { .. } => "verify.algorithm_unsupported",
             FindingDetail::SignatureLength { .. } => "verify.signature_length",

@@ -546,6 +546,37 @@ fn checks_typ_and_cty() {
     assert_eq!(codes(&report), Vec::<&str>::new());
 }
 
+/// RFC 7515 §4.1.6: `x5c` is an array of strings, so an array holding anything else
+/// is the wrong type too. A well-typed `x5c` is not reported: vcrd takes no key from it.
+#[test]
+fn checks_that_x5c_is_an_array_of_strings() {
+    let types = |x5c: Value| {
+        let report = inspect_token(&with_header(|h| h["x5c"] = x5c));
+        report
+            .inspect
+            .findings()
+            .iter()
+            .map(|f| match &f.detail {
+                FindingDetail::HeaderMemberType {
+                    member,
+                    expected,
+                    found,
+                } => (*member, *expected, *found),
+                other => panic!("{other:?}"),
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(types(json!(["MIIB"])), []);
+    assert_eq!(
+        types(json!(["MIIB", 1])),
+        [("x5c", "array_of_strings", "array")]
+    );
+    assert_eq!(
+        types(json!("MIIB")),
+        [("x5c", "array_of_strings", "string")]
+    );
+}
+
 /// RFC 7515 §4.1.11's rules for the value of `crit`.
 #[test]
 fn checks_the_form_of_crit() {

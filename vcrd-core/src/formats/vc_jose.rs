@@ -6,8 +6,9 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
 use crate::context::{Context, Limits};
 use crate::document::{
-    ClassedJson, ContextEntry, DateTimeProblem, Document, DocumentKind, EmbeddedKey, KeyHints,
-    Leaf, LeafClass, NumericDate, ProofDescriptor, ProofMaterial, ProofTime, ProofTimes, Timestamp,
+    ClassedJson, ContextEntry, DateTimeProblem, DeclaredAlgorithm, Document, DocumentKind,
+    EmbeddedKey, KeyHints, Leaf, LeafClass, NumericDate, ProofDescriptor, ProofMaterial, ProofTime,
+    ProofTimes, Timestamp,
 };
 use crate::finding::{
     Attribution, Base64urlProblem, CritProblem, Finding, FindingDetail, IssLocation, JwkProblem,
@@ -44,7 +45,7 @@ pub struct VcJoseDetail {
 #[derive(Clone, Debug)]
 pub struct JoseHeader {
     /// Algorithm (§4.1.1).
-    pub alg: Option<String>,
+    pub alg: Option<DeclaredAlgorithm>,
     /// Key ID (§4.1.4).
     pub kid: Option<String>,
     /// Type (§4.1.9).
@@ -61,7 +62,12 @@ pub struct JoseHeader {
 impl JoseHeader {
     fn new(parsed: Json) -> Self {
         JoseHeader {
-            alg: string(parsed.get("alg")),
+            alg: parsed.get("alg").map(|alg| match alg.as_str() {
+                Some(name) => DeclaredAlgorithm::Name(name.to_owned()),
+                None => DeclaredAlgorithm::NotAName {
+                    found: alg.type_name(),
+                },
+            }),
             kid: string(parsed.get("kid")),
             typ: string(parsed.get("typ")),
             cty: string(parsed.get("cty")),
@@ -146,9 +152,28 @@ fn duplicates(json: &Json, segment: JwsSegment, findings: &mut Vec<Finding>) {
     }
 }
 
-/// `typ` and `cty` (VC-JOSE-COSE §3.1.1), and the form of `crit` (RFC 7515 §4.1.11).
+/// The JSON types of the registered members (RFC 7515 §4.1), `typ` and `cty`
+/// (VC-JOSE-COSE §3.1.1), and the form of `crit` (RFC 7515 §4.1.11).
 fn header_members(header: &JoseHeader, findings: &mut Vec<Finding>) {
-    if header.typ.as_deref().map(media_type).as_deref() != Some("application/vc+jwt") {
+    for (member, expected) in TYPED_HEADER_PARAMETERS {
+        if let Some(value) = header.parsed.get(member)
+            && !has_type(value, expected)
+        {
+            findings.push(inspect_error(FindingDetail::HeaderMemberType {
+                member,
+                expected,
+                found: value.type_name(),
+            }));
+        }
+    }
+    // A `typ` that is not a string was reported above.
+    let typ_not_string = header
+        .parsed
+        .get("typ")
+        .is_some_and(|typ| typ.as_str().is_none());
+    if !typ_not_string
+        && header.typ.as_deref().map(media_type).as_deref() != Some("application/vc+jwt")
+    {
         findings.push(inspect_warning(FindingDetail::TypUnexpected {
             found: header.typ.clone(),
         }));
@@ -201,6 +226,29 @@ fn media_type(value: &str) -> String {
         value
     } else {
         format!("application/{value}")
+    }
+}
+
+/// The registered Header Parameters with a JSON type of their own (RFC 7515 §4.1), in
+/// that section's order: `x5c` is an array of strings, and the rest are strings. `jwk`
+/// and `crit` are checked by `check_jwk` and `check_crit`.
+const TYPED_HEADER_PARAMETERS: [(&str, &str); 9] = [
+    ("alg", "string"),
+    ("jku", "string"),
+    ("kid", "string"),
+    ("x5u", "string"),
+    ("x5c", "array_of_strings"),
+    ("x5t", "string"),
+    ("x5t#S256", "string"),
+    ("typ", "string"),
+    ("cty", "string"),
+];
+
+fn has_type(value: &Json, expected: &str) -> bool {
+    match (expected, value) {
+        ("array_of_strings", Json::Array(items)) => items.iter().all(|i| i.as_str().is_some()),
+        ("string", value) => value.as_str().is_some(),
+        _ => false,
     }
 }
 
@@ -318,6 +366,14 @@ fn inspect_payload(
         what: Check::ContextResolution,
         why: NotEvaluatedReason::NotImplemented,
     });
+    // RFC 7519 §4.1.3: vcrd is not told whom it verifies for (DEVELOPMENT-PLAN.md,
+    // milestone 4), so it cannot say whether `aud` names it.
+    if payload.get("aud").is_some() {
+        output.not_evaluated.push(NotEvaluated {
+            what: Check::Audience,
+            why: NotEvaluatedReason::NoParametersSupplied,
+        });
+    }
     output.not_evaluated.extend(inspected.not_evaluated);
     output.no_issuer_identifier = inspected.no_issuer_identifier;
 
@@ -394,8 +450,13 @@ fn check_kid(header: &JoseHeader, payload: &Json, issuer: &str, findings: &mut V
     let did = issuer.starts_with("did:");
     let Some(kid) = header.kid.as_deref() else {
         // A DID issuer's key is a DID URL (§4.1.1); a URL issuer with `iss` absent
-        // needs an absolute `kid` (§4.2).
-        if did || !iss_present {
+        // needs an absolute `kid` (§4.2). A `kid` that is not a string was reported by
+        // `header_members`.
+        let kid_not_string = header
+            .parsed
+            .get("kid")
+            .is_some_and(|kid| kid.as_str().is_none());
+        if !kid_not_string && (did || !iss_present) {
             findings.push(inspect_error(FindingDetail::KidMissing));
         }
         return;

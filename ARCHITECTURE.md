@@ -244,9 +244,10 @@ pub enum Severity { Info, Warning, Error }
   because breadth — a presentation enveloping thousands of credentials — is the real
   exposure.
 - **`NotEvaluated { what, why }`** lists the checks REQUIREMENTS §12 requires a result to
-  disclose as not performed — revocation status, context resolution, holder binding,
-  replay binding, issuer accreditation, schema conformance — each with a reason: requires
-  network, no parameters supplied, not implemented, out of scope, or phase not reached.
+  disclose as not performed — revocation status, context resolution, audience (RFC 7519
+  §4.1.3), holder binding, replay binding, issuer accreditation, schema conformance — each
+  with a reason: requires network, no parameters supplied, not implemented, out of scope,
+  or phase not reached.
 
 ### Per-phase outputs
 
@@ -1001,6 +1002,13 @@ Each becomes a test observed to fail and then to pass (REQUIREMENTS §11):
   resolution reads `iss`. Check the mapping against VCDM 1.1's text first. Until then the
   encoding is named (`inspect.vcdm_1_1_jwt_encoding`), attributed to vcrd, and blocks
   verify (DEVELOPMENT-PLAN.md, milestone 5).
+- **[F3] Name nested JWTs and JWEs.** RFC 7519 §7.2 has a recipient tell a JWS from a
+  JWE (JSON Web Encryption, RFC 7516), step 6, and treat the payload of a JWT whose
+  `cty` is `JWT` as a nested JWT, step 8. vcrd reads neither, and attributes both to the
+  input: a five-segment JWE is `parse.not_compact_jws`, and a nested JWT's payload fails
+  as `parse.json_invalid`, both exit 2. Naming them, attributed to vcrd as JWS JSON
+  serialization is, would give exit 6 (docs/reviews/milestone-1.md, gap 3). No
+  milestone yet.
 
 ### [P] Project and repository setup
 

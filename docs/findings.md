@@ -1,0 +1,640 @@
+# Finding codes
+
+vcrd reports each condition it finds as a finding with a code, `<phase>.<condition>`,
+such as `parse.base64url_invalid`. This reference lists every code `vcrd-core` reports,
+grouped by phase. [output.md](output.md) describes a finding's keys, and
+`vcrd-core/tests/finding_reference.rs` fails when a code is missing here, or listed here
+and no longer reported.
+
+Each entry gives:
+
+- **Meaning**: the condition.
+- **Attribution and severity**, as the finding's `attribution` and `severity` report them.
+  Only an error fails its phase. An error attributed to `vcrd` makes the exit code 6, one
+  attributed to `policy` makes it 5, and one attributed to the `input` or the
+  `environment` gives the code of its phase: 2 for parse, 3 for inspect, 4 for verify.
+- **Detail**: the members of `detail` besides `type`, which repeats the condition.
+- **Standard**: the text the condition comes from, or "none" for a rule of vcrd's own.
+- **Remedy**: what the reader can do about it.
+
+Abbreviations: JWS is JSON Web Signature ([RFC 7515]), JWT is JSON Web Token ([RFC 7519]),
+JWK is JSON Web Key ([RFC 7517]), JOSE is JSON Object Signing and Encryption, VCDM is the
+Verifiable Credentials Data Model, and DID is a Decentralized Identifier.
+
+Each document named is linked to the version cited: an RFC, which never changes once
+published; a W3C Recommendation by its dated address; and a document in this repository
+relatively, so that it opens at the same commit as this one. The WHATWG URL Standard is a
+living standard, with no fixed version to link.
+
+## Parse
+
+### <a id="parse.input_too_large"></a>`parse.input_too_large`
+
+- **Meaning.** The input is larger than the size limit, 256 KiB. vcrd checks this before
+  anything else, and reads at most one byte past the limit.
+- **Attribution and severity.** `policy`, `error`.
+- **Detail.** `limit`: the limit, in bytes. `read`: how many bytes vcrd read. `size`: the
+  file's size, or `null` when the input is not a file.
+- **Standard.** None: a structural limit ([REQUIREMENTS] §6, [ARCHITECTURE] §4).
+- **Remedy.** Check that the input is the credential alone. The limit cannot yet be set
+  from the command line ([DEVELOPMENT-PLAN.md], milestone 3).
+
+### <a id="parse.nesting_too_deep"></a>`parse.nesting_too_deep`
+
+- **Meaning.** A JSON document nests deeper than the depth limit, 32 levels. A scan finds
+  this before any JSON is parsed.
+- **Attribution and severity.** `policy`, `error`.
+- **Detail.** `segment`: `header`, `payload` or `signature`, or `null` when the input as
+  a whole is the JSON document. `limit`: the limit. `found`: the depth the scan reached.
+- **Standard.** None: a structural limit ([ARCHITECTURE] §4).
+- **Remedy.** As for `parse.input_too_large`.
+
+### <a id="parse.too_many_claims"></a>`parse.too_many_claims`
+
+- **Meaning.** The payload has more scalar values than the claim limit, 512; vcrd stopped
+  listing them at the limit.
+- **Attribution and severity.** `policy`, `error`.
+- **Detail.** `limit`: the limit.
+- **Standard.** None: a structural limit ([ARCHITECTURE] §4).
+- **Remedy.** As for `parse.input_too_large`.
+
+### <a id="parse.trailing_whitespace"></a>`parse.trailing_whitespace`
+
+- **Meaning.** Whitespace follows the last segment, as when a file ends with a newline. A
+  compact JWS has none; vcrd ignores it and says so.
+- **Attribution and severity.** `input`, `info`.
+- **Detail.** `bytes`: how many bytes of whitespace.
+- **Standard.** [RFC 7515] §7.1. Ignoring it is vcrd's decision ([DEVELOPMENT-PLAN.md],
+  milestone 1, 2026-09-29).
+- **Remedy.** None needed. A stricter verifier may reject the token unless the whitespace
+  is removed.
+
+### <a id="parse.no_format_matched"></a>`parse.no_format_matched`
+
+- **Meaning.** None of the formats vcrd knows recognized the input.
+- **Attribution and severity.** `input`, `error`; `vcrd` when vcrd was built with no
+  format.
+- **Detail.** `registered`: the formats vcrd tried, such as `vc-jose`.
+- **Standard.** None: vcrd's format detection ([ARCHITECTURE] §4).
+- **Remedy.** Check that the input is a credential in one of the formats `registered`
+  lists. Whitespace before a compact JWS, for instance, is not part of it.
+
+### <a id="parse.not_compact_jws"></a>`parse.not_compact_jws`
+
+- **Meaning.** The input looks like a compact JWS but does not have three segments.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `segments`: how many dot-separated segments it has.
+- **Standard.** [RFC 7515] §7.1 and §5.2 step 1.
+- **Remedy.** A compact JWS is three base64url segments joined by two dots. Check that
+  the token was not cut short or joined to another.
+
+### <a id="parse.jws_json_serialization"></a>`parse.jws_json_serialization`
+
+- **Meaning.** A JWS in JSON serialization, which vcrd does not read yet.
+- **Attribution and severity.** `vcrd`, `error`.
+- **Detail.** `syntax`: `general`, a `signatures` array, or `flattened`, one `signature`
+  beside `payload`.
+- **Standard.** [RFC 7515] §7.2. [VC-JOSE-COSE] §3.1.1 requires verifiers to support the
+  compact serialization and does not recommend the JSON one.
+- **Remedy.** Use a verifier that reads JSON serialization. Reading it is planned
+  ([ARCHITECTURE] §10 [F1]; [DEVELOPMENT-PLAN.md], milestone 4).
+
+### <a id="parse.json_not_jws"></a>`parse.json_not_jws`
+
+- **Meaning.** A JSON object that is not a JWS in JSON serialization: it has no
+  `payload`, or neither `signature` nor `signatures`.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** None.
+- **Standard.** [RFC 7515] §7.2.
+- **Remedy.** Check that the input is a credential, not another JSON document.
+
+### <a id="parse.base64url_invalid"></a>`parse.base64url_invalid`
+
+- **Meaning.** A segment is not strict base64url.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `segment`: `header`, `payload` or `signature`. `problem`:
+  `invalid_symbol`, a byte outside the base64url alphabet, such as `+`, `/`, a space or a
+  line break; `nonzero_trailing_bits`, bits after the last whole byte that must be zero;
+  `invalid_length`, one more than a multiple of four, which no base64url text has; or
+  `padding`, an `=`, which JWS omits.
+- **Standard.** [RFC 7515] §2, and §5.2 steps 2, 6 and 7.
+- **Remedy.** A token copied from a document or a terminal may have gained line breaks or
+  spaces, and removing them restores it. Otherwise the issuer encoded it incorrectly.
+
+### <a id="parse.json_invalid"></a>`parse.json_invalid`
+
+- **Meaning.** A decoded segment, or the input as a whole, is not valid JSON in UTF-8.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `segment`: `header`, `payload` or `signature`, or `null` for the input as a
+  whole. `line`, `column`: where the JSON parser stopped.
+- **Standard.** [RFC 7515] §5.2 step 3 for the header; [RFC 7519] §7.2 step 10 for the
+  claims; [RFC 8259] for JSON.
+- **Remedy.** Decoding the segment shows its text, and `line` and `column` point into it.
+  The issuer must fix the credential.
+
+### <a id="parse.json_not_object"></a>`parse.json_not_object`
+
+- **Meaning.** A decoded segment is JSON but not an object.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `segment`: `header` or `payload`.
+- **Standard.** [RFC 7515] §5.2 step 3; [RFC 7519] §7.2 step 10.
+- **Remedy.** The issuer must fix the credential.
+
+## Inspect
+
+### <a id="inspect.duplicate_name"></a>`inspect.duplicate_name`
+
+- **Meaning.** A member name appears more than once in one object. vcrd keeps the last
+  value, as [RFC 7515] §4 and [RFC 7519] §4 permit, reports each repeated name, and still
+  verifies.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `segment`: `header` or `payload`, or `null` when the input as a whole is
+  the JSON document. `path`: where the name repeats. `count`: how many times it appears.
+- **Standard.** [RFC 7515] §4; [RFC 7519] §4.
+- **Remedy.** Software that keeps the first value instead reads a different credential
+  from the same bytes. The issuer must reissue it with unique names.
+
+### <a id="inspect.crit_invalid"></a>`inspect.crit_invalid`
+
+- **Meaning.** The header's `crit` (Critical) breaks one of the rules for its value.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `problem`: `not_array`; `empty`; `{"not_string": index}`, the item at that
+  position; `{"duplicate": name}`; `{"registered": name}`, a name [RFC 7515] defines, which
+  `crit` must not list; or `{"not_in_header": name}`.
+- **Standard.** [RFC 7515] §4.1.11.
+- **Remedy.** The issuer must fix the header.
+
+### <a id="inspect.header_member_type"></a>`inspect.header_member_type`
+
+- **Meaning.** A Header Parameter [RFC 7515] defines has a value of the wrong JSON type,
+  such as a `kid` that is a number. It is reported as this, not as absent. `jwk` and
+  `crit` have findings of their own.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `member`: one of `alg`, `jku`, `kid`, `x5u`, `x5c`, `x5t`, `x5t#S256`,
+  `typ` or `cty`. `expected`: `string`, or `array_of_strings` for `x5c`. `found`: the
+  value's JSON type, `null`, `bool`, `number`, `string`, `array` or `object`; `array`
+  for an `x5c` with an item that is not a string.
+- **Standard.** [RFC 7515] §4.1.1–4.1.10.
+- **Remedy.** The issuer must fix the header. An `alg` of the wrong type also stops
+  verify (`verify.algorithm_invalid`).
+
+### <a id="inspect.jwk_invalid"></a>`inspect.jwk_invalid`
+
+- **Meaning.** The header's `jwk` is not a public key in a form the JWK specifications
+  define. It does not stop verify, which takes the key from the issuer identifier.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `problem`: `not_object`; `kty_missing`; `symmetric`, a `kty` of `oct`,
+  which is a secret key; `{"member_missing": member}`, a member the key type requires; or
+  `key_invalid`, an Ed25519 `x` that is not 32 bytes of strict base64url, or not a point.
+- **Standard.** [RFC 7515] §4.1.3; [RFC 7517] §4; [RFC 7518] §6; [RFC 8037] §2.
+- **Remedy.** The issuer must fix the header. A `symmetric` key in a credential is
+  exposed to every reader of it, and anything it protects can be forged.
+
+### <a id="inspect.jwk_kty_unsupported"></a>`inspect.jwk_kty_unsupported`
+
+- **Meaning.** The header's `jwk` has a key type vcrd cannot read, so vcrd cannot compare
+  it with the issuer's key.
+- **Attribution and severity.** `vcrd`, `warning`.
+- **Detail.** `kty`: the key type.
+- **Standard.** [RFC 7517] §4.1.
+- **Remedy.** None needed: verify uses the issuer's key, not this one. Only the
+  comparison is missing.
+
+### <a id="inspect.jwk_private_key"></a>`inspect.jwk_private_key`
+
+- **Meaning.** The header's `jwk` carries private-key members, such as `d`, so whoever
+  has the credential has the private key. vcrd shows their values only at `--unsafe 2`.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `members`: the private members present.
+- **Standard.** [RFC 7515] §4.1.3: `jwk` is the public key.
+- **Remedy.** Treat the key as compromised: anything it signed can be forged. Its holder
+  must replace it.
+
+### <a id="inspect.numeric_date_invalid"></a>`inspect.numeric_date_invalid`
+
+- **Meaning.** `exp`, `nbf` or `iat` is not a number. The proof's `validity` is then
+  `unknown`.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `claim`: the claim.
+- **Standard.** [RFC 7519] §2 (NumericDate) and §4.1.4–4.1.6.
+- **Remedy.** The issuer must fix the claim.
+
+### <a id="inspect.context_missing"></a>`inspect.context_missing`
+
+- **Meaning.** The credential has no `@context`.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** None.
+- **Standard and remedy.** Round 4 of the milestone 1 review.
+
+### <a id="inspect.context_first_invalid"></a>`inspect.context_first_invalid`
+
+- **Meaning.** The first `@context` item is not `https://www.w3.org/ns/credentials/v2`.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `found`: that item when it is a string, otherwise `null`.
+- **Standard and remedy.** Round 4 of the milestone 1 review.
+
+### <a id="inspect.context_entry_invalid"></a>`inspect.context_entry_invalid`
+
+- **Meaning.** A later `@context` item is neither a string nor an object.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `path`: the item.
+- **Standard and remedy.** Round 4 of the milestone 1 review.
+
+### <a id="inspect.type_missing"></a>`inspect.type_missing`
+
+- **Meaning.** An object that must have a `type` has none, or an empty one.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `path`: the object.
+- **Standard and remedy.** Round 4 of the milestone 1 review.
+
+### <a id="inspect.type_not_string"></a>`inspect.type_not_string`
+
+- **Meaning.** A `type` value is not a string.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `path`: the value.
+- **Standard and remedy.** Round 4 of the milestone 1 review.
+
+### <a id="inspect.type_lacks_verifiable_credential"></a>`inspect.type_lacks_verifiable_credential`
+
+- **Meaning.** The credential's `type` does not include `VerifiableCredential`.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** None.
+- **Standard and remedy.** Round 4 of the milestone 1 review.
+
+### <a id="inspect.issuer_missing"></a>`inspect.issuer_missing`
+
+- **Meaning.** The credential has no `issuer`. With no issuer identifier, no key can be
+  derived from one, so verify does not run unless another key source is available.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** None.
+- **Standard and remedy.** Round 4 of the milestone 1 review.
+
+### <a id="inspect.issuer_invalid"></a>`inspect.issuer_invalid`
+
+- **Meaning.** `issuer` is neither a URL nor an object whose `id` is a URL. Verify is
+  blocked as for `inspect.issuer_missing`.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `problem`: `wrong_type`, neither a string nor an object; `no_id`, an object
+  without a string `id`; or `{"not_url": error}`, with the URL parser's error.
+- **Standard and remedy.** Round 4 of the milestone 1 review.
+
+### <a id="inspect.credential_subject_missing"></a>`inspect.credential_subject_missing`
+
+- **Meaning.** The credential has no `credentialSubject`.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** None.
+- **Standard and remedy.** Round 4 of the milestone 1 review.
+
+### <a id="inspect.credential_subject_invalid"></a>`inspect.credential_subject_invalid`
+
+- **Meaning.** A subject is not an object.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `path`: the subject.
+- **Standard and remedy.** Round 4 of the milestone 1 review.
+
+### <a id="inspect.credential_subject_empty"></a>`inspect.credential_subject_empty`
+
+- **Meaning.** An empty subject object, or an empty set of subjects: present, and the
+  subject of no claim.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `path`: the subject, or the set.
+- **Standard and remedy.** Round 4 of the milestone 1 review.
+
+### <a id="inspect.credential_subject_no_claims"></a>`inspect.credential_subject_no_claims`
+
+- **Meaning.** A subject with an `id` and nothing else.
+- **Attribution and severity.** `input`, `warning`.
+- **Detail.** `path`: the subject.
+- **Standard and remedy.** Round 4 of the milestone 1 review.
+
+### <a id="inspect.url_invalid"></a>`inspect.url_invalid`
+
+- **Meaning.** A value that must be a URL is not one under the [WHATWG URL Standard]. The
+  value is not shown, since it may be a claim.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `path`: the value. `error`: the URL parser's error.
+- **Standard and remedy.** Round 4 of the milestone 1 review.
+
+### <a id="inspect.url_nonconforming"></a>`inspect.url_nonconforming`
+
+- **Meaning.** A URL parses only after the parser corrected it, which the URL Standard
+  calls a validation error.
+- **Attribution and severity.** `input`, `warning`.
+- **Detail.** `path`: the value. `violations`: the corrections, by the URL Standard's
+  names.
+- **Standard and remedy.** Round 4 of the milestone 1 review.
+
+### <a id="inspect.date_time_invalid"></a>`inspect.date_time_invalid`
+
+- **Meaning.** A validity bound is not an [XML Schema 1.1] `dateTimeStamp`.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `field`: `validFrom` or `validUntil`. `valid_rfc3339`: whether [RFC 3339]
+  would accept the value.
+- **Standard and remedy.** Round 4 of the milestone 1 review.
+
+### <a id="inspect.date_time_unrepresentable"></a>`inspect.date_time_unrepresentable`
+
+- **Meaning.** A `dateTimeStamp` outside the years vcrd can represent, -9999 to 9999.
+- **Attribution and severity.** `vcrd`, `error`.
+- **Detail.** `field`: `validFrom` or `validUntil`.
+- **Standard and remedy.** Round 4 of the milestone 1 review.
+
+### <a id="inspect.valid_until_before_valid_from"></a>`inspect.valid_until_before_valid_from`
+
+- **Meaning.** `validUntil` is earlier than `validFrom`.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `valid_from`, `valid_until`: the two bounds.
+- **Standard and remedy.** Round 4 of the milestone 1 review.
+
+### <a id="inspect.typ_unexpected"></a>`inspect.typ_unexpected`
+
+- **Meaning.** The header's `typ` (Type) is absent, or not `vc+jwt`.
+- **Attribution and severity.** `input`, `warning`.
+- **Detail.** `found`: the value, or `null` when absent. `expected`: `vc+jwt`. A `typ`
+  that is not a string is `inspect.header_member_type` instead.
+- **Standard and remedy.** Round 3 of the milestone 1 review.
+
+### <a id="inspect.cty_unexpected"></a>`inspect.cty_unexpected`
+
+- **Meaning.** The header's `cty` (Content Type) is present and not `vc`.
+- **Attribution and severity.** `input`, `warning`.
+- **Detail.** `found`: the value. `expected`: `vc`.
+- **Standard and remedy.** Round 3 of the milestone 1 review.
+
+### <a id="inspect.vcdm_1_1_jwt_encoding"></a>`inspect.vcdm_1_1_jwt_encoding`
+
+- **Meaning.** The payload follows [VCDM 1.1]'s JWT encoding: the credential inside a `vc`
+  claim, or a presentation inside `vp`, with no [VCDM 2.0] `@context`. vcrd does not read
+  it yet, and does not verify it.
+- **Attribution and severity.** `vcrd`, `error`.
+- **Detail.** `claim`: `vc` or `vp`.
+- **Standard and remedy.** Round 3 of the milestone 1 review.
+
+### <a id="inspect.jwt_claim_forbidden"></a>`inspect.jwt_claim_forbidden`
+
+- **Meaning.** A `vc` or `vp` claim beside a [VCDM 2.0] payload.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `claim`: `vc` or `vp`.
+- **Standard and remedy.** Round 3 of the milestone 1 review.
+
+### <a id="inspect.iss_mismatch"></a>`inspect.iss_mismatch`
+
+- **Meaning.** `iss` (Issuer) does not match `issuer`, or `issuer.id`.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `location`: `header` or `payload`, where the `iss` is. `iss`: its value, or
+  `null` when it is not a string. `issuer`: the credential's issuer identifier.
+- **Standard and remedy.** Round 3 of the milestone 1 review.
+
+### <a id="inspect.jwt_claim_conflict"></a>`inspect.jwt_claim_conflict`
+
+- **Meaning.** A JWT claim and the credential property for the same thing are both
+  present and differ: `jti` and `id`, or `sub` and `credentialSubject.id`. The values are
+  not shown, since they are claims.
+- **Attribution and severity.** `input`, `warning`.
+- **Detail.** `claim`: `jti` or `sub`. `property`: `id` or `credentialSubject.id`.
+- **Standard and remedy.** Round 3 of the milestone 1 review.
+
+### <a id="inspect.kid_missing"></a>`inspect.kid_missing`
+
+- **Meaning.** No `kid` (Key ID) where one is required: the issuer is a DID, or `iss` is
+  absent and the issuer is a URL. A `kid` that is not a string is
+  `inspect.header_member_type` instead.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** None.
+- **Standard and remedy.** Round 3 of the milestone 1 review.
+
+### <a id="inspect.kid_not_absolute"></a>`inspect.kid_not_absolute`
+
+- **Meaning.** `kid` is not an absolute URL, where `iss` is absent and the issuer is a
+  URL.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `kid`: its value.
+- **Standard and remedy.** Round 3 of the milestone 1 review.
+
+### <a id="inspect.kid_foreign"></a>`inspect.kid_foreign`
+
+- **Meaning.** `kid`, resolved against the issuer when relative, does not identify one of
+  the issuer's keys.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `kid`: its value. `issuer`: the issuer identifier. `expected`: the key's
+  identifier when the DID method determines it, as `did:key` does, otherwise `null`.
+- **Standard and remedy.** Round 3 of the milestone 1 review.
+
+### <a id="inspect.kid_without_thumbprint"></a>`inspect.kid_without_thumbprint`
+
+- **Meaning.** The issuer is a URL that is not a DID, and `kid` does not include a JWK
+  Thumbprint URI.
+- **Attribution and severity.** `input`, `warning`.
+- **Detail.** `kid`: its value.
+- **Standard and remedy.** Round 3 of the milestone 1 review.
+
+### <a id="inspect.expired"></a>`inspect.expired`
+
+- **Meaning.** `validUntil` is earlier than the clock, less the skew.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `valid_until`, `now`, `skew_seconds`.
+- **Standard and remedy.** Round 4 of the milestone 1 review.
+
+### <a id="inspect.not_yet_valid"></a>`inspect.not_yet_valid`
+
+- **Meaning.** `validFrom` is later than the clock, plus the skew.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `valid_from`, `now`, `skew_seconds`.
+- **Standard and remedy.** Round 4 of the milestone 1 review.
+
+## Verify
+
+### <a id="verify.no_proof"></a>`verify.no_proof`
+
+- **Meaning.** The input carries nothing to verify.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** None.
+- **Standard and remedy.** Round 4 of the milestone 1 review.
+
+### <a id="verify.suite_unavailable"></a>`verify.suite_unavailable`
+
+- **Meaning.** A proof needs a proof suite this build of vcrd does not include.
+- **Attribution and severity.** `vcrd`, `error`.
+- **Detail.** `suite`: the suite, such as `jws`.
+- **Standard.** None: vcrd's suite registry ([ARCHITECTURE] §5).
+- **Remedy.** Use a build of vcrd with that suite's Cargo feature enabled.
+
+### <a id="verify.algorithm_missing"></a>`verify.algorithm_missing`
+
+- **Meaning.** The JWS header has no `alg` (Algorithm). Verify does not check the
+  signature.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** None.
+- **Standard.** [RFC 7515] §4.1.1 and §5.2 step 8.
+- **Remedy.** The issuer must name the algorithm.
+
+### <a id="verify.algorithm_invalid"></a>`verify.algorithm_invalid`
+
+- **Meaning.** `alg` is present and not a string, so it names no algorithm. Verify does
+  not check the signature. Inspect reports the same member as
+  `inspect.header_member_type`.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `found`: the value's JSON type.
+- **Standard.** [RFC 7515] §4.1.1.
+- **Remedy.** The issuer must name the algorithm as a string.
+
+### <a id="verify.algorithm_none"></a>`verify.algorithm_none`
+
+- **Meaning.** `alg` is `none`: the JWS is unsecured. vcrd always rejects it, whatever
+  the caller's policy.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** None.
+- **Standard.** [RFC 7515] §5.2, which tells a verifier to reject an algorithm it does not
+  accept; [RFC 7518] §3.6 defines `none`. vcrd's rule is [ARCHITECTURE] §8.
+- **Remedy.** The credential is not signed. Obtain a signed one.
+
+### <a id="verify.algorithm_unsupported"></a>`verify.algorithm_unsupported`
+
+- **Meaning.** vcrd does not implement the declared algorithm, so it does not check the
+  signature.
+- **Attribution and severity.** `vcrd`, `error`.
+- **Detail.** `declared`: the algorithm the header names. `supported`: those vcrd
+  implements.
+- **Standard.** [RFC 7515] §4.1.1, which requires a verifier to understand `alg`;
+  [REQUIREMENTS] §10.
+- **Remedy.** Use a verifier that implements `declared`. vcrd's algorithms grow in
+  milestone 2 ([DEVELOPMENT-PLAN.md]).
+
+### <a id="verify.signature_length"></a>`verify.signature_length`
+
+- **Meaning.** The signature has the wrong length for its algorithm, so it is not
+  checked.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `algorithm`. `expected`, `found`: lengths, in bytes.
+- **Standard and remedy.** Round 2 of the milestone 1 review.
+
+### <a id="verify.signature_invalid"></a>`verify.signature_invalid`
+
+- **Meaning.** The signature does not verify under the key vcrd resolved: the header or
+  payload changed after signing, or a different key signed it.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `algorithm`: the algorithm checked.
+- **Standard.** [RFC 7515] §5.2 steps 9 and 10.
+- **Remedy.** Any change to a segment invalidates the signature, re-encoding included.
+  Compare `key_provenance` with the key the issuer says it signed with.
+
+### <a id="verify.signature_small_order"></a>`verify.signature_small_order`
+
+- **Meaning.** The R of an Ed25519 signature has small order. A verifier that checks only
+  the group equation can accept such a signature; vcrd rejects it.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `algorithm`.
+- **Standard and remedy.** Round 2 of the milestone 1 review.
+
+### <a id="verify.crit_unsupported"></a>`verify.crit_unsupported`
+
+- **Meaning.** `crit` lists extensions vcrd does not implement, so the JWS is invalid.
+  vcrd still checks the signature and reports its outcome, for information.
+- **Attribution and severity.** `vcrd`, `error`.
+- **Detail.** `extensions`: those vcrd does not implement. `supported`: those it does,
+  none yet.
+- **Standard.** [RFC 7515] §4.1.11.
+- **Remedy.** Use a verifier that implements the extensions.
+
+### <a id="verify.proof_expired"></a>`verify.proof_expired`
+
+- **Meaning.** `exp` is not later than the clock, less the skew: the signature has
+  expired, whatever the credential's own validity period says.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `claim`: `exp`. `value`: the number as written. `value_date_time`: the same
+  instant as an [RFC 3339] date-time, or `null` outside the years -9999 to 9999. `now`: the
+  clock. `skew_seconds`: the skew allowed.
+- **Standard.** [RFC 7519] §4.1.4; [VC-JOSE-COSE] §3.1.3.
+- **Remedy.** `--now` checks the signature as of another time, and `--clock-skew` allows
+  for clocks that differ.
+
+### <a id="verify.proof_not_yet_valid"></a>`verify.proof_not_yet_valid`
+
+- **Meaning.** `nbf` (Not Before) is later than the clock, plus the skew.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** As for `verify.proof_expired`, with `claim` `nbf`.
+- **Standard.** [RFC 7519] §4.1.5.
+- **Remedy.** As for `verify.proof_expired`.
+
+### <a id="verify.proof_issued_in_future"></a>`verify.proof_issued_in_future`
+
+- **Meaning.** `iat` (Issued At) is later than the clock, plus the skew. [RFC 7519] sets no
+  rule for it, so this is a warning.
+- **Attribution and severity.** `input`, `warning`.
+- **Detail.** As for `verify.proof_expired`, with `claim` `iat`.
+- **Standard.** [RFC 7519] §4.1.6.
+- **Remedy.** Usually a difference between the issuer's clock and the verifier's;
+  `--clock-skew` allows for it.
+
+### <a id="verify.no_key_material"></a>`verify.no_key_material`
+
+- **Meaning.** vcrd found no key to verify with.
+- **Attribution and severity.** `environment`, `error`.
+- **Detail.** `consulted`: where vcrd looked: `issuer_identifier`, `caller_supplied`,
+  `credential_embedded`.
+- **Standard and remedy.** Round 2 of the milestone 1 review.
+
+### <a id="verify.issuer_method_unsupported"></a>`verify.issuer_method_unsupported`
+
+- **Meaning.** The issuer identifier uses a URL scheme or DID method vcrd cannot resolve
+  to a key.
+- **Attribution and severity.** `vcrd`, `error`.
+- **Detail.** `method`: the scheme or method.
+- **Standard and remedy.** Round 2 of the milestone 1 review.
+
+### <a id="verify.did_key_undecodable"></a>`verify.did_key_undecodable`
+
+- **Meaning.** The issuer is a `did:key` that cannot be decoded.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `problem`: `not_base58btc`, `base58_invalid`, `codec_invalid`,
+  `{"key_length": {"expected": n, "found": m}}` or `point_invalid`.
+- **Standard and remedy.** Round 2 of the milestone 1 review.
+
+### <a id="verify.did_key_codec_unsupported"></a>`verify.did_key_codec_unsupported`
+
+- **Meaning.** The `did:key` names a key type vcrd cannot use.
+- **Attribution and severity.** `vcrd`, `error`.
+- **Detail.** `codec`: the multicodec code, in hexadecimal. `name`: its name, when vcrd
+  knows it, otherwise `null`.
+- **Standard and remedy.** Round 2 of the milestone 1 review.
+
+### <a id="verify.weak_key"></a>`verify.weak_key`
+
+- **Meaning.** The key cannot bind a signature to a message, so vcrd refuses it.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `key`: the key, with its `source`, `method` and `thumbprint`. `criterion`:
+  the weak-key test it fails; for Ed25519, `small_order`.
+- **Standard and remedy.** Round 2 of the milestone 1 review.
+
+### <a id="verify.embedded_key_refused"></a>`verify.embedded_key_refused`
+
+- **Meaning.** The only key on offer is one the credential carries about itself, which
+  vcrd uses only if the caller opts in.
+- **Attribution and severity.** `policy`, `error`.
+- **Detail.** `location`: where the key is, such as `header.jwk`.
+- **Standard and remedy.** Round 2 of the milestone 1 review.
+
+### <a id="verify.credential_key_mismatch"></a>`verify.credential_key_mismatch`
+
+- **Meaning.** The key the credential carries about itself is not the key derived from
+  its issuer. It never changes which key vcrd uses.
+- **Attribution and severity.** `input`, `warning`.
+- **Detail.** `carried_key`: the carried key, with its `location` and `thumbprint`.
+  `key`: the key vcrd established, with its `source`, `method` and `thumbprint`.
+- **Standard and remedy.** Round 2 of the milestone 1 review.
+
+[ARCHITECTURE]: ../ARCHITECTURE.md
+[DEVELOPMENT-PLAN.md]: ../DEVELOPMENT-PLAN.md
+[REQUIREMENTS]: ../REQUIREMENTS.md
+[RFC 3339]: https://www.rfc-editor.org/rfc/rfc3339
+[RFC 7515]: https://www.rfc-editor.org/rfc/rfc7515
+[RFC 7517]: https://www.rfc-editor.org/rfc/rfc7517
+[RFC 7518]: https://www.rfc-editor.org/rfc/rfc7518
+[RFC 7519]: https://www.rfc-editor.org/rfc/rfc7519
+[RFC 8037]: https://www.rfc-editor.org/rfc/rfc8037
+[RFC 8259]: https://www.rfc-editor.org/rfc/rfc8259
+[VC-JOSE-COSE]: https://www.w3.org/TR/2026/REC-vc-jose-cose-20261013/
+[VCDM 1.1]: https://www.w3.org/TR/2022/REC-vc-data-model-20220303/
+[VCDM 2.0]: https://www.w3.org/TR/2025/REC-vc-data-model-2.0-20250515/
+[WHATWG URL Standard]: https://url.spec.whatwg.org/
+[XML Schema 1.1]: https://www.w3.org/TR/2012/REC-xmlschema11-2-20120405/

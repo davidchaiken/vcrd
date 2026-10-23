@@ -237,6 +237,8 @@ pub struct NotEvaluated {
 pub enum Check {
     RevocationStatus,
     ContextResolution,
+    /// Whether vcrd is a processor the JWT's `aud` names (RFC 7519 §4.1.3).
+    Audience,
     HolderBinding,
     ReplayBinding,
     IssuerAccreditation,

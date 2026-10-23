@@ -129,6 +129,12 @@ every other `alg` exercise the by-name rejection path from day one.
     JWK Thumbprint recommendation is a warning, for issuers whose URL is not a DID.
   - `not_evaluated` lists context resolution for every VC-JOSE-COSE credential, and
     status and schema when present, each as `not_implemented`.
+  - Decided 2026-10-22, in the milestone review (docs/reviews/milestone-1.md, round 1):
+    a registered header member whose value has the wrong JSON type is
+    `inspect.header_member_type`, not reported as absent, and an `alg` that is not a
+    string is `verify.algorithm_invalid`. An `aud` adds `audience` to `not_evaluated`,
+    as `no_parameters_supplied`, until milestone 4 gives vcrd an expected audience.
+    Naming nested JWTs and JWEs is ARCHITECTURE §10 [F3], with no milestone yet.
 - *Verify.* EdDSA/Ed25519 via `verify_strict`, `is_weak` at resolution (ARCHITECTURE §8);
   `none` rejected; every other `alg` unsupported by name (attribution vcrd, exit 6). Key
   resolution from the credential's `issuer` (the VCDM-normative identifier; `iss` is a
@@ -341,6 +347,9 @@ with the precedence flag > env > config > default resolved per path for designat
 (REQUIREMENTS §8). Per-path show/hash/mask designations with the `reveals` list; an initial
 hash construction chosen and labeled provisional (REQUIREMENTS §16 item 18 stays open).
 `vcrd formats` and `vcrd suites`. Man pages and completions from `clap`. [Q2] decided.
+The input's source in the result (decided 2026-10-22): `input.source`, `file` or `stdin`,
+and `input.path` as given on the command line, never made absolute; in JSON always, and in
+`text` and `plain` at levels 1–3 just after the status.
 Stderr diagnostics per verbosity level. [T2] `cargo-fuzz` targets for the JWS parser and
 the depth prescan, seeded from fixtures, in a workspace-excluded `fuzz/` on a nightly job.
 [T5] coverage with the ratchet policy text ready for `CONTRIBUTING.md`. [T6] structural

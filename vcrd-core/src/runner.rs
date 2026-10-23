@@ -2,7 +2,7 @@
 //! dispatches proofs to suites, and lists what was not evaluated.
 
 use crate::context::Context;
-use crate::document::{ProofDescriptor, ProofMaterial, ProofTime, ProofTimes};
+use crate::document::{DeclaredAlgorithm, ProofDescriptor, ProofMaterial, ProofTime, ProofTimes};
 use crate::finding::{Attribution, Finding, FindingDetail, KeySourceKind, Severity};
 use crate::keys::{self, PublicKey};
 use crate::registry::{CredentialFormat, Detection, ProofInput, Registry};
@@ -207,7 +207,11 @@ fn verify_proofs(
         let validity = proof_validity(&descriptor.times, ctx, &mut findings);
         proofs.push(ProofResult {
             suite: descriptor.suite,
-            algorithm: descriptor.algorithm.clone(),
+            algorithm: descriptor
+                .algorithm
+                .as_ref()
+                .and_then(DeclaredAlgorithm::name)
+                .map(str::to_owned),
             outcome,
             key_provenance: resolution.provenance,
             validity,
@@ -223,7 +227,7 @@ fn proof_input<'a>(descriptor: &'a ProofDescriptor, key: Option<&'a PublicKey>) 
             signature,
             critical,
         } => ProofInput::Jws {
-            algorithm: descriptor.algorithm.as_deref(),
+            algorithm: descriptor.algorithm.as_ref(),
             signing_input,
             signature,
             critical,

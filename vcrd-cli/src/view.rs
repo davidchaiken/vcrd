@@ -10,11 +10,11 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use vcrd_core::{
     Attribution, Base64urlProblem, BlockReason, Check, Context, CritProblem, DateField,
-    DidKeyProblem, Document, DocumentKind, Finding, FindingDetail, IssLocation, IssuerProblem,
-    JwkProblem, JwsJsonSyntax, JwsSegment, KeyRef, KeySourceKind, LeafClass, Missing,
-    NotEvaluatedReason, Phase, PhaseOutcome, ProofOutcome, PublicJwk, Rendered, RenderedJson,
-    Report, RevealLocation, Revealed, Severity, Treatment, Validity, ValueKind, WeakKeyCriterion,
-    render,
+    DeclaredAlgorithm, DidKeyProblem, Document, DocumentKind, Finding, FindingDetail, IssLocation,
+    IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment, KeyRef, KeySourceKind, LeafClass,
+    Missing, NotEvaluatedReason, Phase, PhaseOutcome, ProofOutcome, PublicJwk, Rendered,
+    RenderedJson, Report, RevealLocation, Revealed, Severity, Treatment, Validity, ValueKind,
+    WeakKeyCriterion, render,
 };
 
 /// `0` until the schema is declared stable (REQUIREMENTS §9).
@@ -452,7 +452,11 @@ fn proofs(report: &Report) -> Vec<ProofView> {
             .iter()
             .map(|p| ProofView {
                 suite: p.suite.0,
-                algorithm: p.algorithm.clone(),
+                algorithm: p
+                    .algorithm
+                    .as_ref()
+                    .and_then(DeclaredAlgorithm::name)
+                    .map(str::to_owned),
                 outcome: "not_attempted",
                 key_provenance: ProvenanceView {
                     source: None,
@@ -565,6 +569,16 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
         FindingDetail::CritInvalid { problem } => {
             json!({"type": "crit_invalid", "problem": crit_problem(problem)})
         }
+        FindingDetail::HeaderMemberType {
+            member,
+            expected,
+            found,
+        } => json!({
+            "type": "header_member_type",
+            "member": member,
+            "expected": expected,
+            "found": found,
+        }),
         FindingDetail::JwkInvalid { problem } => {
             json!({"type": "jwk_invalid", "problem": jwk_problem(problem)})
         }
@@ -707,6 +721,9 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
             json!({"type": "suite_unavailable", "suite": suite.0})
         }
         FindingDetail::AlgorithmMissing => json!({"type": "algorithm_missing"}),
+        FindingDetail::AlgorithmInvalid { found } => {
+            json!({"type": "algorithm_invalid", "found": found})
+        }
         FindingDetail::AlgorithmNone => json!({"type": "algorithm_none"}),
         FindingDetail::AlgorithmUnsupported {
             declared,
@@ -917,6 +934,7 @@ fn check(check: Check) -> &'static str {
     match check {
         Check::RevocationStatus => "revocation_status",
         Check::ContextResolution => "context_resolution",
+        Check::Audience => "audience",
         Check::HolderBinding => "holder_binding",
         Check::ReplayBinding => "replay_binding",
         Check::IssuerAccreditation => "issuer_accreditation",

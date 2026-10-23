@@ -106,6 +106,24 @@ const NOT_YET_VALID: (&str, Attribution, Severity) = (
 const EXPIRED: (&str, Attribution, Severity) =
     ("verify.proof_expired", Attribution::Input, Severity::Error);
 
+/// RFC 7515 §4.1.1: `alg` MUST be present. Without it the signature is not checked.
+#[test]
+fn a_header_without_alg_is_not_verified() {
+    let report = verified(&signed(|h, _| {
+        h.as_object_mut().unwrap().remove("alg");
+    }));
+    let (proof, findings) = proof_of(&report);
+    assert_eq!(
+        findings,
+        [(
+            "verify.algorithm_missing",
+            Attribution::Input,
+            Severity::Error
+        )]
+    );
+    assert!(matches!(proof.outcome, ProofOutcome::NotAttempted));
+}
+
 /// RFC 7519 §4.1.5: the current time must be after or equal to `nbf`.
 #[test]
 fn a_not_before_after_the_clock_fails_verify() {

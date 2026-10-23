@@ -210,3 +210,73 @@ fn a_proof_without_times_is_unbounded() {
     );
     assert_eq!(out["proofs"][0]["validity"], "unbounded");
 }
+
+/// RFC 7515 §4.1: a registered Header Parameter whose value has the wrong JSON type is
+/// reported as that, not as absent, and an `alg` that is not a string names no
+/// algorithm (§4.1.1).
+#[test]
+fn a_header_member_of_the_wrong_type_is_reported() {
+    let out = verify_fixture("header-member-types.jwt", 3);
+    let findings = out["findings"].as_array().unwrap();
+    let codes: Vec<&str> = findings
+        .iter()
+        .map(|f| f["code"].as_str().unwrap())
+        .collect();
+    for absent in [
+        "inspect.kid_missing",
+        "inspect.typ_unexpected",
+        "inspect.cty_unexpected",
+        "verify.algorithm_missing",
+    ] {
+        assert!(!codes.contains(&absent), "{absent}: {out}");
+    }
+    let members: Vec<(&str, &str)> = findings
+        .iter()
+        .filter(|f| f["code"] == "inspect.header_member_type")
+        .map(|f| {
+            assert_eq!(f["attribution"], "input", "{f}");
+            assert_eq!(f["severity"], "error", "{f}");
+            assert_eq!(f["detail"]["found"], "number", "{f}");
+            (
+                f["detail"]["member"].as_str().unwrap(),
+                f["detail"]["expected"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        members,
+        [
+            ("alg", "string"),
+            ("jku", "string"),
+            ("kid", "string"),
+            ("x5u", "string"),
+            ("x5c", "array_of_strings"),
+            ("x5t", "string"),
+            ("x5t#S256", "string"),
+            ("typ", "string"),
+            ("cty", "string"),
+        ]
+    );
+    let f = finding(&out, "verify.algorithm_invalid", "input", "error");
+    assert_eq!(
+        f["detail"],
+        json!({"type": "algorithm_invalid", "found": "number"})
+    );
+    assert_eq!(out["proofs"][0]["outcome"], "not_attempted");
+    assert_eq!(out["proofs"][0]["algorithm"], json!(null));
+}
+
+/// RFC 7519 §4.1.3: a processor not named in `aud` must reject the JWT. vcrd is not told
+/// whom it verifies for until milestone 4, so it says the check was not made, without
+/// failing. The example, with no `aud`, lists no such check (tests/example.rs).
+#[test]
+fn an_audience_is_listed_as_not_evaluated() {
+    let out = verify_fixture("aud.jwt", 0);
+    assert!(
+        out["not_evaluated"]
+            .as_array()
+            .unwrap()
+            .contains(&json!({"what": "audience", "why": "no_parameters_supplied"})),
+        "{out}"
+    );
+}

@@ -29,9 +29,9 @@ mod vcdm;
 pub use context::SystemClock;
 pub use context::{Clock, Context, ContextBuilder, FixedClock, Limits};
 pub use document::{
-    ClassedJson, ContainedInput, ContextEntry, DateTimeProblem, Document, DocumentKind,
-    EmbeddedKey, KeyHints, Leaf, LeafClass, NumericDate, ProofDescriptor, ProofMaterial, ProofTime,
-    ProofTimes, Timestamp,
+    ClassedJson, ContainedInput, ContextEntry, DateTimeProblem, DeclaredAlgorithm, Document,
+    DocumentKind, EmbeddedKey, KeyHints, Leaf, LeafClass, NumericDate, ProofDescriptor,
+    ProofMaterial, ProofTime, ProofTimes, Timestamp,
 };
 pub use finding::{
     Attribution, Base64urlProblem, CarriedKeyRef, CritProblem, DateField, DidKeyProblem, Finding,

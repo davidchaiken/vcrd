@@ -111,6 +111,8 @@ mod generate {
             ("fixtures/exp-past.jwt", exp_past()),
             ("fixtures/crit-unsupported.jwt", crit_unsupported()),
             ("fixtures/canary.jwt", canary()),
+            ("fixtures/header-member-types.jwt", header_member_types()),
+            ("fixtures/aud.jwt", aud()),
         ]
     }
 
@@ -366,6 +368,27 @@ mod generate {
         let (key, mut header, payload) = example_parts();
         header["crit"] = json!(["urn:example:unimplemented"]);
         header["urn:example:unimplemented"] = json!(true);
+        sign(&key, &header, &payload)
+    }
+
+    /// Every Header Parameter RFC 7515 §4.1 gives a type, other than `jwk` and `crit`,
+    /// set to a number. Each is the wrong type rather than absent, and `alg` names no
+    /// algorithm, so the signature is never checked.
+    fn header_member_types() -> Vec<u8> {
+        let (key, mut header, payload) = example_parts();
+        for member in [
+            "alg", "jku", "kid", "x5u", "x5c", "x5t", "x5t#S256", "typ", "cty",
+        ] {
+            header[member] = json!(1);
+        }
+        sign(&key, &header, &payload)
+    }
+
+    /// The example with an audience (RFC 7519 §4.1.3), which vcrd cannot check without
+    /// being told whom it verifies for. Correctly signed.
+    fn aud() -> Vec<u8> {
+        let (key, header, mut payload) = example_parts();
+        payload["aud"] = json!("https://verifier.example");
         sign(&key, &header, &payload)
     }
 

@@ -2,8 +2,8 @@
 //! failed parse still reports (ARCHITECTURE §3, §4).
 
 use vcrd_core::{
-    Attribution, FindingDetail, FormatDetail, JwsJsonSyntax, JwsSegment, Limits, PhaseOutcome,
-    Registry, Report, Severity, inspect,
+    Attribution, DeclaredAlgorithm, FindingDetail, FormatDetail, JwsJsonSyntax, JwsSegment, Limits,
+    PhaseOutcome, Registry, Report, Severity, inspect,
 };
 
 use support::{at, b64, example, with_payload};
@@ -206,8 +206,8 @@ fn reports_every_bad_segment_and_keeps_the_good_ones() {
         panic!("{report:?}")
     };
     assert_eq!(
-        detail.header.as_ref().unwrap().alg.as_deref(),
-        Some("EdDSA")
+        detail.header.as_ref().unwrap().alg,
+        Some(DeclaredAlgorithm::Name("EdDSA".to_owned()))
     );
     assert!(detail.payload.is_none());
 
