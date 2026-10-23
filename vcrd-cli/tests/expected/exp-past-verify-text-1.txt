@@ -34,6 +34,8 @@ Findings
                       |             |          | value: 1780272000
                       |             |          | value_date_time: 2026-06-01T00:00:00Z
 
+ Not shown   1 info finding (see --verbosity 2)
+
 Not evaluated
  Check                | Reason
 ----------------------+-----------------

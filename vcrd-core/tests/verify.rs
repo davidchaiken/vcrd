@@ -42,7 +42,8 @@ mod support {
     }
 
     /// A credential with a `did:key` issuer, its header and payload changed by `edit`,
-    /// signed by the issuer's key.
+    /// signed by the issuer's key. Its `alg` is `Ed25519`, not the deprecated `EdDSA`,
+    /// so that each test's findings are those of its own condition (RFC 9864).
     pub fn signed(edit: impl FnOnce(&mut Value, &mut Value)) -> Vec<u8> {
         let key = key();
         let multibase = format!(
@@ -52,7 +53,7 @@ mod support {
         );
         let issuer = format!("did:key:{multibase}");
         let mut header = json!({
-            "alg": "EdDSA",
+            "alg": "Ed25519",
             "cty": "vc",
             "kid": format!("{issuer}#{multibase}"),
             "typ": "vc+jwt",

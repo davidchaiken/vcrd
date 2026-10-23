@@ -178,6 +178,41 @@ fn output_matches_the_expected_files() {
     }
 }
 
+/// docs/output.md: level 1 lists the warnings and errors, and counts the info findings
+/// it leaves out, which level 2 lists. The example has one, `verify.algorithm_deprecated`.
+#[test]
+fn level_1_counts_the_info_findings_that_level_2_lists() {
+    let stdout = |args: &[&str]| {
+        let output = support::vcrd()
+            .args(["verify", support::EXAMPLE, "--now", support::NOW])
+            .args(args)
+            .output()
+            .unwrap();
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let count = "1 info finding (see --verbosity 2)";
+
+    let text = stdout(&[]);
+    assert!(!text.contains("verify.algorithm_deprecated"), "{text}");
+    assert!(
+        text.lines()
+            .any(|l| l.starts_with(" Not shown") && l.ends_with(count)),
+        "{text}"
+    );
+    let plain = stdout(&["--format", "plain"]);
+    assert!(!plain.contains("verify.algorithm_deprecated"), "{plain}");
+    assert!(
+        plain.lines().any(|l| l == format!("findings: {count}")),
+        "{plain}"
+    );
+
+    for format in ["text", "plain"] {
+        let full = stdout(&["--format", format, "--verbosity", "2"]);
+        assert!(full.contains("verify.algorithm_deprecated"), "{full}");
+        assert!(!full.contains(count), "{full}");
+    }
+}
+
 #[test]
 #[ignore = "rewrites the expected output"]
 fn regenerate() {

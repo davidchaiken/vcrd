@@ -286,6 +286,14 @@ pub enum FindingDetail {
         declared: String,
         supported: Vec<&'static str>,
     },
+    /// The declared algorithm's name is deprecated: new deployments should use its
+    /// replacement (RFC 9864 §4.4). RFC 9864 sets no rule for a verifier, so this is
+    /// information. `replacement` is the name that replaces it for the key used, and
+    /// is absent when no key was resolved.
+    AlgorithmDeprecated {
+        declared: &'static str,
+        replacement: Option<&'static str>,
+    },
     /// The signature has the wrong length for its algorithm.
     SignatureLength {
         algorithm: &'static str,
@@ -297,6 +305,10 @@ pub enum FindingDetail {
     /// The R of an Ed25519 signature has small order. A verifier that checks only
     /// [s]B = R + [k]A can accept such a signature; vcrd rejects it (ARCHITECTURE §8).
     SignatureSmallOrder { algorithm: &'static str },
+    /// The S of an Ed25519 signature is not less than the group order L, which RFC 8032
+    /// §5.1.7 makes invalid. Checked by vcrd rather than left to `ed25519-dalek`, which
+    /// accepts it when its `legacy_compatibility` feature is on (ARCHITECTURE §8).
+    SignatureScalarOutOfRange { algorithm: &'static str },
     /// `crit` lists extensions the suite does not implement, so the JWS is invalid
     /// (RFC 7515 §4.1.11). The signature is still checked, and its outcome reported,
     /// for the information. Attributed to vcrd.
@@ -343,6 +355,9 @@ pub enum FindingDetail {
         codec: u64,
         name: Option<&'static str>,
     },
+    /// The `did:key` holds a key-agreement key, which no verifier may use for a
+    /// signature (RFC 8037 §3.2).
+    DidKeyNotForSigning { codec: u64, name: &'static str },
     /// The key cannot bind a signature to a message (REQUIREMENTS §10). `criterion`
     /// says which of the algorithm's weak-key criteria it meets (ARCHITECTURE §8).
     WeakKey {
@@ -427,9 +442,13 @@ impl FindingDetail {
             FindingDetail::AlgorithmInvalid { .. } => "verify.algorithm_invalid",
             FindingDetail::AlgorithmNone => "verify.algorithm_none",
             FindingDetail::AlgorithmUnsupported { .. } => "verify.algorithm_unsupported",
+            FindingDetail::AlgorithmDeprecated { .. } => "verify.algorithm_deprecated",
             FindingDetail::SignatureLength { .. } => "verify.signature_length",
             FindingDetail::SignatureInvalid { .. } => "verify.signature_invalid",
             FindingDetail::SignatureSmallOrder { .. } => "verify.signature_small_order",
+            FindingDetail::SignatureScalarOutOfRange { .. } => {
+                "verify.signature_scalar_out_of_range"
+            }
             FindingDetail::CritUnsupported { .. } => "verify.crit_unsupported",
             FindingDetail::ProofExpired { .. } => "verify.proof_expired",
             FindingDetail::ProofNotYetValid { .. } => "verify.proof_not_yet_valid",
@@ -438,6 +457,7 @@ impl FindingDetail {
             FindingDetail::IssuerMethodUnsupported { .. } => "verify.issuer_method_unsupported",
             FindingDetail::DidKeyUndecodable { .. } => "verify.did_key_undecodable",
             FindingDetail::DidKeyCodecUnsupported { .. } => "verify.did_key_codec_unsupported",
+            FindingDetail::DidKeyNotForSigning { .. } => "verify.did_key_not_for_signing",
             FindingDetail::WeakKey { .. } => "verify.weak_key",
             FindingDetail::EmbeddedKeyRefused { .. } => "verify.embedded_key_refused",
             FindingDetail::CredentialKeyMismatch { .. } => "verify.credential_key_mismatch",
@@ -589,4 +609,11 @@ pub enum DidKeyProblem {
     KeyLength { expected: usize, found: usize },
     /// The key bytes are not a point on the curve.
     PointInvalid,
+    /// The key bytes encode a point, but not as RFC 8032 §5.1.3 requires: y at or above
+    /// p, or x = 0 with the sign bit set. Another encoding of the same point would give
+    /// another `did:key` and another thumbprint.
+    PointNotCanonical,
+    /// A component precedes the multibase value, as a version would in did:key v0.9's
+    /// Create algorithm, whose syntax has none.
+    VersionPresent,
 }

@@ -13,7 +13,7 @@ use tabled::builder::Builder;
 use tabled::settings::object::{Cell as TableCell, Columns};
 use tabled::settings::{Style, Width};
 
-use crate::view::{Envelope, LeafView, PhaseView, ProofView, ResultView};
+use crate::view::{Envelope, FindingView, LeafView, PhaseView, ProofView, ResultView};
 
 /// The `text` output at this verbosity, 1 to 3.
 pub fn text(envelope: &Envelope, verbosity: u8) -> String {
@@ -247,8 +247,17 @@ fn sections(envelope: &Envelope, verbosity: u8) -> Vec<Section> {
         sections.extend(warnings(envelope));
         return sections;
     }
+    // Level 1 lists the warnings and errors, and counts the rest, so that nothing is
+    // left out silently.
+    let listed: Vec<(usize, &FindingView)> = result
+        .findings
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| full || f.severity != "info")
+        .collect();
+    let is_listed = |code: &str| listed.iter().any(|(_, f)| f.code == code);
     let verify_requested = result.phases.verify.outcome != "not_requested";
-    sections.push(phases(result, full, verify_requested));
+    sections.push(phases(result, full, verify_requested, is_listed));
     if full || verify_requested {
         for (index, proof) in result.proofs.iter().enumerate() {
             sections.push(proof_section(index, proof, full));
@@ -272,8 +281,22 @@ fn sections(envelope: &Envelope, verbosity: u8) -> Vec<Section> {
             ));
         }
     }
-    if !result.findings.is_empty() {
-        sections.push(findings(result));
+    if !listed.is_empty() {
+        sections.push(findings(&listed));
+    }
+    let left_out = result.findings.len() - listed.len();
+    if left_out > 0 {
+        let s = if left_out == 1 { "" } else { "s" };
+        sections.push(Section {
+            name: String::new(),
+            // Under the table's heading when there is a table.
+            title: listed.is_empty().then_some("Findings"),
+            body: Body::Fields(vec![field(
+                "findings",
+                "Not shown",
+                format!("{left_out} info finding{s} (see --verbosity 2)"),
+            )]),
+        });
     }
     // After the findings: the status is always the first line.
     sections.extend(warnings(envelope));
@@ -403,8 +426,14 @@ fn summary(envelope: &Envelope, full: bool) -> Vec<Field> {
 }
 
 /// Level 1 leaves out parse, whose failure the other phases' `blocked_by` reports,
-/// and verify when it was not requested.
-fn phases(result: &ResultView, full: bool, verify_requested: bool) -> Section {
+/// and verify when it was not requested. Each phase names only the codes of findings
+/// the level lists.
+fn phases(
+    result: &ResultView,
+    full: bool,
+    verify_requested: bool,
+    is_listed: impl Fn(&str) -> bool,
+) -> Section {
     let phases = &result.phases;
     let mut rows = Vec::new();
     for (name, phase, shown) in [
@@ -413,7 +442,7 @@ fn phases(result: &ResultView, full: bool, verify_requested: bool) -> Section {
         ("verify", &phases.verify, full || verify_requested),
     ] {
         if shown {
-            rows.push(phase_row(name, phase));
+            rows.push(phase_row(name, phase, &is_listed));
         }
     }
     Section {
@@ -432,7 +461,7 @@ fn phases(result: &ResultView, full: bool, verify_requested: bool) -> Section {
     }
 }
 
-fn phase_row(name: &str, phase: &PhaseView) -> Row {
+fn phase_row(name: &str, phase: &PhaseView, is_listed: impl Fn(&str) -> bool) -> Row {
     // In the reader's terms: what failed, or what is lacking and where vcrd looked.
     let blocked =
         phase
@@ -456,7 +485,15 @@ fn phase_row(name: &str, phase: &PhaseView) -> Row {
         cells: vec![
             text_cell(name),
             text_cell(phase.outcome),
-            text_cell(phase.findings.join(", ")),
+            text_cell(
+                phase
+                    .findings
+                    .iter()
+                    .copied()
+                    .filter(|code| is_listed(code))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
             text_cell(blocked),
         ],
     }
@@ -574,12 +611,12 @@ fn leaves(name: &'static str, title: &'static str, leaves: &[LeafView]) -> Secti
     }
 }
 
-fn findings(result: &ResultView) -> Section {
-    let rows = result
-        .findings
+/// The findings a level lists, each with its index in the JSON `findings`, which
+/// names it in `plain`.
+fn findings(listed: &[(usize, &FindingView)]) -> Section {
+    let rows = listed
         .iter()
-        .enumerate()
-        .map(|(index, f)| Row {
+        .map(|&(index, f)| Row {
             name: format!("[{index}]"),
             cells: vec![
                 text_cell(f.code),

@@ -12,7 +12,7 @@ credential.valid_from: 2026-01-01T00:00:00Z
 credential.valid_until: 2031-01-01T00:00:00Z
 phases.parse: outcome=passed
 phases.inspect: outcome=passed
-phases.verify: outcome=passed
+phases.verify: outcome=passed findings=verify.algorithm_deprecated
 proofs[0].suite: jws
 proofs[0].algorithm: EdDSA
 proofs[0].outcome: verified
@@ -36,5 +36,6 @@ credential.metadata.type[0]: type=string value=VerifiableCredential visibility=n
 credential.metadata.type[1]: type=string value=ExampleDegreeCredential visibility=non_sensitive
 credential.metadata.validFrom: type=string value=2026-01-01T00:00:00Z visibility=non_sensitive
 credential.metadata.validUntil: type=string value=2031-01-01T00:00:00Z visibility=non_sensitive
+findings[0]: code=verify.algorithm_deprecated attribution=input severity=info declared=EdDSA replacement=Ed25519
 not_evaluated.issuer_accreditation: reason=out_of_scope
 not_evaluated.context_resolution: reason=not_implemented

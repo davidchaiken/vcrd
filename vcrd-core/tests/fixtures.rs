@@ -113,6 +113,7 @@ mod generate {
             ("fixtures/canary.jwt", canary()),
             ("fixtures/header-member-types.jwt", header_member_types()),
             ("fixtures/aud.jwt", aud()),
+            ("fixtures/alg-ed25519.jwt", alg_ed25519()),
         ]
     }
 
@@ -299,6 +300,14 @@ mod generate {
         [b64_json(&header), b64_json(&payload), b64(&[0; 114])]
             .join(".")
             .into_bytes()
+    }
+
+    /// The example declaring `alg: Ed25519`, the fully specified name RFC 9864
+    /// registers for what `EdDSA` with an Ed25519 key names. Correctly signed.
+    fn alg_ed25519() -> Vec<u8> {
+        let (key, mut header, payload) = example_parts();
+        header["alg"] = json!("Ed25519");
+        sign(&key, &header, &payload)
     }
 
     /// An issuer whose `did:key` encodes the identity point, which has small order

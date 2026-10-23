@@ -25,6 +25,9 @@ Claims
  credentialSubject.id          | string | (masked) | masked
  id                            | string | (masked) | masked
 
+Findings
+ Not shown   1 info finding (see --verbosity 2)
+
 Not evaluated
  Check                | Reason
 ----------------------+-----------------

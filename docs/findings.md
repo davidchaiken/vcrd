@@ -24,7 +24,9 @@ Verifiable Credentials Data Model, and DID is a Decentralized Identifier.
 Each document named is linked to the version cited: an RFC, which never changes once
 published; a W3C Recommendation by its dated address; and a document in this repository
 relatively, so that it opens at the same commit as this one. The WHATWG URL Standard is a
-living standard, with no fixed version to link.
+living standard, with no fixed version to link. The did:key method, v0.9, is a W3C
+Credentials Community Group draft, and the multicodec table a registry kept in a
+repository; neither has a dated copy, so each is linked where it is published now.
 
 ## Parse
 
@@ -500,13 +502,31 @@ living standard, with no fixed version to link.
 - **Remedy.** Use a verifier that implements `declared`. vcrd's algorithms grow in
   milestone 2 ([DEVELOPMENT-PLAN.md]).
 
+### <a id="verify.algorithm_deprecated"></a>`verify.algorithm_deprecated`
+
+- **Meaning.** The header names its algorithm by a deprecated name: `EdDSA`, which
+  [RFC 9864] replaces with one name per curve. vcrd checks the signature as usual, and
+  this alone never fails verify.
+- **Attribution and severity.** `input`, `info`. `text` and `plain` list it from
+  verbosity level 2, and count it at level 1.
+- **Detail.** `declared`: the name in the header. `replacement`: the name that replaces
+  it for the key vcrd resolved, such as `Ed25519`, or `null` when no key was resolved.
+- **Standard.** [RFC 9864] §2.2 and §4.1.2. Its §4.4 says new deployments SHOULD use the
+  replacement, and it sets no rule for a verifier.
+- **Remedy.** None needed. An issuer can declare `replacement` instead; a verifier
+  written before [RFC 9864] may not know the new name.
+
 ### <a id="verify.signature_length"></a>`verify.signature_length`
 
 - **Meaning.** The signature has the wrong length for its algorithm, so it is not
   checked.
 - **Attribution and severity.** `input`, `error`.
-- **Detail.** `algorithm`. `expected`, `found`: lengths, in bytes.
-- **Standard and remedy.** Round 2 of the milestone 1 review.
+- **Detail.** `algorithm`: as the header names it. `expected`, `found`: lengths, in
+  bytes.
+- **Standard.** [RFC 8037] §3.1 makes the JWS Signature the EdDSA signature, which
+  [RFC 8032] §5.1.7 step 1 splits into two 32-byte halves.
+- **Remedy.** Check that the third segment is the whole signature, and that the
+  algorithm is the one the issuer used.
 
 ### <a id="verify.signature_invalid"></a>`verify.signature_invalid`
 
@@ -514,7 +534,9 @@ living standard, with no fixed version to link.
   payload changed after signing, or a different key signed it.
 - **Attribution and severity.** `input`, `error`.
 - **Detail.** `algorithm`: the algorithm checked.
-- **Standard.** [RFC 7515] §5.2 steps 9 and 10.
+- **Standard.** [RFC 7515] §5.2 steps 9 and 10; for Ed25519, [RFC 8032] §5.1.7. vcrd
+  checks [S]B = R + [k]A', which §5.1.7 allows in place of the same equation multiplied
+  by 8; a verifier that checks that one can accept a signature vcrd rejects (§8.8).
 - **Remedy.** Any change to a segment invalidates the signature, re-encoding included.
   Compare `key_provenance` with the key the issuer says it signed with.
 
@@ -523,8 +545,27 @@ living standard, with no fixed version to link.
 - **Meaning.** The R of an Ed25519 signature has small order. A verifier that checks only
   the group equation can accept such a signature; vcrd rejects it.
 - **Attribution and severity.** `input`, `error`.
-- **Detail.** `algorithm`.
-- **Standard and remedy.** Round 2 of the milestone 1 review.
+- **Detail.** `algorithm`: as the header names it.
+- **Standard.** None requires the rejection: [RFC 8032] §5.1.7 accepts any R that
+  decodes. Signing never produces such an R, so the signature was constructed some other
+  way. vcrd uses the strictest verification its library offers, which rejects it, and
+  names the reason ([REQUIREMENTS] §10; [ARCHITECTURE] §8).
+- **Remedy.** Obtain the credential again from its issuer. Another verifier may accept
+  this signature.
+
+### <a id="verify.signature_scalar_out_of_range"></a>`verify.signature_scalar_out_of_range`
+
+- **Meaning.** The S of an Ed25519 signature is not less than the group order L, so the
+  signature is invalid. Signing never produces such an S; a verifier that does not check
+  the range accepts S + L wherever it accepts S, so it is usually a valid signature
+  changed afterward.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `algorithm`: as the header names it.
+- **Standard.** [RFC 8032] §5.1.7 step 1, and §8.4 on why the check matters. vcrd checks
+  it itself, since `ed25519-dalek` skips it when another crate in the same build turns on
+  its `legacy_compatibility` feature ([ARCHITECTURE] §8).
+- **Remedy.** Obtain the credential again from its issuer. Another verifier may accept
+  this signature.
 
 ### <a id="verify.crit_unsupported"></a>`verify.crit_unsupported`
 
@@ -572,31 +613,66 @@ living standard, with no fixed version to link.
 - **Attribution and severity.** `environment`, `error`.
 - **Detail.** `consulted`: where vcrd looked: `issuer_identifier`, `caller_supplied`,
   `credential_embedded`.
-- **Standard and remedy.** Round 2 of the milestone 1 review.
+- **Standard.** None: vcrd's order of key sources ([REQUIREMENTS] §10; [ARCHITECTURE]
+  §8).
+- **Remedy.** Not reported in milestone 1, whose only source is the issuer identifier:
+  when a credential gives none, verify does not run, and `phases.verify.blocked_by`
+  reports `missing: key_material` instead. Milestone 2 adds keys the caller supplies
+  ([DEVELOPMENT-PLAN.md]).
 
 ### <a id="verify.issuer_method_unsupported"></a>`verify.issuer_method_unsupported`
 
 - **Meaning.** The issuer identifier uses a URL scheme or DID method vcrd cannot resolve
   to a key.
 - **Attribution and severity.** `vcrd`, `error`.
-- **Detail.** `method`: the scheme or method.
-- **Standard and remedy.** Round 2 of the milestone 1 review.
+- **Detail.** `method`: the scheme, such as `https`, or the method, such as `did:web`.
+- **Standard.** None: vcrd resolves offline methods first, `did:key` alone in milestone 1,
+  and methods that need the network only with the caller's opt-in ([REQUIREMENTS] §8,
+  §10).
+- **Remedy.** Use a verifier that resolves `method`, or, from milestone 2, supply the
+  issuer's key ([DEVELOPMENT-PLAN.md]).
 
 ### <a id="verify.did_key_undecodable"></a>`verify.did_key_undecodable`
 
 - **Meaning.** The issuer is a `did:key` that cannot be decoded.
 - **Attribution and severity.** `input`, `error`.
-- **Detail.** `problem`: `not_base58btc`, `base58_invalid`, `codec_invalid`,
-  `{"key_length": {"expected": n, "found": m}}` or `point_invalid`.
-- **Standard and remedy.** Round 2 of the milestone 1 review.
+- **Detail.** `problem`, one of:
+  - `version_present`: a component, such as `1`, comes before the multibase value;
+  - `not_base58btc`: the multibase value does not start with `z`;
+  - `base58_invalid`: it is not valid base58btc;
+  - `codec_invalid`: the multicodec header is not a valid unsigned varint;
+  - `{"key_length": {"expected": n, "found": m}}`: the key has the wrong length for its
+    codec;
+  - `point_invalid`: the key is not a point on the curve;
+  - `point_not_canonical`: the key is a point, encoded other than as [RFC 8032] §5.1.3
+    requires, so that the same point would have another `did:key` and thumbprint.
+- **Standard.** [did:key] v0.9: the Create algorithm's step 3, the Decode Public Key
+  algorithm, and the Signature Method Creation algorithm's steps 3 and 4; [RFC 8032]
+  §5.1.3 for `point_not_canonical`. The method's syntax has no version, though its
+  Create algorithm reads one.
+- **Remedy.** The issuer identifier is malformed. Obtain the credential again from its
+  issuer.
 
 ### <a id="verify.did_key_codec_unsupported"></a>`verify.did_key_codec_unsupported`
 
-- **Meaning.** The `did:key` names a key type vcrd cannot use.
+- **Meaning.** The `did:key` names a signing key type vcrd cannot use.
 - **Attribution and severity.** `vcrd`, `error`.
-- **Detail.** `codec`: the multicodec code, in hexadecimal. `name`: its name, when vcrd
-  knows it, otherwise `null`.
-- **Standard and remedy.** Round 2 of the milestone 1 review.
+- **Detail.** `codec`: the multicodec code, in hexadecimal. `name`: its name in the
+  [multicodec table], when vcrd knows it, otherwise `null`.
+- **Standard.** None: the key types vcrd implements ([ARCHITECTURE] §8).
+- **Remedy.** Use a verifier that implements `name`. `p256-pub` and `p521-pub` arrive in
+  milestone 2 ([DEVELOPMENT-PLAN.md]).
+
+### <a id="verify.did_key_not_for_signing"></a>`verify.did_key_not_for_signing`
+
+- **Meaning.** The `did:key` holds a key-agreement key, X25519 or X448, which cannot
+  verify a signature.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `codec`: the multicodec code, in hexadecimal. `name`: `x25519-pub` or
+  `x448-pub`.
+- **Standard.** [RFC 8037] §3.2: these keys MUST NOT be used for signing.
+- **Remedy.** The issuer identifier names a key the issuer cannot sign with. Obtain the
+  credential again from its issuer.
 
 ### <a id="verify.weak_key"></a>`verify.weak_key`
 
@@ -604,7 +680,11 @@ living standard, with no fixed version to link.
 - **Attribution and severity.** `input`, `error`.
 - **Detail.** `key`: the key, with its `source`, `method` and `thumbprint`. `criterion`:
   the weak-key test it fails; for Ed25519, `small_order`.
-- **Standard and remedy.** Round 2 of the milestone 1 review.
+- **Standard.** [REQUIREMENTS] §10, with the criteria in [ARCHITECTURE] §8. [RFC 8032]
+  does not ask a verifier to check the key; vcrd checks it when the key is resolved, so
+  that the finding names it.
+- **Remedy.** Do not rely on the credential. Under a small-order Ed25519 key, signatures
+  can be made that verify for almost any message without a private key.
 
 ### <a id="verify.embedded_key_refused"></a>`verify.embedded_key_refused`
 
@@ -612,7 +692,11 @@ living standard, with no fixed version to link.
   vcrd uses only if the caller opts in.
 - **Attribution and severity.** `policy`, `error`.
 - **Detail.** `location`: where the key is, such as `header.jwk`.
-- **Standard and remedy.** Round 2 of the milestone 1 review.
+- **Standard.** [REQUIREMENTS] §10's order of key sources. [RFC 7515] §4.1.3 defines
+  `jwk`.
+- **Remedy.** Such a key shows only that whoever made the credential holds its private
+  key. `key_provenance.credential_key.verifies_signature` says whether it signed. The
+  opt-in arrives in milestone 2 ([DEVELOPMENT-PLAN.md]).
 
 ### <a id="verify.credential_key_mismatch"></a>`verify.credential_key_mismatch`
 
@@ -621,18 +705,26 @@ living standard, with no fixed version to link.
 - **Attribution and severity.** `input`, `warning`.
 - **Detail.** `carried_key`: the carried key, with its `location` and `thumbprint`.
   `key`: the key vcrd established, with its `source`, `method` and `thumbprint`.
-- **Standard and remedy.** Round 2 of the milestone 1 review.
+- **Standard.** [RFC 7515] §4.1.3 makes `jwk` the public key that corresponds to the key
+  that signed; [ARCHITECTURE] §8.
+- **Remedy.** Read `key_provenance.credential_key`. When `verifies_signature` is `true`
+  and the signature fails under the issuer's key, someone other than the issuer signed
+  it: specific evidence of key substitution.
 
 [ARCHITECTURE]: ../ARCHITECTURE.md
 [DEVELOPMENT-PLAN.md]: ../DEVELOPMENT-PLAN.md
+[did:key]: https://w3c-ccg.github.io/did-key-spec/
+[multicodec table]: https://github.com/multiformats/multicodec/blob/master/table.csv
 [REQUIREMENTS]: ../REQUIREMENTS.md
 [RFC 3339]: https://www.rfc-editor.org/rfc/rfc3339
 [RFC 7515]: https://www.rfc-editor.org/rfc/rfc7515
 [RFC 7517]: https://www.rfc-editor.org/rfc/rfc7517
 [RFC 7518]: https://www.rfc-editor.org/rfc/rfc7518
 [RFC 7519]: https://www.rfc-editor.org/rfc/rfc7519
+[RFC 8032]: https://www.rfc-editor.org/rfc/rfc8032
 [RFC 8037]: https://www.rfc-editor.org/rfc/rfc8037
 [RFC 8259]: https://www.rfc-editor.org/rfc/rfc8259
+[RFC 9864]: https://www.rfc-editor.org/rfc/rfc9864
 [VC-JOSE-COSE]: https://www.w3.org/TR/2026/REC-vc-jose-cose-20261013/
 [VCDM 1.1]: https://www.w3.org/TR/2022/REC-vc-data-model-20220303/
 [VCDM 2.0]: https://www.w3.org/TR/2025/REC-vc-data-model-2.0-20250515/

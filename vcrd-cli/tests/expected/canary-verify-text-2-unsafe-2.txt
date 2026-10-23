@@ -12,11 +12,11 @@
  Valid until   2031-01-01T00:00:00Z
 
 Phases
- Phase   | Outcome | Findings                | Blocked by
----------+---------+-------------------------+------------
- parse   | passed  |                         |
- inspect | failed  | inspect.jwk_private_key |
- verify  | passed  |                         |
+ Phase   | Outcome | Findings                    | Blocked by
+---------+---------+-----------------------------+------------
+ parse   | passed  |                             |
+ inspect | failed  | inspect.jwk_private_key     |
+ verify  | passed  | verify.algorithm_deprecated |
 
 Proof
  Suite                jws
@@ -57,9 +57,11 @@ Claims
  id                               | string | urn:example:CANARY-C1 | revealed
 
 Findings
- Code                    | Attribution | Severity | Detail
--------------------------+-------------+----------+------------
- inspect.jwk_private_key | input       | error    | members: d
+ Code                        | Attribution | Severity | Detail
+-----------------------------+-------------+----------+----------------------
+ inspect.jwk_private_key     | input       | error    | members: d
+ verify.algorithm_deprecated | input       | info     | declared: EdDSA
+                             |             |          | replacement: Ed25519
 
 Warnings
  Code   | Message

@@ -733,9 +733,18 @@ multicodec prefix names the key type:
 | `0x1202` | p521-pub | yes, compressed SEC1 | yes |
 | `0xe7` | secp256k1-pub | named only | no — ES256K undecided (§10 [C3]) |
 | `0x1205` | rsa-pub | named only | no |
+| `0x1203` | ed448-pub | named only | no — Ed448 is not planned (§10 [C3]) |
+| `0xec` | x25519-pub | named only | never — a key-agreement key |
+| `0x1204` | x448-pub | named only | never — a key-agreement key |
 
 A codec vcrd can name but not use fails by name and is attributed to vcrd — REQUIREMENTS
-§10's by-name principle applied to key types.
+§10's by-name principle applied to key types. A key-agreement codec is attributed to the
+input instead, as `verify.did_key_not_for_signing`: RFC 8037 §3.2 forbids signing with
+X25519 and X448 keys. An Ed25519 key must be the canonical encoding of its point (RFC 8032
+§5.1.3), which `curve25519-dalek` does not check, so vcrd encodes the point again and
+compares; another encoding of the same point would give another `did:key` and thumbprint.
+A component before the multibase value, which did:key v0.9's Create algorithm reads as a
+version and its syntax does not have, is reported as `version_present`.
 
 ### The provenance record
 
@@ -800,7 +809,8 @@ hash of the secret, and the output is often shared more widely than the input.
 
 | Algorithm | Key type | Crate |
 |---|---|---|
-| EdDSA | OKP, Ed25519 | `ed25519-dalek`, using `verify_strict` |
+| Ed25519 (RFC 9864 §2.2) | OKP, Ed25519 | `ed25519-dalek`, using `verify_strict` |
+| EdDSA, deprecated (RFC 9864 §4.1.2) | OKP, Ed25519 | as Ed25519, with `verify.algorithm_deprecated`, `info` |
 | ES256 | EC, P-256 | `p256` |
 | ES512 | EC, P-521 | `p521` |
 | RS256 | RSA | `rsa`, PKCS #1 v1.5 with SHA-256 |
@@ -830,7 +840,7 @@ its own finding. The criteria, checked at resolution:
 
 | Algorithm | Criterion | Enforced by the crate? |
 |---|---|---|
-| EdDSA | a small-order public key is weak (`VerifyingKey::is_weak`); `verify_strict` also rejects a small-order signature point R, which vcrd checks first so that the finding names it (`verify.signature_small_order`) | no — vcrd must check |
+| EdDSA | a small-order public key is weak (`VerifyingKey::is_weak`); `verify_strict` also rejects a small-order signature point R, which vcrd checks first so that the finding names it (`verify.signature_small_order`). An S not less than the group order is invalid (RFC 8032 §5.1.7), and vcrd checks that too (`verify.signature_scalar_out_of_range`): `ed25519-dalek` accepts such an S when its `legacy_compatibility` feature is on, which Cargo turns on for the whole build if any crate in it asks | no — vcrd must check |
 | ES256, ES512 | the identity point is rejected; P-256 and P-521 have cofactor 1, so no other point has small order | yes — decoding rejects the identity (`elliptic-curve-0.13.8/src/public_key.rs:232`) |
 | RS256 | modulus of at least 2048 bits (RFC 7518 §3.3, a MUST); odd exponent of at least 3 | partly — `RsaPublicKey::new` rejects even and out-of-range exponents, but sets no minimum modulus (`rsa-0.9.10/src/key.rs:501–533`) |
 | HS256 | key of at least 256 bits (RFC 7518 §3.2, a MUST) | no |

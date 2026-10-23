@@ -31,6 +31,8 @@ Findings
  inspect.issuer_missing      | input       | error    |
  verify.embedded_key_refused | policy      | error    | location: header.jwk
 
+ Not shown   1 info finding (see --verbosity 2)
+
 Not evaluated
  Check                | Reason
 ----------------------+-----------------

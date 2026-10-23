@@ -12,11 +12,11 @@
  Valid until   2031-01-01T00:00:00Z
 
 Phases
- Phase   | Outcome | Findings | Blocked by
----------+---------+----------+------------
- parse   | passed  |          |
- inspect | passed  |          |
- verify  | passed  |          |
+ Phase   | Outcome | Findings                    | Blocked by
+---------+---------+-----------------------------+------------
+ parse   | passed  |                             |
+ inspect | passed  |                             |
+ verify  | passed  | verify.algorithm_deprecated |
 
 Proof
  Suite        jws
@@ -55,6 +55,12 @@ Metadata
  type[1]     | string | ExampleDegreeCredential                                  | non_sensitive
  validFrom   | string | 2026-01-01T00:00:00Z                                     | non_sensitive
  validUntil  | string | 2031-01-01T00:00:00Z                                     | non_sensitive
+
+Findings
+ Code                        | Attribution | Severity | Detail
+-----------------------------+-------------+----------+----------------------
+ verify.algorithm_deprecated | input       | info     | declared: EdDSA
+                             |             |          | replacement: Ed25519
 
 Not evaluated
  Check                | Reason

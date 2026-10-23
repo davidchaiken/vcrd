@@ -43,6 +43,7 @@ it says otherwise.
 | `vcdm-1.1-encoding.jwt` | The example's credential in VCDM 1.1's JWT encoding, inside a `vc` claim, which vcrd does not read yet (ARCHITECTURE §10 [F2]). Verify is blocked, since the issuer is in `iss`. | `inspect.vcdm_1_1_jwt_encoding` | vcrd | 6 |
 | `tampered-claim.jwt` | The degree's name changed after signing; the signature is the example's. | `verify.signature_invalid` | input | 4 |
 | `alg-none.jwt` | `alg` is `none`, with the empty signature of an Unsecured JWS (RFC 7518 §3.6). Always rejected (ARCHITECTURE §8). | `verify.algorithm_none` | input | 4 |
+| `alg-ed25519.jwt` | `alg` is `Ed25519`, the fully specified name RFC 9864 registers for what `EdDSA` with an Ed25519 key names, and which it prefers now that `EdDSA` is deprecated. Correctly signed. | none | — | 0 |
 | `alg-ed448.jwt` | `alg` is `Ed448` (RFC 9864), which no milestone plans to implement, with 114 zero bytes as the signature. Rejected by name; the signature is never read. | `verify.algorithm_unsupported` | vcrd | 6 |
 | `weak-key.jwt` | Not derived from the example's key: the issuer's `did:key` encodes the identity point, which has small order. The signature is one a verifier without weak-key checks accepts for any message (ARCHITECTURE §8). | `verify.weak_key` | input | 4 |
 | `small-order-r.jwt` | The example's key, and a signature whose R is the identity point, which has small order, built so that a verifier without that check accepts it (ARCHITECTURE §8). | `verify.signature_small_order` | input | 4 |

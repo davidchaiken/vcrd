@@ -32,6 +32,7 @@
     { "id": "input", "type": "pickString", "description": "Credential (type to filter)",
       "options": [
         "examples/ed25519.jwt",
+        "fixtures/alg-ed25519.jwt",
         "fixtures/alg-ed448.jwt",
         "fixtures/alg-none.jwt",
         "fixtures/aud.jwt",

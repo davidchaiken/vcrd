@@ -156,6 +156,16 @@ every other `alg` exercise the by-name rejection path from day one.
     private-key members, and an unknown key type (a warning attributed to vcrd).
   - A critical extension the suite does not implement fails verify, attributed to vcrd.
     The signature is still checked, and its outcome reported (decided 2026-10-07).
+  - Decided 2026-10-23, in the milestone review (docs/reviews/milestone-1.md, round 2):
+    `alg: "Ed25519"`, RFC 9864's fully specified name, is verified as `EdDSA` with an
+    Ed25519 key is. `EdDSA`, which RFC 9864 deprecates, is `verify.algorithm_deprecated`,
+    `info`, attributed to the input, and always in JSON. At level 1, `text` and `plain`
+    leave out every `info` finding and count them; level 2 lists them. An Ed25519 key
+    not encoded as RFC 8032 §5.1.3 requires is `did_key_undecodable`,
+    `point_not_canonical` (in a carried `jwk`, `inspect.jwk_invalid`); a component before
+    the multibase value is `version_present`. An S not less than the group order is
+    `verify.signature_scalar_out_of_range`, checked by vcrd. An X25519 or X448 `did:key`
+    is `verify.did_key_not_for_signing`, attributed to the input; `ed448-pub` is named.
 - *Features.* A Cargo feature for the first proof suite, EdDSA over JWS, beside
   `vc-jose` (ARCHITECTURE §2: one feature per format and per proof suite).
   `vcrd-cli` forwards it, and `scripts/feature-matrix.sh` builds it (REQUIREMENTS §13).
@@ -180,7 +190,8 @@ every other `alg` exercise the by-name rejection path from day one.
   - `--verbosity` never changes JSON; 0 prints nothing in any format. For `text` and
     `plain`: level 1 shows the status, the credential's kind, issuer, types and validity,
     the inspect and verify phases with `blocked_by`, each proof's outcome and key
-    source, the claims, the findings and `not_evaluated`; level 2 everything except
+    source, the claims, the findings (from 2026-10-23, the `info` ones counted, not
+    listed) and `not_evaluated`; level 2 everything except
     `credential.metadata`, the header included; level 3 everything. How level 1 presents
     `not_evaluated`, key provenance, and the types and validity is to be revisited.
   - Every value carries its visibility, `non_sensitive`, `masked` or `revealed`: in JSON

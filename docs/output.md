@@ -30,9 +30,16 @@ complete at levels 1 to 3.
 | Level | `text` and `plain` show |
 |---|---|
 | 0 | nothing, in any format, on either stream: the exit code is the whole answer. `--unsafe` has no effect, since nothing is shown. |
-| 1 | the status; the credential's kind, issuer, types and validity; inspect's outcome, kinds of finding and what blocked it; when verify was requested, the same for verify, and each proof's suite, algorithm, outcome, and where its key came from (`key_provenance.source` and `method`), with any key the credential carries, whether it matched, and whether the signature verifies under it; the claims, masked; every finding; and the checks not evaluated |
-| 2 | everything except the credential's metadata. Level 1, plus: the exit code; the input's size and depth; the format and profile; the validity bounds; the parse phase; each proof's own validity, and the thumbprint and JWK of each key; and the header |
+| 1 | the status; the credential's kind, issuer, types and validity; inspect's outcome, kinds of finding and what blocked it; when verify was requested, the same for verify, and each proof's suite, algorithm, outcome, and where its key came from (`key_provenance.source` and `method`), with any key the credential carries, whether it matched, and whether the signature verifies under it; the claims, masked; every error and warning, and how many `info` findings were left out; and the checks not evaluated |
+| 2 | everything except the credential's metadata. Level 1, plus: the exit code; the input's size and depth; the format and profile; the validity bounds; the parse phase; each proof's own validity, and the thumbprint and JWK of each key; the header; and the `info` findings |
 | 3 | everything: level 2, plus the credential's metadata |
+
+An `info` finding never fails a phase, and one appears on most credentials in use today:
+`verify.algorithm_deprecated`, for the `EdDSA` that RFC 9864 deprecates. So level 1
+leaves the `info` findings out of the findings and of each phase's kinds of finding, and
+says how many it left out: in `text`, a Not shown line under Findings, and in `plain`,
+`findings: 1 info finding (see --verbosity 2)`. A finding in `plain` keeps its index in
+the JSON `findings`, so the first one shown may be `findings[1]`.
 
 At levels 1 to 3, a caller error's message is written to standard error as well as
 reported in the result. A parse failure is shown at level 1 by the later phases'
@@ -212,7 +219,8 @@ kind of condition once; this list has every occurrence.
 ## Examples
 
 The curated example in `text`, at the default level. Every phase passes, and the claims'
-names are shown with their values masked.
+names are shown with their values masked. The example declares `EdDSA`, so it has one
+`info` finding, which this level counts and level 2 lists.
 
 ```bash
 vcrd verify examples/ed25519.jwt --now 2026-10-01T00:00:00Z
@@ -246,6 +254,9 @@ Claims
  credentialSubject.id          | string | (masked) | masked
  id                            | string | (masked) | masked
 
+Findings
+ Not shown   1 info finding (see --verbosity 2)
+
 Not evaluated
  Check                | Reason
 ----------------------+-----------------
@@ -254,7 +265,8 @@ Not evaluated
 ```
 
 A signature that has expired, in `plain`. Each line names the JSON key or path its
-values come from, and the finding's detail follows its code.
+values come from, and the finding's detail follows its code. The error is `findings[1]`
+because `findings[0]` is the `info` finding this level leaves out.
 
 ```bash
 vcrd verify fixtures/exp-past.jwt --now 2026-10-01T00:00:00Z --format plain
@@ -277,14 +289,16 @@ credential.claims.credentialSubject.degree.name: type=string value=(masked) visi
 credential.claims.credentialSubject.degree.type: type=string value=(masked) visibility=masked
 credential.claims.credentialSubject.id: type=string value=(masked) visibility=masked
 credential.claims.id: type=string value=(masked) visibility=masked
-findings[0]: code=verify.proof_expired attribution=input severity=error claim=exp now=2026-10-01T00:00:00Z skew_seconds=0 value=1780272000 value_date_time=2026-06-01T00:00:00Z
+findings[1]: code=verify.proof_expired attribution=input severity=error claim=exp now=2026-10-01T00:00:00Z skew_seconds=0 value=1780272000 value_date_time=2026-06-01T00:00:00Z
+findings: 1 info finding (see --verbosity 2)
 not_evaluated.issuer_accreditation: reason=out_of_scope
 not_evaluated.context_resolution: reason=not_implemented
 ```
 
 The JSON examples below select keys with `jq`.
 
-The curated example, inside its validity period: every phase passes.
+The curated example, inside its validity period: every phase passes. Verify's one kind of
+finding is the `info` finding for `EdDSA`.
 
 ```bash
 vcrd verify examples/ed25519.jwt --now 2026-10-01T00:00:00Z --format json | jq '{status, exit_code, phases}'
@@ -297,7 +311,7 @@ vcrd verify examples/ed25519.jwt --now 2026-10-01T00:00:00Z --format json | jq '
   "phases": {
     "parse": { "outcome": "passed", "findings": [] },
     "inspect": { "outcome": "passed", "findings": [] },
-    "verify": { "outcome": "passed", "findings": [] }
+    "verify": { "outcome": "passed", "findings": ["verify.algorithm_deprecated"] }
   }
 }
 ```
@@ -321,7 +335,7 @@ vcrd verify fixtures/validity-reversed.jwt --now 2026-10-01T00:00:00Z --format j
       "outcome": "failed",
       "findings": ["inspect.valid_until_before_valid_from", "inspect.not_yet_valid"]
     },
-    "verify": { "outcome": "passed", "findings": [] }
+    "verify": { "outcome": "passed", "findings": ["verify.algorithm_deprecated"] }
   }
 }
 ```
@@ -380,6 +394,10 @@ vcrd verify fixtures/exp-past.jwt --now 2026-10-01T00:00:00Z --format json | jq 
   "proofs": [{ "outcome": "verified", "validity": "expired" }],
   "findings": [
     {
+      "code": "verify.algorithm_deprecated",
+      "detail": { "declared": "EdDSA", "replacement": "Ed25519", "type": "algorithm_deprecated" }
+    },
+    {
       "code": "verify.proof_expired",
       "detail": {
         "claim": "exp",
@@ -402,7 +420,8 @@ key from the issuer, vcrd refuses the carried one, so `outcome` is `not_attempte
 verify fails, attributed to the caller's policy. `verifies_signature: true` says the
 signature is sound under the refused key: the credential was signed by whoever holds that
 key, which is all a key the credential asserts about itself can show. `matched: false`
-because there is no other key to match.
+because there is no other key to match. With no key used, the `info` finding for `EdDSA`
+has `replacement: null`.
 
 ```bash
 vcrd verify fixtures/embedded-jwk-only.jwt --now 2026-10-01T00:00:00Z --format json | jq '{status, exit_code, proofs: [.proofs[] | {outcome, key_provenance}], findings: [.findings[] | {code, attribution}]}'
@@ -428,7 +447,8 @@ vcrd verify fixtures/embedded-jwk-only.jwt --now 2026-10-01T00:00:00Z --format j
   ],
   "findings": [
     { "code": "inspect.issuer_missing", "attribution": "input" },
-    { "code": "verify.embedded_key_refused", "attribution": "policy" }
+    { "code": "verify.embedded_key_refused", "attribution": "policy" },
+    { "code": "verify.algorithm_deprecated", "attribution": "input" }
   ]
 }
 ```

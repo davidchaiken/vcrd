@@ -12,11 +12,11 @@
  Valid until   2031-01-01T00:00:00Z
 
 Phases
- Phase   | Outcome | Findings                                                 | Blocked by
----------+---------+----------------------------------------------------------+------------
- parse   | passed  |                                                          |
- inspect | passed  |                                                          |
- verify  | failed  | verify.credential_key_mismatch, verify.signature_invalid |
+ Phase   | Outcome | Findings                                                                              | Blocked by
+---------+---------+---------------------------------------------------------------------------------------+------------
+ parse   | passed  |                                                                                       |
+ inspect | passed  |                                                                                       |
+ verify  | failed  | verify.credential_key_mismatch, verify.algorithm_deprecated, verify.signature_invalid |
 
 Proof
  Suite                jws
@@ -61,6 +61,8 @@ Findings
                                 |             |          | key.method: did:key
                                 |             |          | key.source: issuer_identifier
                                 |             |          | key.thumbprint: 0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
+ verify.algorithm_deprecated    | input       | info     | declared: EdDSA
+                                |             |          | replacement: Ed25519
  verify.signature_invalid       | input       | error    | algorithm: EdDSA
 
 Not evaluated

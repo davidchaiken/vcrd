@@ -58,9 +58,38 @@ fn an_algorithm_vcrd_does_not_implement_is_rejected_by_name() {
     let f = finding(&out, "verify.algorithm_unsupported", "vcrd", "error");
     assert_eq!(
         f["detail"],
-        json!({"type": "algorithm_unsupported", "declared": "Ed448", "supported": ["EdDSA"]})
+        json!({"type": "algorithm_unsupported", "declared": "Ed448", "supported": ["Ed25519", "EdDSA"]})
     );
     assert_eq!(out["proofs"][0]["outcome"], "not_attempted");
+}
+
+/// RFC 9864 §2.2: `Ed25519` is EdDSA with the Ed25519 parameter set, which is what
+/// `EdDSA` names with an Ed25519 key (RFC 8037 §3.1), so it verifies the same way.
+#[test]
+fn the_fully_specified_name_ed25519_verifies() {
+    let out = verify_fixture("alg-ed25519.jwt", 0);
+    let proof = &out["proofs"][0];
+    assert_eq!(proof["algorithm"], "Ed25519");
+    assert_eq!(proof["outcome"], "verified");
+    assert_eq!(out["findings"], json!([]));
+}
+
+/// RFC 9864 §4.1.2 marks `EdDSA` Deprecated: §4.4 has new deployments use its
+/// replacement, and sets no rule for a verifier. So it is reported for information,
+/// with the name that replaces it for the key used, and verify still passes.
+#[test]
+fn the_deprecated_name_eddsa_is_reported_for_information() {
+    let out = support::json(
+        support::vcrd().args(["verify", support::EXAMPLE, "--now", support::NOW]),
+        0,
+    );
+    let f = finding(&out, "verify.algorithm_deprecated", "input", "info");
+    assert_eq!(
+        f["detail"],
+        json!({"type": "algorithm_deprecated", "declared": "EdDSA", "replacement": "Ed25519"})
+    );
+    assert_eq!(out["phases"]["verify"]["outcome"], "passed");
+    assert_eq!(out["proofs"][0]["outcome"], "verified");
 }
 
 /// The signature would pass a verifier without the weak-key check

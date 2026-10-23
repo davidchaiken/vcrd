@@ -725,6 +725,14 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
             json!({"type": "algorithm_invalid", "found": found})
         }
         FindingDetail::AlgorithmNone => json!({"type": "algorithm_none"}),
+        FindingDetail::AlgorithmDeprecated {
+            declared,
+            replacement,
+        } => json!({
+            "type": "algorithm_deprecated",
+            "declared": declared,
+            "replacement": replacement,
+        }),
         FindingDetail::AlgorithmUnsupported {
             declared,
             supported,
@@ -748,6 +756,9 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
         }
         FindingDetail::SignatureSmallOrder { algorithm } => {
             json!({"type": "signature_small_order", "algorithm": algorithm})
+        }
+        FindingDetail::SignatureScalarOutOfRange { algorithm } => {
+            json!({"type": "signature_scalar_out_of_range", "algorithm": algorithm})
         }
         FindingDetail::CritUnsupported {
             extensions,
@@ -811,6 +822,11 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
         }
         FindingDetail::DidKeyCodecUnsupported { codec, name } => json!({
             "type": "did_key_codec_unsupported",
+            "codec": format!("0x{codec:x}"),
+            "name": name,
+        }),
+        FindingDetail::DidKeyNotForSigning { codec, name } => json!({
+            "type": "did_key_not_for_signing",
             "codec": format!("0x{codec:x}"),
             "name": name,
         }),
@@ -927,6 +943,8 @@ fn did_key_problem(problem: DidKeyProblem) -> Value {
             json!({"key_length": {"expected": expected, "found": found}})
         }
         DidKeyProblem::PointInvalid => json!("point_invalid"),
+        DidKeyProblem::PointNotCanonical => json!("point_not_canonical"),
+        DidKeyProblem::VersionPresent => json!("version_present"),
     }
 }
 
