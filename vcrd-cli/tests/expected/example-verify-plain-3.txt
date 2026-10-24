@@ -37,5 +37,5 @@ credential.metadata.type[1]: type=string value=ExampleDegreeCredential visibilit
 credential.metadata.validFrom: type=string value=2026-01-01T00:00:00Z visibility=non_sensitive
 credential.metadata.validUntil: type=string value=2031-01-01T00:00:00Z visibility=non_sensitive
 findings[0]: code=verify.algorithm_deprecated attribution=input severity=info declared=EdDSA replacement=Ed25519
-not_evaluated.issuer_accreditation: reason=out_of_scope
+not_evaluated.issuer_accreditation: reason=not_implemented
 not_evaluated.context_resolution: reason=not_implemented

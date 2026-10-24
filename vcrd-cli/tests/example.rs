@@ -34,7 +34,7 @@ fn verify_exits_0_with_one_json_document() {
     assert_eq!(
         out["not_evaluated"],
         json!([
-            {"what": "issuer_accreditation", "why": "out_of_scope"},
+            {"what": "issuer_accreditation", "why": "not_implemented"},
             {"what": "context_resolution", "why": "not_implemented"},
         ])
     );

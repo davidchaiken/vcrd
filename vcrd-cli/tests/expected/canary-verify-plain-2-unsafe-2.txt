@@ -43,5 +43,5 @@ credential.claims.id: type=string value=urn:example:CANARY-C1 visibility=reveale
 findings[0]: code=inspect.jwk_private_key attribution=input severity=error members=d
 findings[1]: code=verify.algorithm_deprecated attribution=input severity=info declared=EdDSA replacement=Ed25519
 warnings[0]: code=unsafe message="--unsafe=2: claim values and cryptographic secrets, such as private keys, are printed in cleartext. Treat this output as sensitive."
-not_evaluated.issuer_accreditation: reason=out_of_scope
+not_evaluated.issuer_accreditation: reason=not_implemented
 not_evaluated.context_resolution: reason=not_implemented

@@ -72,5 +72,5 @@ Warnings
 Not evaluated
  Check                | Reason
 ----------------------+-----------------
- issuer_accreditation | out_of_scope
+ issuer_accreditation | not_implemented
  context_resolution   | not_implemented

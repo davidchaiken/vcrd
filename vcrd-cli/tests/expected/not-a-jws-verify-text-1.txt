@@ -16,5 +16,5 @@ Findings
 
 Not evaluated
  Check                | Reason
-----------------------+--------------
- issuer_accreditation | out_of_scope
+----------------------+-----------------
+ issuer_accreditation | not_implemented

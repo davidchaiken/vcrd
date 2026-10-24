@@ -35,7 +35,7 @@ refer to ARCHITECTURE §10. Milestone sizes are unequal: milestones 1 and 5 are 
 | 0 Skeleton | buildable workspace, CI, repository hardening | [P3] [P4] |
 | 1 Thin slice | `vcrd inspect`/`verify` on a VC-JOSE-COSE credential, Ed25519, `did:key` | [S3] [S4] [S5] [S6] [S7] [G1] |
 | 2 Keys and algorithms | five algorithms, caller keys, embedded-key precedence, allowlist, full provenance, Linux debugging | [S1] [S2] [C1] [C2] [C3] [Q4] [G2] |
-| 3 CLI contract | config file, env, designations, `formats`/`suites`, man pages, fuzz, coverage, limits corpus | [Q2] [T2] [T5] [T6] |
+| 3 CLI contract | config file, env, designations, `formats`/`suites`, man pages, fuzz, coverage, limits corpus, a VCDM 2.0 §7.1 result | [Q2] [Q7] [T2] [T5] [T6] |
 | 4 Presentations | `vp+jwt` with enveloped credentials, challenge/domain; JWS JSON serialization | [F1] |
 | 5 Data Integrity | `eddsa-rdfc-2022`, `eddsa-jcs-2022`, pinned contexts, canonicalization budget, VCDM 1.1's JWT encoding | [Q1] [T1] [F2] |
 | 6 Release 0.1.0 | community files, semver-checks, differential harness, distribution | [P1] [P2] [P5] [P6] [T4] [T7] [D1] [D2] |
@@ -143,6 +143,15 @@ every other `alg` exercise the by-name rejection path from day one.
     and a presentation, by its `type`, is `inspect.presentation_unsupported`, attributed
     to vcrd, with `credential.kind: presentation`, its header checked against `vp+jwt`
     and `vp`, and verify blocked.
+  - Decided 2026-10-24, in the milestone review (round 4, VCDM 2.0): a JSON credential
+    or presentation that no format reads is `parse.data_integrity_unsupported`,
+    attributed to vcrd, when it carries a `proof`, and `parse.not_secured`, attributed to
+    the input, when it does not; the `id` of status, schema, terms-of-use, evidence and
+    refresh-service objects is checked as a URL, and a schema without one is
+    `inspect.id_missing`; `name` and `description` that are not strings or language value
+    objects are `inspect.language_value_invalid`, a warning; `issuer_accreditation` is
+    `not_implemented` until the trust anchor input of REQUIREMENTS §16 item 14 exists;
+    and a result conforming to VCDM 2.0 §7.1 is ARCHITECTURE §10 [Q7], in milestone 3.
 - *Verify.* EdDSA/Ed25519 via `verify_strict`, `is_weak` at resolution (ARCHITECTURE §8);
   `none` rejected; every other `alg` unsupported by name (attribution vcrd, exit 6). Key
   resolution from the credential's `issuer` (the VCDM-normative identifier; `iss` is a
@@ -369,6 +378,10 @@ hash construction chosen and labeled provisional (REQUIREMENTS §16 item 18 stay
 The input's source in the result (decided 2026-10-22): `input.source`, `file` or `stdin`,
 and `input.path` as given on the command line, never made absolute; in JSON always, and in
 `text` and `plain` at levels 1–3 just after the status.
+[Q7] decided and built for credentials (decided 2026-10-24, in milestone 1's review): a
+result that conforms exactly to VCDM 2.0 §7.1's, with VCDM 2.0 §7.2's problem types,
+through `--format json`, a format of its own, or a conforming part of the envelope;
+milestone 4 extends it to presentations.
 Stderr diagnostics per verbosity level. [T2] `cargo-fuzz` targets for the JWS parser and
 the depth prescan, seeded from fixtures, in a workspace-excluded `fuzz/` on a nightly job.
 [T5] coverage with the ratchet policy text ready for `CONTRIBUTING.md`. [T6] structural
@@ -385,7 +398,7 @@ flags; the same result whether a setting came from a flag, the environment or th
 extended to designations and hashing; fuzz targets run for a fixed budget in CI without a
 panic; limit defaults documented with the measuring command and the corpus.
 
-**Closes.** [Q2], [T2], [T5], [T6].
+**Closes.** [Q2], [Q7], [T2], [T5], [T6].
 
 **Milestone review.** No new standard. Review the CLI against REQUIREMENTS §8 and §9
 sentence by sentence, each requirement a black-box test. Re-run milestones 1 and 2's review

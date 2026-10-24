@@ -15,5 +15,5 @@ credential.claims.credentialSubject.degree.type: type=string value=(masked) visi
 credential.claims.credentialSubject.id: type=string value=(masked) visibility=masked
 credential.claims.id: type=string value=(masked) visibility=masked
 findings: 1 info finding (see --verbosity 2)
-not_evaluated.issuer_accreditation: reason=out_of_scope
+not_evaluated.issuer_accreditation: reason=not_implemented
 not_evaluated.context_resolution: reason=not_implemented

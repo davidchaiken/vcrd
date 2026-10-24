@@ -260,7 +260,7 @@ Findings
 Not evaluated
  Check                | Reason
 ----------------------+-----------------
- issuer_accreditation | out_of_scope
+ issuer_accreditation | not_implemented
  context_resolution   | not_implemented
 ```
 
@@ -291,7 +291,7 @@ credential.claims.credentialSubject.id: type=string value=(masked) visibility=ma
 credential.claims.id: type=string value=(masked) visibility=masked
 findings[1]: code=verify.proof_expired attribution=input severity=error claim=exp now=2026-10-01T00:00:00Z skew_seconds=0 value=1780272000 value_date_time=2026-06-01T00:00:00Z
 findings: 1 info finding (see --verbosity 2)
-not_evaluated.issuer_accreditation: reason=out_of_scope
+not_evaluated.issuer_accreditation: reason=not_implemented
 not_evaluated.context_resolution: reason=not_implemented
 ```
 

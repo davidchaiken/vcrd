@@ -9,14 +9,14 @@ review runs in rounds, one or two standards at a time, and this record grows wit
 | 1 | [RFC 7515] (JSON Web Signature, JWS); [RFC 7519] (JSON Web Token, JWT) | below; gaps 1 and 2 fixed, gap 3 deferred |
 | 2 | [RFC 8037], [RFC 9864] and [RFC 8032] (EdDSA); key resolution ([did:key], [REQUIREMENTS] §10, [ARCHITECTURE] §8) | below; gaps 4–10 fixed |
 | 3 | [VC-JOSE-COSE], the Recommendation of 2026-10-13, which is later than the text milestone 1 was built from (read 2026-09-19) | below; gaps 11–14 fixed |
-| 4 | [VCDM 2.0] (the Verifiable Credentials Data Model) | to do |
+| 4 | [VCDM 2.0] (the Verifiable Credentials Data Model) | below; gaps 15–17 and 19 fixed, gap 18 recorded as [ARCHITECTURE] §10 [Q7] |
 | 5 | the terminology check ([REQUIREMENTS] §15); slices 3–5's red-then-green records | to do |
 
 Each round also completes the entries of [docs/findings.md](../findings.md) whose
 standard it reads.
 
 **Where checked.** Branch `milestone-1`: round 1 from `94ff6d0`, round 2 from `46a2ca7`,
-round 3 from `30d1f91`.
+round 3 from `30d1f91`, round 4 from `dda3a15`.
 Toolchain 1.99.1 (clippy 0.1.99). Locally on macOS 27.0.1, arm64. Line numbers are those
 after each round's changes, except in [Gaps found](#gaps-found), which describes the
 commit the round started from.
@@ -26,7 +26,8 @@ commit the round started from.
 rfc-editor.org, as plain text; [did:key] v0.9, a W3C Credentials Community Group draft
 whose page shows no status, date or dated copy; and the [multicodec table]. Fetched on
 2026-10-23 from w3.org: [VC-JOSE-COSE], whose status line reads "W3C Recommendation 13
-October 2026", §1.1 to §5.4. They came
+October 2026", §1.1 to §5.4; and [VCDM 2.0], whose status line reads "W3C
+Recommendation, 15 May 2025", §1.3, §2, §4.3–4.12, §6.1, §7.1, §7.2 and §11.1. They came
 through a fetch tool's extraction, not a direct reading. Each row abridges one sentence,
 or one procedural step, and keeps its keyword. For [RFC 8032], round 2 also read the
 source of the crates vcrd verifies with, `ed25519-dalek` 3.0.0 and `curve25519-dalek`
@@ -79,7 +80,7 @@ never does; the row says which.
 | §4.1.2, §4.1.7 | MUST (producer) | `sub` is unique within its issuer, or globally; `jti` collides with negligible probability. | One credential cannot show uniqueness. Their agreement with `credentialSubject.id` and `id`: round 3's table. | — | Not applicable: producers' rules |
 | §4.1.1–4.1.3, §4.1.7 | — | `iss`, `sub` and `jti` are strings; `aud` is a string or an array of strings. Found in round 3. | `inspect.jwt_claim_type`, for these in the payload and `iss` in the header (`vc_jose.rs:430-464`). | `vcrd-core/tests/inspect.rs` `registered_claims_have_their_types` | Met: gap 11, fixed |
 | §4.1.3 | MUST | A principal that processes the JWT identifies itself with a value in `aud`; if it does not, the JWT is rejected. | vcrd is not told whom it verifies for. When `aud` is present, `not_evaluated` lists `audience`, `no_parameters_supplied` (`vc_jose.rs:392`). | `vcrd-cli/tests/verify.rs` `an_audience_is_listed_as_not_evaluated`; `vcrd-cli/tests/example.rs` `verify_exits_0_with_one_json_document` (no `aud`, no entry) | Later: the check, milestone 4. Disclosed meanwhile: gap 2, fixed |
-| §4.1.4 | MUST | The JWT is not accepted on or after `exp`; a small leeway MAY allow for clock skew. | `proof_validity` (`runner.rs:243`) reports `verify.proof_expired` when `exp` is not later than the clock, less `--clock-skew`. | `vcrd-core/tests/verify.rs` `exp_equal_to_the_clock_has_expired`, `the_skew_applies_to_both_bounds`; `vcrd-cli/tests/verify.rs` `an_expired_signature_fails_verify` | Met |
+| §4.1.4 | MUST | The JWT is not accepted on or after `exp`; a small leeway MAY allow for clock skew. | `proof_validity` (`runner.rs:270`) reports `verify.proof_expired` when `exp` is not later than the clock, less `--clock-skew`. | `vcrd-core/tests/verify.rs` `exp_equal_to_the_clock_has_expired`, `the_skew_applies_to_both_bounds`; `vcrd-cli/tests/verify.rs` `an_expired_signature_fails_verify` | Met |
 | §4.1.5 | MUST | The JWT is not accepted before `nbf`; a small leeway MAY allow for clock skew. | `verify.proof_not_yet_valid` when `nbf` is later than the clock, plus the skew. | `vcrd-core/tests/verify.rs` `a_not_before_after_the_clock_fails_verify`, `the_skew_applies_to_both_bounds` | Met |
 | §4.1.4–4.1.6 | MUST (producer) | `exp`, `nbf` and `iat` are NumericDates. | `inspect.numeric_date_invalid` (`vc_jose.rs:417-419`); the proof's validity is `unknown`. | `vcrd-core/tests/verify.rs` `a_time_that_is_not_a_number_leaves_the_proof_validity_unknown` | Met |
 | §4.1.6 | — | `iat` is when the JWT was issued. No rule for the recipient. | `verify.proof_issued_in_future`, a warning, when it is after the clock plus the skew. | `vcrd-core/tests/verify.rs` `iat_after_the_clock_is_a_warning` | Met |
@@ -141,13 +142,13 @@ never does; the row says which.
 | Signature Method Creation, step 4 | MUST | The bytes are a proper encoding of the key type, or `invalidPublicKey`. | `point_invalid` when they are not a point, `point_not_canonical` when they encode one otherwise than [RFC 8032] §5.1.3 does (`ed25519_key`, `keys.rs:149`). | `keys.rs` `names_what_is_wrong_with_a_did_key`, `rejects_a_key_not_encoded_as_rfc8032_requires` | Met: gap 7, fixed |
 | Signature Method Creation, step 7 | MUST | An unknown `publicKeyFormat` raises `unsupportedPublicKeyType`. | vcrd builds no DID document. | — | Not applicable |
 | Key table | — | `0xec`, `x25519-pub`, 32 bytes, in the same table as the signing keys. | `verify.did_key_not_for_signing`, attributed to the input, as for [RFC 8037] §3.2. | `keys.rs` `a_key_agreement_key_is_not_for_signing` | Met: gap 9, fixed |
-| [REQUIREMENTS] §10 | — | Key material from the caller, then the issuer identifier, then a carried key that matches one of those; a carried key alone only on the caller's opt-in, otherwise refused, and the refusal reported. | `resolve` and `compare_embedded` (`keys.rs:232`, `:255`); the runner does not block a credential that carries a key (`runner.rs:114`). | `keys.rs` `an_embedded_key_equal_to_the_did_key_matches`, `an_embedded_key_unlike_the_did_key_is_a_warning`, `an_embedded_key_alone_is_refused_by_policy`; `vcrd-cli/tests/verify.rs` `key_substitution_is_reported`, `a_key_the_credential_asserts_alone_is_refused` | Met for milestone 1. Caller keys and the opt-in: Later, milestone 2 |
+| [REQUIREMENTS] §10 | — | Key material from the caller, then the issuer identifier, then a carried key that matches one of those; a carried key alone only on the caller's opt-in, otherwise refused, and the refusal reported. | `resolve` and `compare_embedded` (`keys.rs:232`, `:255`); the runner does not block a credential that carries a key (`runner.rs:123`). | `keys.rs` `an_embedded_key_equal_to_the_did_key_matches`, `an_embedded_key_unlike_the_did_key_is_a_warning`, `an_embedded_key_alone_is_refused_by_policy`; `vcrd-cli/tests/verify.rs` `key_substitution_is_reported`, `a_key_the_credential_asserts_alone_is_refused` | Met for milestone 1. Caller keys and the opt-in: Later, milestone 2 |
 | [REQUIREMENTS] §10 | — | Key material that cannot bind a signature is rejected at resolution, as its own finding; verification is the strictest the primitives offer. | `is_weak` at resolution (`keys.rs:336`); `verify_strict`, with vcrd's own checks of R and S (`suites/jws.rs:151`, `:159`). | `vcrd-cli/tests/verify.rs` `a_weak_key_is_refused_at_resolution`; `vcrd-core/tests/fixtures.rs` `a_lax_verifier_accepts_the_weak_key_and_small_order_signatures` | Met |
 | [REQUIREMENTS] §10 | — | An unsupported algorithm fails by name, with what is supported. | `verify.algorithm_unsupported`, `supported: ["Ed25519", "EdDSA"]`. | `vcrd-cli/tests/verify.rs` `an_algorithm_vcrd_does_not_implement_is_rejected_by_name` | Met |
-| [REQUIREMENTS] §10 | — | Every result says where the key came from, and for a carried key, whether it matched and whether the signature verifies under it. | `KeyProvenance` (`keys.rs:160`); the second verification (`runner.rs:198`). | `vcrd-cli/tests/verify.rs` `key_substitution_is_reported` | Met |
+| [REQUIREMENTS] §10 | — | Every result says where the key came from, and for a carried key, whether it matched and whether the signature verifies under it. | `KeyProvenance` (`keys.rs:160`); the second verification (`runner.rs:225`). | `vcrd-cli/tests/verify.rs` `key_substitution_is_reported` | Met |
 | [REQUIREMENTS] §10 | — | Offline methods first; methods that need the network only with the opt-in. | `did:key` alone; any other issuer is `verify.issuer_method_unsupported`, attributed to vcrd (`keys.rs:301`). | `vcrd-core/tests/inspect.rs` `a_url_issuer_vcrd_cannot_resolve_reaches_verify` | Met |
 | [ARCHITECTURE] §8 | — | A codec vcrd can name but not use fails by name, attributed to vcrd. | `NAMED_CODECS` (`keys.rs:389`), now with `ed448-pub`. The [multicodec table] confirms its values, `0x1202` and `0x1205` among them, which [DEVELOPMENT-PLAN.md] lists as not verified. | `keys.rs` `names_a_key_type_it_cannot_use`, `a_key_agreement_key_is_not_for_signing` | Met: gap 9, fixed |
-| [ARCHITECTURE] §8 | — | "No key material" says where vcrd looked. | `verify.no_key_material` (`keys.rs:239`). Milestone 1 never reports it: the runner blocks verify first (`runner.rs:114`), and `blocked_by` names `key_material` and where vcrd looked. | `vcrd-cli/tests/output.rs`, case `issuer-missing-verify-text-1` | Met |
+| [ARCHITECTURE] §8 | — | "No key material" says where vcrd looked. | `verify.no_key_material` (`keys.rs:239`). Milestone 1 never reports it: the runner blocks verify first (`runner.rs:123`), and `blocked_by` names `key_material` and where vcrd looked. | `vcrd-cli/tests/output.rs`, case `issuer-missing-verify-text-1` | Met |
 
 ## [VC-JOSE-COSE], the Recommendation of 2026-10-13
 
@@ -191,7 +192,42 @@ known input 9 cites §3.1.1.
 | §5.4 | MUST | Every claim expected for the `typ` is present. | [VCDM 2.0]'s required properties. | — | Round 4 |
 | §5.4 | MUST | Claims understood are evaluated by the verifier's policies; claims not understood are ignored. | Each check made is a finding when it fails; each not made is listed in `not_evaluated`. | — | Met |
 | §5.4 | MUST | The verified document is well-formed compact JSON-LD. | `@context` is checked as [VCDM 2.0] requires (round 4). No JSON-LD processing: `not_evaluated` lists `context_resolution`, `not_implemented`. | `vcrd-cli/tests/example.rs` `verify_exits_0_with_one_json_document` | Partly met. JSON-LD processing: Later, milestone 5 |
-| §5.4 | SHOULD; MUST | `credentialSchema` and `credentialStatus` are checked; a type not understood is ignored. | Listed in `not_evaluated` as `schema_conformance` and `revocation_status`, `not_implemented` (`vcdm.rs:63-64`). | `vcrd-core/tests/inspect.rs` `lists_status_and_schema_as_not_evaluated` | Met by disclosure. The checks: Later |
+| §5.4 | SHOULD; MUST | `credentialSchema` and `credentialStatus` are checked; a type not understood is ignored. | Listed in `not_evaluated` as `schema_conformance` and `revocation_status`, `not_implemented` (`vcdm.rs:67-68`). | `vcrd-core/tests/inspect.rs` `lists_status_and_schema_as_not_evaluated` | Met by disclosure. The checks: Later |
+
+## [VCDM 2.0], the Recommendation of 2025-05-15
+
+The plan's list is §1.3, §2, §4.3–4.9, §6.1 and §7.1–7.2. Round 4 also read §4.10 and
+§4.11, whose objects vcrd already checks for a `type`, and §11.1, which §4.6 cites.
+
+| Section | Keyword | Sentence (abridged) | Mechanism | Check | Status |
+|---|---|---|---|---|---|
+| §1.3 | MUST | A conforming document is compacted JSON-LD meeting every relevant MUST of §4, §5 and §6, which MUST be enforced. | Each MUST of §4.3–4.9 is an error finding, in the rows below. JSON-LD processing: `not_evaluated` lists `context_resolution`, `not_implemented`. §5 is outside the plan's list. | The rows below | Met for §4.3–4.9. JSON-LD: Later, milestone 5 |
+| §1.3 | MUST | A conforming document is a credential (`application/vc`) or a presentation (`application/vp`). | A presentation is named, `inspect.presentation_unsupported` (round 3, gap 14). | `vcrd-core/tests/inspect.rs` `a_presentation_is_named_and_not_checked_as_a_credential` | Met |
+| §1.3 | MUST | A conforming document is secured by at least one securing mechanism (§4.12). | A compact JWS always carries its proof. A JSON credential no format reads is `parse.data_integrity_unsupported`, attributed to vcrd, with a `proof`, and `parse.not_secured`, attributed to the input, without one (`runner.rs:155-166`). | `vcrd-core/tests/parse.rs` `a_json_credential_is_named_by_whether_it_has_a_proof` | Met: gap 15, fixed. Reading Data Integrity: Later, milestone 5 |
+| §1.3 | MUST | A conforming verifier verifies (§4.12), checks each required property, and produces errors for non-conforming documents. | Verify; the checks below, each an error finding. vcrd's result has its own structure, not §7.1's. | The rows below | Met. A result in §7.1's structure: Later, [ARCHITECTURE] §10 [Q7], gap 18 |
+| §1.3 | MAY | Optional properties may be ignored. | vcrd checks the optional properties this table names: `id`, the validity bounds, `name` and `description`, and the `id` of status, schema and related objects. | The rows below | Met |
+| §2 | — | Verification includes conformance, the securing mechanism, and, if present, the status check. | Inspect and verify; status listed in `not_evaluated` as `revocation_status`, `not_implemented` ([DEVELOPMENT-PLAN.md], milestone 1, known input 8). | `vcrd-core/tests/inspect.rs` `lists_status_and_schema_as_not_evaluated` | Met by disclosure. The glossary's *Verify*: round 5 |
+| §2 | — | Validation, whether a claim from an issuer meets a verifier's requirements, is outside the specification's scope; verifiers trust certain issuers for certain claims. | `not_evaluated` lists `issuer_accreditation` in every report, `not_implemented` until the trust anchor input [REQUIREMENTS] §9 calls for exists (`runner.rs:98-105`). | `vcrd-core/tests/inspect.rs` `lists_status_and_schema_as_not_evaluated`, `the_example_conforms`; `vcrd-cli/tests/example.rs` `verify_exits_0_with_one_json_document` | Met by disclosure: gap 19, fixed |
+| §2 | — | A URL is as the [WHATWG URL Standard] defines it. | `parse_url`, through the `url` crate (`vcdm.rs:339`); a URL the parser corrected is a warning ([DEVELOPMENT-PLAN.md], milestone 1, decided 2026-10-01). | `vcdm.rs` `names_url_errors_and_corrections`; `vcrd-core/tests/inspect.rs` `a_nonconforming_issuer_url_is_a_warning` | Met |
+| §4.3 | MUST | Credentials include `@context`. | `inspect.context_missing` (`vcdm.rs:111-115`). | `vcrd-core/tests/inspect.rs` `checks_contexts` | Met |
+| §4.3 | MUST | `@context` is an ordered set whose first item is `https://www.w3.org/ns/credentials/v2`. | `inspect.context_first_invalid` (`vcdm.rs:116-123`). A single value is read as a set of one, as for every property that may hold one or several. | `vcrd-core/tests/inspect.rs` `checks_contexts`, `the_first_context_is_shown_when_it_is_wrong` | Met |
+| §4.3 | MUST | Later items are URLs and objects, each processable as a JSON-LD context. | A string item is checked as a URL; an item that is neither is `inspect.context_entry_invalid` (`vcdm.rs:124-130`). Whether each is processable needs JSON-LD. | `vcrd-core/tests/inspect.rs` `checks_contexts` | Met, except processability: Later, milestone 5 |
+| §4.3 | MUST | Application developers understand every context their application uses. | vcrd reads only the base context's terms, and says so: `context_resolution`, `not_implemented`. | `vcrd-cli/tests/example.rs` `verify_exits_0_with_one_json_document` | Met by disclosure |
+| §4.4 | OPTIONAL; MUST | `id`, if present, is a single URL. | Checked for the credential's `id` and each subject's (`vcdm.rs:307-315`), for `issuer.id` (§4.7), and for the `id` of each `credentialStatus`, `credentialSchema`, `termsOfUse`, `evidence` and `refreshService` object (`related_identifiers`, `vcdm.rs:173-188`). | `vcrd-core/tests/inspect.rs` `checks_subjects_and_identifiers`, `checks_the_ids_of_status_schema_and_related_objects` | Met: gap 16, fixed |
+| §4.5 | MUST | Credentials contain `type`, whose value is one or more terms and absolute URL strings. | `inspect.type_missing`, `inspect.type_not_string` (`vcdm.rs:135-156`). Whether a string is a term or an absolute URL needs the contexts. | `vcrd-core/tests/inspect.rs` `checks_types` | Met, except term or URL: Later, milestone 5 |
+| §4.5 | MUST | The table's objects have a `type`: a credential's includes `VerifiableCredential`, a presentation's `VerifiablePresentation`; `credentialStatus`, `termsOfUse`, `evidence`, `refreshService` and `credentialSchema` each have one. | `inspect.type_lacks_verifiable_credential`; `inspect.type_missing` for each object of those properties (`vcdm.rs:152-168`); a presentation: round 3. | `vcrd-core/tests/inspect.rs` `checks_types` | Met |
+| §4.6 | OPTIONAL; MUST | `name` and `description`, if present, are each a string or a language value object (§11.1). | `inspect.language_value_invalid`, a warning, for a value that is neither, nor an array of them (`vcdm.rs:193-231`). | `vcrd-core/tests/inspect.rs` `checks_names_and_descriptions` | Deviates: a warning, not an error (gap 17, decided 2026-10-24) |
+| §4.7 | MUST | A credential has an `issuer`, a URL or an object whose `id` is a URL. | `inspect.issuer_missing`, `inspect.issuer_invalid` (`vcdm.rs:235-263`); either blocks verify, for want of a key ([ARCHITECTURE] §4). | `vcrd-core/tests/inspect.rs` `a_missing_issuer_is_an_input_error_that_blocks_verify`, `an_issuer_that_is_not_a_url_is_an_input_error_that_blocks_verify` | Met |
+| §4.7 | RECOMMENDED (producer) | The URL dereferences to a controlled identifier document. | — | — | Not applicable |
+| §4.8 | MUST | A credential contains `credentialSubject`, a set of objects, each the subject of one or more claims serialized inside it. | `inspect.credential_subject_missing`, `inspect.credential_subject_invalid` and `inspect.credential_subject_empty`, errors; a subject with only an `id`, `inspect.credential_subject_no_claims`, a warning (`vcdm.rs:272-304`). | `vcrd-core/tests/inspect.rs` `an_empty_subject_is_its_own_error`, `checks_subjects_and_identifiers` | Met, except an `id`-only subject: Deviates, a warning ([DEVELOPMENT-PLAN.md], milestone 1, decided 2026-10-01; [ARCHITECTURE] §10 [S5]) |
+| §4.9 | MUST | `validFrom` and `validUntil`, if present, are XML Schema 1.1 `dateTimeStamp` strings, and `validUntil` is not earlier than `validFrom`. | `inspect.date_time_invalid`, with whether [RFC 3339] would accept the value; `inspect.date_time_unrepresentable`, attributed to vcrd, outside the years -9999 to 9999; `inspect.valid_until_before_valid_from` (`vcdm.rs:378-424`). The differences from RFC 3339 are tabled in [ARCHITECTURE] §4 (known input 5). | `vcrd-core/tests/inspect.rs` `checks_validity_bounds_as_date_time_stamps`, `valid_until_before_valid_from_is_an_error`; `vcdm.rs` `follows_xml_schema_where_it_differs_from_rfc_3339` | Met |
+| §2; §4.9 | — | Verification asks whether the statement is current. | `inspect.not_yet_valid` and `inspect.expired` against the clock and skew (`vcdm.rs:425-450`). | `vcrd-cli/tests/example.rs` `an_expired_credential_exits_3_with_verify_passed`, `clock_skew_tolerates_a_bound_just_passed` | Met |
+| §4.10 | REQUIRED; MUST | A status object's `type` is required; its `id`, if present, follows §4.4. | `type`: as for §4.5. `id`: as for §4.4. | `vcrd-core/tests/inspect.rs` `checks_types`, `checks_the_ids_of_status_schema_and_related_objects` | Met: gap 16, fixed |
+| §4.11 | MUST | Each `credentialSchema` has a `type` and an `id` that is a URL. | `type`: as for §4.5. `id`: absent, `inspect.id_missing`; not a URL, `inspect.url_invalid` (`vcdm.rs:173-188`). | `vcrd-core/tests/inspect.rs` `checks_types`, `checks_the_ids_of_status_schema_and_related_objects` | Met: gap 16, fixed |
+| §6.1 | MUST | `application/vc` and `application/vp` use JSON-LD compacted document form. | Not checked: JSON-LD processing. | — | Later, milestone 5 |
+| §7.1 | MUST; MAY | The algorithm verifies the securing mechanism, then checks that the document conforms, returning `status`, `document`, `mediaType`, `controller`, `controlledIdentifierDocument`, `warnings` and `errors`; the order may differ if the same inputs fail. | Inspect runs before verify, and both run. vcrd's result has its own structure (known input 7). | — | Later: [ARCHITECTURE] §10 [Q7], milestone 3, gap 18 |
+| §7.2 | MUST; SHOULD | Each problem has a `type` URL, among `PARSING_ERROR`, `CRYPTOGRAPHIC_SECURITY_ERROR`, `MALFORMED_VALUE_ERROR` and `RANGE_ERROR`, and should have a `title` and `detail`. | A finding has a code, attribution, severity and structured detail, not a problem type ([REQUIREMENTS] §6). | — | Later: [ARCHITECTURE] §10 [Q7], milestone 3, gap 18 |
+| §11.1 | MUST; SHOULD; MAY | A language value object has `@value`, a string; should have `@language`; may have `@direction`; has no other key; several may be an array. | `language_value_problem` (`vcdm.rs:211-231`): `value_missing`, `other_member`, `wrong_type`. `@language`'s form and `@direction`'s value are not checked. | `vcrd-core/tests/inspect.rs` `checks_names_and_descriptions` | Met, as a warning (gap 17) |
 
 ## The checks shown to fail
 
@@ -225,7 +261,13 @@ and then passed.
 | R21 | `vcrd-core/tests/inspect.rs` `a_presentation_is_named_and_not_checked_as_a_credential` | Before gap 14's fix | `left:` `typ_unexpected` and `cty_unexpected` warnings, and `type_lacks_verifiable_credential`, `issuer_missing` and `credential_subject_missing` errors, all attributed to the input; `right: [("inspect.presentation_unsupported", Vcrd, Error)]` |
 | R22 | `vcrd-core/tests/finding_reference.rs` | Gaps 11, 12 and 14's codes added before their entries | `add to docs/findings.md: ["inspect.jwt_claim_type", "inspect.presentation_unsupported", "inspect.replicated_claim_mismatch"]; remove from it: []` |
 
-The tests of gaps 7 to 14 were written against the new variants, added first with no
+| R23 | `vcrd-core/tests/parse.rs` `a_json_credential_is_named_by_whether_it_has_a_proof` | Before gap 15's fix | `left: [("parse.no_format_matched", Input, Error)]`, `right: [("parse.not_secured", Input, Error)]` |
+| R24 | `vcrd-core/tests/inspect.rs` `checks_the_ids_of_status_schema_and_related_objects` | Before gap 16's fix | `left: []`, `right: [("inspect.url_invalid", "credentialStatus.id"), ("inspect.id_missing", "credentialSchema[1]")]` |
+| R25 | `vcrd-core/tests/inspect.rs` `checks_names_and_descriptions` | Before gap 17's fix | `left: []`, `right: [("name", WrongType), ("description[0]", ValueMissing), ("description[1]", OtherMember { name: "@lang" })]` |
+| R26 | `vcrd-core/tests/inspect.rs` `lists_status_and_schema_as_not_evaluated`, its expectation changed to gap 19's | Before gap 19's fix | `left: [(IssuerAccreditation, OutOfScope), …]`, `right: [(IssuerAccreditation, NotImplemented), …]` |
+| R27 | `vcrd-core/tests/finding_reference.rs` | Gaps 15–17's codes added before their entries | `add to docs/findings.md: ["inspect.id_missing", "inspect.language_value_invalid", "parse.data_integrity_unsupported", "parse.not_secured"]; remove from it: []` |
+
+The tests of gaps 7 to 17 were written against the new variants, added first with no
 behavior, so each failed on what vcrd did rather than for want of a type.
 
 The completeness test reads the codes from `FindingDetail::code` and the anchors from
@@ -396,11 +438,76 @@ with the example's signature; run as `vcrd inspect <input> --now 2026-10-01T00:0
       *Before:* R21. *After:* passed. Through the binary, the same input exits 6 with
       that one inspect finding and `credential.kind: presentation`.
 
+### Round 4, at `dda3a15`
+
+Each input below was run as `vcrd inspect <input> --now 2026-10-01T00:00:00Z --format
+json`: the JSON credentials as written, the others built as in round 3.
+
+15. **A JSON credential is attributed to the input, with or without a proof**
+    ([VCDM 2.0] §1.3, §4.12). A VCDM 2.0 credential as JSON, with a `DataIntegrityProof`
+    (`eddsa-rdfc-2022`): exit 2, `parse.no_format_matched`, attributed to the input. It
+    is a conforming document, in a format vcrd reads from milestone 5. The same
+    credential with no `proof`: the same finding, though §1.3's reason it does not
+    conform is that nothing secures it.
+    - *Decided* 2026-10-24: when no format matches, a JSON object with `@context` and
+      `type`, read within the depth limit, is named as a credential: with `proof`,
+      `parse.data_integrity_unsupported`, attributed to vcrd (exit 6), as the JWS JSON
+      serialization is; without, `parse.not_secured`, attributed to the input (exit 2).
+    - *Test:* `vcrd-core/tests/parse.rs` `a_json_credential_is_named_by_whether_it_has_a_proof`.
+      *Before:* R23. *After:* passed; a JSON object that is not a credential is still
+      `parse.no_format_matched`. Through the binary, the two inputs above exit 6 and 2.
+16. **The `id` of status and schema objects is not checked** ([VCDM 2.0] §4.4, §4.10,
+    §4.11). A `credentialStatus` whose `id` is `not a url`, and a `credentialSchema` with
+    no `id`: exit 0, no finding. §4.11 requires the schema's `id`, a URL; §4.4 makes any
+    `id` a URL; §1.3 lets a verifier ignore optional properties, which status and schema
+    are.
+    - *Decided* 2026-10-24: the `id` of each `credentialStatus`, `credentialSchema`,
+      `termsOfUse`, `evidence` and `refreshService` object is checked as a URL, as the
+      credential's is, and a `credentialSchema` without one is a new
+      `inspect.id_missing`: a missing `id` is a finding of its own, not
+      `inspect.url_invalid`.
+    - *Test:* `vcrd-core/tests/inspect.rs` `checks_the_ids_of_status_schema_and_related_objects`.
+      *Before:* R24. *After:* passed: `inspect.url_invalid` for the status's `id`,
+      `inspect.id_missing` for the schema, and nothing for a URL.
+17. **`name` and `description` are not checked** ([VCDM 2.0] §4.6, §11.1). `name: 1` and
+    `description: {"@value": 2}`: exit 0, no finding. Each MUST be a string or a language
+    value object: `@value` a string, `@language` and `@direction` optional, no other
+    key; §11.1 allows an array of them. The Recommendation's own Example 40 gives `name`
+    a map keyed by language, which this sentence does not allow. Both are optional
+    (§1.3).
+    - *Decided* 2026-10-24: a new `inspect.language_value_invalid`, a warning attributed
+      to the input, with the path and the problem, given Example 40 and §1.3.
+    - *Test:* `vcrd-core/tests/inspect.rs` `checks_names_and_descriptions`. *Before:* R25.
+      *After:* passed; a string, a language value object, and an array of them give no
+      finding.
+18. **vcrd's result is not mapped to §7.1's** ([VCDM 2.0] §1.3, §7.1, §7.2;
+    [DEVELOPMENT-PLAN.md], milestone 1, known input 7). No document says which part of
+    vcrd's result is §7.1's `status`, `document`, `mediaType`, `controller`, `warnings`
+    and `errors`, or which findings are which of §7.2's problem types.
+    - *Decided* 2026-10-24: not a mapping alone. A development task decides how vcrd
+      produces a result that conforms exactly to §7.1's, with §7.2's problem types:
+      through `--format json`, a format of its own such as `vcdm2`, or a conforming part
+      of the JSON envelope. Recorded as [ARCHITECTURE] §10 [Q7], in milestone 3, with
+      presentations in milestone 4. [Q7] names what it must settle: redaction of §7.1's
+      `document`, the problem type of each finding, and the key fields.
+19. **`issuer_accreditation`'s reason, `out_of_scope`, says vcrd will never check it**
+    ([VCDM 2.0] §2's *validation*; [REQUIREMENTS] §9, §16 item 14). [REQUIREMENTS] §9: "a
+    caller who wants issuer-accreditation checking supplies their own trust anchor as
+    explicit input", which §16 item 14 has yet to design. So the check is planned, and
+    no caller can supply its parameter yet.
+    - *Decided* 2026-10-24: `not_implemented` until the trust anchor input exists, then
+      `no_parameters_supplied` when a caller supplies none.
+    - *Test:* `vcrd-core/tests/inspect.rs` `lists_status_and_schema_as_not_evaluated`,
+      with the new reason. *Before:* R26. *After:* passed, with `the_example_conforms`
+      and `vcrd-cli/tests/example.rs` updated likewise; the expected output files were
+      regenerated, and their differences are this reason alone.
+
 [ARCHITECTURE]: ../../ARCHITECTURE.md
 [DEVELOPMENT-PLAN.md]: ../../DEVELOPMENT-PLAN.md
 [did:key]: https://w3c-ccg.github.io/did-key-spec/
 [multicodec table]: https://github.com/multiformats/multicodec/blob/master/table.csv
 [REQUIREMENTS]: ../../REQUIREMENTS.md
+[RFC 3339]: https://www.rfc-editor.org/rfc/rfc3339
 [RFC 7515]: https://www.rfc-editor.org/rfc/rfc7515
 [RFC 7519]: https://www.rfc-editor.org/rfc/rfc7519
 [RFC 8032]: https://www.rfc-editor.org/rfc/rfc8032
@@ -408,3 +515,4 @@ with the example's signature; run as `vcrd inspect <input> --now 2026-10-01T00:0
 [RFC 9864]: https://www.rfc-editor.org/rfc/rfc9864
 [VC-JOSE-COSE]: https://www.w3.org/TR/2026/REC-vc-jose-cose-20261013/
 [VCDM 2.0]: https://www.w3.org/TR/2025/REC-vc-data-model-2.0-20250515/
+[WHATWG URL Standard]: https://url.spec.whatwg.org/

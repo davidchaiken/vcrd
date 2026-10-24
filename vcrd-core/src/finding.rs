@@ -98,6 +98,13 @@ pub enum FindingDetail {
     /// A JSON object that is not a JWS in JSON serialization: it lacks `payload`, or
     /// both `signature` and `signatures`.
     JsonNotJws,
+    /// A JSON credential or presentation, an object with `@context` and `type`, that
+    /// carries an embedded `proof`, as Data Integrity secures one (VCDM 2.0 §4.12). No
+    /// format reads it until milestone 5 (DEVELOPMENT-PLAN.md). Attributed to vcrd.
+    DataIntegrityUnsupported,
+    /// A JSON credential or presentation with no `proof`: nothing secures it, which
+    /// VCDM 2.0 §1.3 requires of a conforming document.
+    NotSecured,
     /// A segment is not strict base64url (RFC 7515 §2, §5.2); `problem` says how.
     Base64urlInvalid {
         segment: JwsSegment,
@@ -189,6 +196,17 @@ pub enum FindingDetail {
     UrlNonconforming {
         path: String,
         violations: Vec<String>,
+    },
+    /// An object VCDM 2.0 requires an `id` of has none: a `credentialSchema` (§4.11). An
+    /// `id` that is present and not a URL is [`FindingDetail::UrlInvalid`] instead.
+    IdMissing { path: String },
+    /// A `name` or `description` that is neither a string nor a language value object,
+    /// nor an array of them (VCDM 2.0 §4.6, §11.1). A warning: the properties are
+    /// optional (§1.3), and the Recommendation's own Example 40 gives `name` another
+    /// form.
+    LanguageValueInvalid {
+        path: String,
+        problem: LanguageValueProblem,
     },
     /// A validity bound is not an XML Schema 1.1 `dateTimeStamp` (VCDM 2.0 §4.9).
     /// `valid_rfc3339` says whether RFC 3339 would accept it, so that such values can
@@ -417,6 +435,8 @@ impl FindingDetail {
             FindingDetail::NotCompactJws { .. } => "parse.not_compact_jws",
             FindingDetail::JwsJsonSerialization { .. } => "parse.jws_json_serialization",
             FindingDetail::JsonNotJws => "parse.json_not_jws",
+            FindingDetail::DataIntegrityUnsupported => "parse.data_integrity_unsupported",
+            FindingDetail::NotSecured => "parse.not_secured",
             FindingDetail::Base64urlInvalid { .. } => "parse.base64url_invalid",
             FindingDetail::JsonInvalid { .. } => "parse.json_invalid",
             FindingDetail::JsonNotObject { .. } => "parse.json_not_object",
@@ -444,6 +464,8 @@ impl FindingDetail {
                 "inspect.credential_subject_no_claims"
             }
             FindingDetail::UrlInvalid { .. } => "inspect.url_invalid",
+            FindingDetail::IdMissing { .. } => "inspect.id_missing",
+            FindingDetail::LanguageValueInvalid { .. } => "inspect.language_value_invalid",
             FindingDetail::UrlNonconforming { .. } => "inspect.url_nonconforming",
             FindingDetail::DateTimeInvalid { .. } => "inspect.date_time_invalid",
             FindingDetail::DateTimeUnrepresentable { .. } => "inspect.date_time_unrepresentable",
@@ -606,6 +628,17 @@ pub enum IssuerProblem {
     /// A string, or an object's `id`, that is not a URL; `error` names the parser's
     /// error.
     NotUrl { error: String },
+}
+
+/// Why a value is not a language value object (VCDM 2.0 §11.1).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LanguageValueProblem {
+    /// Neither a string nor an object.
+    WrongType,
+    /// An object without a string `@value`.
+    ValueMissing,
+    /// An object with a member other than `@value`, `@language` and `@direction`.
+    OtherMember { name: String },
 }
 
 /// Where a JWT claim was found: in the claims, or in the JOSE header, where RFC 7519

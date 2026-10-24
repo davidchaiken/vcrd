@@ -110,6 +110,28 @@ repository; neither has a dated copy, so each is linked where it is published no
 - **Standard.** [RFC 7515] §7.2.
 - **Remedy.** Check that the input is a credential, not another JSON document.
 
+### <a id="parse.data_integrity_unsupported"></a>`parse.data_integrity_unsupported`
+
+- **Meaning.** The input is a JSON credential or presentation, an object with `@context`
+  and `type`, secured by a proof inside it, as Data Integrity secures one. No format vcrd
+  has reads it yet.
+- **Attribution and severity.** `vcrd`, `error`.
+- **Detail.** None.
+- **Standard.** [VCDM 2.0] §4.12 names Data Integrity as an embedded securing mechanism.
+- **Remedy.** Use a verifier that reads Data Integrity proofs. vcrd plans to read them
+  in milestone 5 ([DEVELOPMENT-PLAN.md]).
+
+### <a id="parse.not_secured"></a>`parse.not_secured`
+
+- **Meaning.** The input is a JSON credential or presentation, an object with `@context`
+  and `type`, with no `proof`: nothing secures it, so there is nothing to verify.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** None.
+- **Standard.** [VCDM 2.0] §1.3: a conforming document MUST be secured by at least one
+  securing mechanism (§4.12).
+- **Remedy.** Nothing shows who made the credential, or that it is unchanged. Obtain it
+  secured, as a JWS or with a proof.
+
 ### <a id="parse.base64url_invalid"></a>`parse.base64url_invalid`
 
 - **Meaning.** A segment is not strict base64url.
@@ -226,42 +248,60 @@ repository; neither has a dated copy, so each is linked where it is published no
 - **Meaning.** The credential has no `@context`.
 - **Attribution and severity.** `input`, `error`.
 - **Detail.** None.
-- **Standard and remedy.** Round 4 of the milestone 1 review.
+- **Standard.** [VCDM 2.0] §4.3: credentials MUST include `@context`.
+- **Remedy.** The payload is not a [VCDM 2.0] credential. One with a `vc` claim is
+  [VCDM 1.1]'s encoding, reported as `inspect.vcdm_1_1_jwt_encoding` instead.
 
 ### <a id="inspect.context_first_invalid"></a>`inspect.context_first_invalid`
 
 - **Meaning.** The first `@context` item is not `https://www.w3.org/ns/credentials/v2`.
 - **Attribution and severity.** `input`, `error`.
 - **Detail.** `found`: that item when it is a string, otherwise `null`.
-- **Standard and remedy.** Round 4 of the milestone 1 review.
+- **Standard.** [VCDM 2.0] §4.3: `@context` MUST be an ordered set whose first item is
+  that URL. A single value is read as a set of one.
+- **Remedy.** `https://www.w3.org/2018/credentials/v1` first means a [VCDM 1.1]
+  credential, which vcrd does not read yet ([ARCHITECTURE] §10 [F2]).
 
 ### <a id="inspect.context_entry_invalid"></a>`inspect.context_entry_invalid`
 
 - **Meaning.** A later `@context` item is neither a string nor an object.
 - **Attribution and severity.** `input`, `error`.
 - **Detail.** `path`: the item.
-- **Standard and remedy.** Round 4 of the milestone 1 review.
+- **Standard.** [VCDM 2.0] §4.3: later items MUST be URLs and objects, each processable
+  as a JSON-LD context. A string item is checked as a URL (`inspect.url_invalid`);
+  whether an item is processable needs JSON-LD, which vcrd does not do yet, and
+  `not_evaluated` says so as `context_resolution`.
+- **Remedy.** The issuer must list contexts as URLs or objects.
 
 ### <a id="inspect.type_missing"></a>`inspect.type_missing`
 
 - **Meaning.** An object that must have a `type` has none, or an empty one.
 - **Attribution and severity.** `input`, `error`.
 - **Detail.** `path`: the object.
-- **Standard and remedy.** Round 4 of the milestone 1 review.
+- **Standard.** [VCDM 2.0] §4.5: credentials MUST contain `type`, and its table lists the
+  objects that MUST have one: `credentialStatus` (also §4.10), `termsOfUse`, `evidence`,
+  `refreshService` and `credentialSchema` (also §4.11).
+- **Remedy.** The issuer must give the object its type.
 
 ### <a id="inspect.type_not_string"></a>`inspect.type_not_string`
 
 - **Meaning.** A `type` value is not a string.
 - **Attribution and severity.** `input`, `error`.
 - **Detail.** `path`: the value.
-- **Standard and remedy.** Round 4 of the milestone 1 review.
+- **Standard.** [VCDM 2.0] §4.5: the value of `type` MUST be one or more terms and
+  absolute URL strings. Whether a string is a term or an absolute URL depends on the
+  contexts, which vcrd does not process yet.
+- **Remedy.** The issuer must write each type as a string.
 
 ### <a id="inspect.type_lacks_verifiable_credential"></a>`inspect.type_lacks_verifiable_credential`
 
 - **Meaning.** The credential's `type` does not include `VerifiableCredential`.
 - **Attribution and severity.** `input`, `error`.
 - **Detail.** None.
-- **Standard and remedy.** Round 4 of the milestone 1 review.
+- **Standard.** [VCDM 2.0] §4.5's table: a credential's type includes
+  `VerifiableCredential`.
+- **Remedy.** A `type` with `VerifiablePresentation` instead is a presentation, reported
+  as `inspect.presentation_unsupported`. Otherwise the issuer must add the type.
 
 ### <a id="inspect.issuer_missing"></a>`inspect.issuer_missing`
 
@@ -269,7 +309,9 @@ repository; neither has a dated copy, so each is linked where it is published no
   derived from one, so verify does not run unless another key source is available.
 - **Attribution and severity.** `input`, `error`.
 - **Detail.** None.
-- **Standard and remedy.** Round 4 of the milestone 1 review.
+- **Standard.** [VCDM 2.0] §4.7: a verifiable credential MUST have an `issuer`.
+- **Remedy.** Nothing says who issued the credential. `phases.verify.blocked_by` says
+  where vcrd looked for a key.
 
 ### <a id="inspect.issuer_invalid"></a>`inspect.issuer_invalid`
 
@@ -278,21 +320,26 @@ repository; neither has a dated copy, so each is linked where it is published no
 - **Attribution and severity.** `input`, `error`.
 - **Detail.** `problem`: `wrong_type`, neither a string nor an object; `no_id`, an object
   without a string `id`; or `{"not_url": error}`, with the URL parser's error.
-- **Standard and remedy.** Round 4 of the milestone 1 review.
+- **Standard.** [VCDM 2.0] §4.7: `issuer` MUST be a URL or an object whose `id` is a URL;
+  §2 defines a URL by the [WHATWG URL Standard].
+- **Remedy.** As for `inspect.issuer_missing`.
 
 ### <a id="inspect.credential_subject_missing"></a>`inspect.credential_subject_missing`
 
 - **Meaning.** The credential has no `credentialSubject`.
 - **Attribution and severity.** `input`, `error`.
 - **Detail.** None.
-- **Standard and remedy.** Round 4 of the milestone 1 review.
+- **Standard.** [VCDM 2.0] §4.8: a verifiable credential MUST contain a
+  `credentialSubject`.
+- **Remedy.** The credential states no claims. The issuer must add its subjects.
 
 ### <a id="inspect.credential_subject_invalid"></a>`inspect.credential_subject_invalid`
 
 - **Meaning.** A subject is not an object.
 - **Attribution and severity.** `input`, `error`.
 - **Detail.** `path`: the subject.
-- **Standard and remedy.** Round 4 of the milestone 1 review.
+- **Standard.** [VCDM 2.0] §4.8: `credentialSubject` is a set of objects.
+- **Remedy.** The issuer must write each subject as an object.
 
 ### <a id="inspect.credential_subject_empty"></a>`inspect.credential_subject_empty`
 
@@ -300,14 +347,20 @@ repository; neither has a dated copy, so each is linked where it is published no
   subject of no claim.
 - **Attribution and severity.** `input`, `error`.
 - **Detail.** `path`: the subject, or the set.
-- **Standard and remedy.** Round 4 of the milestone 1 review.
+- **Standard.** [VCDM 2.0] §4.8: each object MUST be the subject of one or more claims
+  ([ARCHITECTURE] §10 [S5]).
+- **Remedy.** As for `inspect.credential_subject_missing`.
 
 ### <a id="inspect.credential_subject_no_claims"></a>`inspect.credential_subject_no_claims`
 
 - **Meaning.** A subject with an `id` and nothing else.
 - **Attribution and severity.** `input`, `warning`.
 - **Detail.** `path`: the subject.
-- **Standard and remedy.** Round 4 of the milestone 1 review.
+- **Standard.** [VCDM 2.0] §4.8: each object MUST be the subject of one or more claims.
+  vcrd reports one with only an `id` as a warning, not an error ([DEVELOPMENT-PLAN.md],
+  milestone 1, decided 2026-10-01).
+- **Remedy.** The credential names a subject and says nothing about it. Check that
+  nothing was removed from it.
 
 ### <a id="inspect.url_invalid"></a>`inspect.url_invalid`
 
@@ -315,7 +368,10 @@ repository; neither has a dated copy, so each is linked where it is published no
   value is not shown, since it may be a claim.
 - **Attribution and severity.** `input`, `error`.
 - **Detail.** `path`: the value. `error`: the URL parser's error.
-- **Standard and remedy.** Round 4 of the milestone 1 review.
+- **Standard.** [VCDM 2.0] §2 defines a URL by the [WHATWG URL Standard]; §4.3 for a
+  `@context` item, §4.4 for an `id`.
+- **Remedy.** The issuer must write the value as a URL. A relative one, such as
+  `/credentials/1`, is not.
 
 ### <a id="inspect.url_nonconforming"></a>`inspect.url_nonconforming`
 
@@ -324,7 +380,36 @@ repository; neither has a dated copy, so each is linked where it is published no
 - **Attribution and severity.** `input`, `warning`.
 - **Detail.** `path`: the value. `violations`: the corrections, by the URL Standard's
   names.
-- **Standard and remedy.** Round 4 of the milestone 1 review.
+- **Standard.** The [WHATWG URL Standard]'s validation errors. A warning, since the URL
+  parses ([DEVELOPMENT-PLAN.md], milestone 1, decided 2026-10-01).
+- **Remedy.** Another parser may read the URL differently, or reject it. The issuer can
+  write it as the parser corrected it.
+
+### <a id="inspect.id_missing"></a>`inspect.id_missing`
+
+- **Meaning.** An object that must have an `id` has none: a `credentialSchema`. An `id`
+  that is present and not a URL is `inspect.url_invalid` instead.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `path`: the object, such as `credentialSchema[1]`.
+- **Standard.** [VCDM 2.0] §4.11: each `credentialSchema` MUST have an `id`, a URL
+  identifying the schema.
+- **Remedy.** Without it, no verifier can find the schema. vcrd does not check schemas
+  yet, and `not_evaluated` lists `schema_conformance`.
+
+### <a id="inspect.language_value_invalid"></a>`inspect.language_value_invalid`
+
+- **Meaning.** The credential's `name` or `description` is neither a string nor a
+  language value object, nor an array of them.
+- **Attribution and severity.** `input`, `warning`. A warning, though [VCDM 2.0] §4.6
+  says MUST: both properties are optional, which §1.3 lets a verifier ignore, and the
+  Recommendation's own Example 40 gives `name` a map keyed by language.
+- **Detail.** `path`: the value, such as `name` or `description[0]`. `problem`:
+  `wrong_type`, neither a string nor an object; `value_missing`, an object without a
+  string `@value`; or `{"other_member": name}`, an object with a member other than
+  `@value`, `@language` and `@direction`.
+- **Standard.** [VCDM 2.0] §4.6 and §11.1.
+- **Remedy.** Software that shows the credential's name may show nothing, or the wrong
+  text. The issuer can write it as a string, or as `{"@value": …, "@language": …}`.
 
 ### <a id="inspect.date_time_invalid"></a>`inspect.date_time_invalid`
 
@@ -332,21 +417,30 @@ repository; neither has a dated copy, so each is linked where it is published no
 - **Attribution and severity.** `input`, `error`.
 - **Detail.** `field`: `validFrom` or `validUntil`. `valid_rfc3339`: whether [RFC 3339]
   would accept the value.
-- **Standard and remedy.** Round 4 of the milestone 1 review.
+- **Standard.** [VCDM 2.0] §4.9: each MUST be a `dateTimeStamp` string. Where XML Schema
+  and [RFC 3339] differ, vcrd follows XML Schema; [ARCHITECTURE] §4 lists the
+  differences.
+- **Remedy.** With `valid_rfc3339: true`, a verifier that reads RFC 3339 accepts the
+  value; the issuer can write it as a `dateTimeStamp`, such as `2026-10-01T00:00:00Z`.
 
 ### <a id="inspect.date_time_unrepresentable"></a>`inspect.date_time_unrepresentable`
 
 - **Meaning.** A `dateTimeStamp` outside the years vcrd can represent, -9999 to 9999.
 - **Attribution and severity.** `vcrd`, `error`.
 - **Detail.** `field`: `validFrom` or `validUntil`.
-- **Standard and remedy.** Round 4 of the milestone 1 review.
+- **Standard.** None: [VCDM 2.0] §4.9 allows any year XML Schema does, and the `time`
+  crate vcrd reads dates with stops at 9999 ([ARCHITECTURE] §4).
+- **Remedy.** Use a verifier that represents the year. vcrd cannot compare the bound with
+  the clock, so the credential's `validity` is `unknown`.
 
 ### <a id="inspect.valid_until_before_valid_from"></a>`inspect.valid_until_before_valid_from`
 
 - **Meaning.** `validUntil` is earlier than `validFrom`.
 - **Attribution and severity.** `input`, `error`.
 - **Detail.** `valid_from`, `valid_until`: the two bounds.
-- **Standard and remedy.** Round 4 of the milestone 1 review.
+- **Standard.** [VCDM 2.0] §4.9: `validUntil` MUST be the same as or later than
+  `validFrom` ([ARCHITECTURE] §10 [S3]).
+- **Remedy.** The credential is never valid. The issuer may have swapped the bounds.
 
 ### <a id="inspect.typ_unexpected"></a>`inspect.typ_unexpected`
 
@@ -514,14 +608,19 @@ repository; neither has a dated copy, so each is linked where it is published no
 - **Meaning.** `validUntil` is earlier than the clock, less the skew.
 - **Attribution and severity.** `input`, `error`.
 - **Detail.** `valid_until`, `now`, `skew_seconds`.
-- **Standard and remedy.** Round 4 of the milestone 1 review.
+- **Standard.** [VCDM 2.0] §4.9 defines `validUntil`, and §2 makes verification ask
+  whether the credential is a current statement. The signature's own expiry is
+  `verify.proof_expired`.
+- **Remedy.** `--now` checks the credential as of another time, and `--clock-skew`
+  allows for clocks that differ.
 
 ### <a id="inspect.not_yet_valid"></a>`inspect.not_yet_valid`
 
 - **Meaning.** `validFrom` is later than the clock, plus the skew.
 - **Attribution and severity.** `input`, `error`.
 - **Detail.** `valid_from`, `now`, `skew_seconds`.
-- **Standard and remedy.** Round 4 of the milestone 1 review.
+- **Standard.** As for `inspect.expired`, with `validFrom`.
+- **Remedy.** As for `inspect.expired`.
 
 ## Verify
 
@@ -530,7 +629,11 @@ repository; neither has a dated copy, so each is linked where it is published no
 - **Meaning.** The input carries nothing to verify.
 - **Attribution and severity.** `input`, `error`.
 - **Detail.** None.
-- **Standard and remedy.** Round 4 of the milestone 1 review.
+- **Standard.** [VCDM 2.0] §1.3: a conforming document MUST be secured by at least one
+  securing mechanism (§4.12).
+- **Remedy.** Not reported in milestone 1: a compact JWS whose header or signature does
+  not decode fails parse, which blocks verify. A format whose credentials carry the proof
+  inside them, as Data Integrity's do, reports it for a credential with none.
 
 ### <a id="verify.suite_unavailable"></a>`verify.suite_unavailable`
 

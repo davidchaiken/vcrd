@@ -389,8 +389,12 @@ In the prototype the corresponding path was traced to the arithmetic: for ES256 
 ### Format detection
 
 Each registered format reports `No`, `Maybe`, or `Yes` for the input, and the most
-confident wins. If none matches, parse fails, attributed according to whether the
-registry is empty (§2).
+confident wins. If none matches, parse fails. A JSON object with `@context` and `type`,
+read within the depth limit, is a credential or presentation that no format reads: with
+an embedded `proof`, `parse.data_integrity_unsupported`, attributed to vcrd, until
+milestone 5's format reads it; with none, `parse.not_secured`, attributed to the input,
+since VCDM 2.0 §1.3 requires a securing mechanism. Anything else is
+`parse.no_format_matched`, attributed according to whether the registry is empty (§2).
 
 ### Limits in the parse path
 
@@ -971,6 +975,19 @@ Each becomes a test observed to fail and then to pass (REQUIREMENTS §11):
   party building their own binary from `vcrd-core` plus their suite, statically linked at
   their build time, which vcrd never distributes. Rust has no stable ABI, so there is no
   plugin for vcrd to load, and the extension points are the whole mechanism.
+- **[Q7] A result that conforms to VCDM 2.0 §7.1.** VCDM 2.0 §7.1's verification algorithm
+  returns `status`, `document`, `mediaType`, `controller`, `controlledIdentifierDocument`,
+  `warnings` and `errors`, the last two lists of VCDM 2.0 §7.2's ProblemDetails, each with
+  a `type` URL such as `PARSING_ERROR`, `MALFORMED_VALUE_ERROR` or
+  `CRYPTOGRAPHIC_SECURITY_ERROR`. vcrd's result has none of that structure (milestone 1's
+  review, gap 18). Decide how vcrd produces it exactly: `--format json` itself; a
+  `--format vcdm2`; or a part of the JSON envelope that conforms. To settle with it:
+  §7.1's `document` is the whole verified credential, claims included, which REQUIREMENTS
+  §8 masks by default, so a conformant output needs a rule for redaction, such as giving
+  the document only under `--unsafe`, or a masked form; which findings map to which
+  problem type, and how those §7.2 does not name, such as findings attributed to vcrd,
+  appear; and `controller` and `controlledIdentifierDocument`, which depend on key
+  resolution. Milestone 3, with presentations' `mediaType: vp` in milestone 4.
 
 ### [C] Crates and algorithm coverage
 

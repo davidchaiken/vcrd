@@ -11,10 +11,10 @@ use time::format_description::well_known::Rfc3339;
 use vcrd_core::{
     Attribution, Base64urlProblem, BlockReason, Check, ClaimLocation, Context, CritProblem,
     DateField, DeclaredAlgorithm, DidKeyProblem, Document, DocumentKind, Finding, FindingDetail,
-    IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment, KeyRef, KeySourceKind, LeafClass,
-    Missing, NotEvaluatedReason, Phase, PhaseOutcome, ProofOutcome, PublicJwk, Rendered,
-    RenderedJson, Report, RevealLocation, Revealed, Severity, Treatment, Validity, ValueKind,
-    WeakKeyCriterion, render,
+    IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment, KeyRef, KeySourceKind,
+    LanguageValueProblem, LeafClass, Missing, NotEvaluatedReason, Phase, PhaseOutcome,
+    ProofOutcome, PublicJwk, Rendered, RenderedJson, Report, RevealLocation, Revealed, Severity,
+    Treatment, Validity, ValueKind, WeakKeyCriterion, render,
 };
 
 /// `0` until the schema is declared stable (REQUIREMENTS §9).
@@ -526,6 +526,8 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
             },
         }),
         FindingDetail::JsonNotJws => json!({"type": "json_not_jws"}),
+        FindingDetail::DataIntegrityUnsupported => json!({"type": "data_integrity_unsupported"}),
+        FindingDetail::NotSecured => json!({"type": "not_secured"}),
         FindingDetail::NoFormatMatched { registered } => json!({
             "type": "no_format_matched",
             "registered": registered.iter().map(|f| f.0).collect::<Vec<_>>(),
@@ -631,6 +633,16 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
             "type": "url_nonconforming",
             "path": path,
             "violations": violations,
+        }),
+        FindingDetail::IdMissing { path } => json!({"type": "id_missing", "path": path}),
+        FindingDetail::LanguageValueInvalid { path, problem } => json!({
+            "type": "language_value_invalid",
+            "path": path,
+            "problem": match problem {
+                LanguageValueProblem::WrongType => json!("wrong_type"),
+                LanguageValueProblem::ValueMissing => json!("value_missing"),
+                LanguageValueProblem::OtherMember { name } => json!({"other_member": name}),
+            },
         }),
         FindingDetail::DateTimeInvalid {
             field,

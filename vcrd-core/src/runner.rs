@@ -4,6 +4,7 @@
 use crate::context::Context;
 use crate::document::{DeclaredAlgorithm, ProofDescriptor, ProofMaterial, ProofTime, ProofTimes};
 use crate::finding::{Attribution, Finding, FindingDetail, KeySourceKind, Severity};
+use crate::json::{self, Json};
 use crate::keys::{self, PublicKey};
 use crate::registry::{CredentialFormat, Detection, ProofInput, Registry};
 use crate::report::{
@@ -35,19 +36,24 @@ pub(crate) fn run(bytes: &[u8], ctx: &Context, registry: &Registry, last: Phase)
             )],
         },
         None => {
-            // An empty registry is vcrd's limit; a non-empty one that matched
-            // nothing is the input's (ARCHITECTURE §2).
-            let registered: Vec<_> = registry.formats().map(|f| f.id()).collect();
-            let attribution = if registered.is_empty() {
-                Attribution::Vcrd
-            } else {
-                Attribution::Input
+            let finding = match unread_credential(bytes, ctx) {
+                Some((attribution, detail)) => Finding::error(Phase::Parse, attribution, detail),
+                None => {
+                    // An empty registry is vcrd's limit; a non-empty one that matched
+                    // nothing is the input's (ARCHITECTURE §2).
+                    let registered: Vec<_> = registry.formats().map(|f| f.id()).collect();
+                    let attribution = if registered.is_empty() {
+                        Attribution::Vcrd
+                    } else {
+                        Attribution::Input
+                    };
+                    Finding::error(
+                        Phase::Parse,
+                        attribution,
+                        FindingDetail::NoFormatMatched { registered },
+                    )
+                }
             };
-            let finding = Finding::error(
-                Phase::Parse,
-                attribution,
-                FindingDetail::NoFormatMatched { registered },
-            );
             PhaseOutcome::Failed {
                 output: ParseOutput::default(),
                 findings: vec![finding],
@@ -89,10 +95,13 @@ pub(crate) fn run(bytes: &[u8], ctx: &Context, registry: &Registry, last: Phase)
         }
     };
 
-    // Trust evaluation is not a phase (REQUIREMENTS §4).
+    // Trust evaluation is not a phase (REQUIREMENTS §4). Issuer accreditation is checked
+    // against a trust anchor the caller supplies (REQUIREMENTS §9), an input not yet
+    // designed (REQUIREMENTS §16 item 14); once it is, a caller who supplies none makes
+    // this `NoParametersSupplied`.
     let mut not_evaluated = vec![NotEvaluated {
         what: Check::IssuerAccreditation,
-        why: NotEvaluatedReason::OutOfScope,
+        why: NotEvaluatedReason::NotImplemented,
     }];
     if let Some(inspected) = inspect.output() {
         not_evaluated.extend_from_slice(&inspected.not_evaluated);
@@ -135,6 +144,24 @@ fn blocked_by_inspect(
                 consulted: vec![KeySourceKind::IssuerIdentifier],
             },
         },
+    })
+}
+
+/// A JSON credential or presentation that no registered format reads: an object with
+/// `@context` and `type` (VCDM 2.0 §4.3, §4.5). With an embedded `proof`, as Data
+/// Integrity secures one (§4.12), vcrd cannot read it until milestone 5; with none,
+/// nothing secures it (§1.3). Parsed only within the depth limit, as a format parses
+/// (ARCHITECTURE §4).
+fn unread_credential(bytes: &[u8], ctx: &Context) -> Option<(Attribution, FindingDetail)> {
+    if json::nesting_depth(bytes) > ctx.limits().max_depth {
+        return None;
+    }
+    let json = Json::parse(bytes).ok()?;
+    json.get("@context")?;
+    json.get("type")?;
+    Some(match json.get("proof") {
+        Some(_) => (Attribution::Vcrd, FindingDetail::DataIntegrityUnsupported),
+        None => (Attribution::Input, FindingDetail::NotSecured),
     })
 }
 

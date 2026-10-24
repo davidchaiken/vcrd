@@ -5,8 +5,8 @@
 use serde_json::{Value, json};
 use vcrd_core::{
     Attribution, BlockReason, Blocked, Check, ClaimLocation, CritProblem, FindingDetail,
-    KeySourceKind, Missing, NotEvaluated, NotEvaluatedReason, Phase, PhaseOutcome, Severity,
-    Validity,
+    KeySourceKind, LanguageValueProblem, Missing, NotEvaluated, NotEvaluatedReason, Phase,
+    PhaseOutcome, Severity, Validity,
 };
 
 use support::{
@@ -238,7 +238,7 @@ fn the_example_conforms() {
         [
             NotEvaluated {
                 what: Check::IssuerAccreditation,
-                why: NotEvaluatedReason::OutOfScope,
+                why: NotEvaluatedReason::NotImplemented,
             },
             NotEvaluated {
                 what: Check::ContextResolution,
@@ -1017,7 +1017,93 @@ fn checks_kid_for_a_url_issuer() {
     assert_eq!(codes(&report), Vec::<&str>::new());
 }
 
+/// VCDM 2.0 §4.4, §4.10 and §4.11: the `id` of a status, schema, terms-of-use,
+/// evidence or refresh-service object is a URL when present, and a schema's is
+/// required. A missing `id` and one that is not a URL are different findings.
+#[test]
+fn checks_the_ids_of_status_schema_and_related_objects() {
+    let report = inspect_token(&with_payload(|p| {
+        p["credentialStatus"] = json!({"id": "not a url", "type": "BitstringStatusListEntry"});
+        p["credentialSchema"] = json!([
+            {"id": "https://example.org/schema", "type": "JsonSchema"},
+            {"type": "JsonSchema"},
+        ]);
+        p["evidence"] = json!({"id": "https://example.org/evidence/1", "type": "Evidence"});
+    }));
+    let found: Vec<_> = report
+        .inspect
+        .findings()
+        .iter()
+        .map(|f| {
+            assert_eq!(f.severity, Severity::Error, "{f:?}");
+            match &f.detail {
+                FindingDetail::UrlInvalid { path, .. } => (f.code, path.clone()),
+                FindingDetail::IdMissing { path } => (f.code, path.clone()),
+                other => panic!("{other:?}"),
+            }
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("inspect.url_invalid", "credentialStatus.id".to_owned()),
+            ("inspect.id_missing", "credentialSchema[1]".to_owned()),
+        ]
+    );
+}
+
+/// VCDM 2.0 §4.6 and §11.1: `name` and `description` are each a string or a language
+/// value object, or an array of them. Warnings: both are optional (§1.3), and the
+/// Recommendation's Example 40 gives `name` another form.
+#[test]
+fn checks_names_and_descriptions() {
+    for value in [
+        json!("A name"),
+        json!({"@value": "A name", "@language": "en", "@direction": "ltr"}),
+        json!([{"@value": "A name", "@language": "en"}, {"@value": "Un nom", "@language": "fr"}]),
+    ] {
+        let report = inspect_token(&with_member("name", Some(value.clone())));
+        assert_eq!(codes(&report), Vec::<&str>::new(), "{value}");
+    }
+    let report = inspect_token(&with_payload(|p| {
+        p["name"] = json!(1);
+        p["description"] = json!([{"@value": 2}, {"@value": "x", "@lang": "en"}]);
+    }));
+    let found: Vec<_> = report
+        .inspect
+        .findings()
+        .iter()
+        .map(|f| {
+            assert_eq!(f.severity, Severity::Warning, "{f:?}");
+            match &f.detail {
+                FindingDetail::LanguageValueInvalid { path, problem } => {
+                    (path.clone(), problem.clone())
+                }
+                other => panic!("{other:?}"),
+            }
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("name".to_owned(), LanguageValueProblem::WrongType),
+            (
+                "description[0]".to_owned(),
+                LanguageValueProblem::ValueMissing
+            ),
+            (
+                "description[1]".to_owned(),
+                LanguageValueProblem::OtherMember {
+                    name: "@lang".to_owned()
+                }
+            ),
+        ]
+    );
+}
+
 /// Status and schemas are listed as not evaluated when present (REQUIREMENTS §12).
+/// Issuer accreditation needs a trust anchor from the caller (REQUIREMENTS §9), an input
+/// not yet designed (REQUIREMENTS §16 item 14), so it is not implemented.
 #[test]
 fn lists_status_and_schema_as_not_evaluated() {
     let report = inspect_token(&with_payload(|p| {
@@ -1032,7 +1118,10 @@ fn lists_status_and_schema_as_not_evaluated() {
     assert_eq!(
         not_evaluated,
         [
-            (Check::IssuerAccreditation, NotEvaluatedReason::OutOfScope),
+            (
+                Check::IssuerAccreditation,
+                NotEvaluatedReason::NotImplemented
+            ),
             (Check::ContextResolution, NotEvaluatedReason::NotImplemented),
             (Check::RevocationStatus, NotEvaluatedReason::NotImplemented),
             (Check::SchemaConformance, NotEvaluatedReason::NotImplemented),
