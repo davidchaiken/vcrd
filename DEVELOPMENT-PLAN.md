@@ -135,6 +135,14 @@ every other `alg` exercise the by-name rejection path from day one.
     string is `verify.algorithm_invalid`. An `aud` adds `audience` to `not_evaluated`,
     as `no_parameters_supplied`, until milestone 4 gives vcrd an expected audience.
     Naming nested JWTs and JWEs is ARCHITECTURE §10 [F3], with no milestone yet.
+  - Decided 2026-10-23, in the milestone review (round 3, VC-JOSE-COSE): a registered
+    claim of the wrong JSON type (`iss`, `sub`, `jti`, `aud`, and a header `iss`) is
+    `inspect.jwt_claim_type`, and is not compared; a claim replicated in the header that
+    differs from the payload's is `inspect.replicated_claim_mismatch`, a warning
+    (RFC 7519 §5.3); `cnf` adds `holder_binding` to `not_evaluated`, `not_implemented`;
+    and a presentation, by its `type`, is `inspect.presentation_unsupported`, attributed
+    to vcrd, with `credential.kind: presentation`, its header checked against `vp+jwt`
+    and `vp`, and verify blocked.
 - *Verify.* EdDSA/Ed25519 via `verify_strict`, `is_weak` at resolution (ARCHITECTURE §8);
   `none` rejected; every other `alg` unsupported by name (attribution vcrd, exit 6). Key
   resolution from the credential's `issuer` (the VCDM-normative identifier; `iss` is a

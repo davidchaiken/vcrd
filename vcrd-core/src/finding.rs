@@ -207,26 +207,39 @@ pub enum FindingDetail {
     },
 
     // Inspect: VC-JOSE-COSE.
-    /// `typ` (Type) is absent or not `vc+jwt`, which VC-JOSE-COSE §3.1.1 says it
-    /// SHOULD be. A warning.
-    TypUnexpected { found: Option<String> },
-    /// `cty` (Content Type) is present and not `vc`, which VC-JOSE-COSE §3.1.1 says it
-    /// SHOULD be. A warning.
-    CtyUnexpected { found: String },
+    /// `typ` (Type) is absent or not `expected`, which VC-JOSE-COSE says it SHOULD be:
+    /// `vc+jwt` for a credential (§3.1.1), `vp+jwt` for a presentation (§3.1.2). A
+    /// warning.
+    TypUnexpected {
+        found: Option<String>,
+        expected: &'static str,
+    },
+    /// `cty` (Content Type) is present and not `expected`, which VC-JOSE-COSE says it
+    /// SHOULD be: `vc` for a credential (§3.1.1), `vp` for a presentation (§3.1.2). A
+    /// warning.
+    CtyUnexpected {
+        found: String,
+        expected: &'static str,
+    },
     /// The payload follows VCDM 1.1's JWT encoding: the credential inside a `vc` claim,
     /// or a presentation inside `vp`, with no VCDM 2.0 `@context`. vcrd does not read
     /// it yet (ARCHITECTURE §10 [F2]). Attributed to vcrd; it blocks verify, since the
     /// encoding names the issuer in `iss`, which vcrd does not resolve.
     VcdmV1JwtEncoding { claim: &'static str },
+    /// The payload is a verifiable presentation: its `type` has `VerifiablePresentation`
+    /// and not `VerifiableCredential`. vcrd reads presentations from milestone 4
+    /// (DEVELOPMENT-PLAN.md), so it does not check this one as a credential. Attributed
+    /// to vcrd; it blocks verify, since a presentation names no issuer.
+    PresentationUnsupported,
     /// A `vc` or `vp` claim beside a VCDM 2.0 payload, which VC-JOSE-COSE §3.1.3 says
     /// MUST NOT be present.
     JwtClaimForbidden { claim: &'static str },
     /// `iss` (Issuer) does not match `issuer`, or `issuer.id` (VC-JOSE-COSE §4.1.2, a
-    /// MUST). Both are metadata, so both are carried. `iss` is `None` when it is not a
-    /// string.
+    /// MUST). Both are metadata, so both are carried. An `iss` that is not a string is
+    /// [`FindingDetail::JwtClaimType`] instead.
     IssMismatch {
-        location: IssLocation,
-        iss: Option<String>,
+        location: ClaimLocation,
+        iss: String,
         issuer: String,
     },
     /// A JWT claim and the credential property for the same thing are both present
@@ -237,6 +250,19 @@ pub enum FindingDetail {
         claim: &'static str,
         property: &'static str,
     },
+    /// A registered JWT claim whose value has another JSON type than RFC 7519 gives it:
+    /// a string for `iss`, `sub` and `jti` (§4.1.1, §4.1.2, §4.1.7), a string or an array
+    /// of strings for `aud` (§4.1.3). It is not compared with the credential.
+    JwtClaimType {
+        location: ClaimLocation,
+        claim: &'static str,
+        expected: &'static str,
+        found: &'static str,
+    },
+    /// A claim replicated as a header parameter differs from the claim, which RFC 7519
+    /// §5.3 says a recipient SHOULD check and VC-JOSE-COSE §3.1.3 applies to
+    /// credentials. A warning. The values may be claims, so they are not carried.
+    ReplicatedClaimMismatch { claim: String },
     /// No `kid` (Key ID) where VC-JOSE-COSE requires one: the issuer is a DID (§4.1.1),
     /// or `iss` is absent and the issuer is a URL (§4.2).
     KidMissing,
@@ -427,9 +453,12 @@ impl FindingDetail {
             FindingDetail::TypUnexpected { .. } => "inspect.typ_unexpected",
             FindingDetail::CtyUnexpected { .. } => "inspect.cty_unexpected",
             FindingDetail::VcdmV1JwtEncoding { .. } => "inspect.vcdm_1_1_jwt_encoding",
+            FindingDetail::PresentationUnsupported => "inspect.presentation_unsupported",
             FindingDetail::JwtClaimForbidden { .. } => "inspect.jwt_claim_forbidden",
             FindingDetail::IssMismatch { .. } => "inspect.iss_mismatch",
             FindingDetail::JwtClaimConflict { .. } => "inspect.jwt_claim_conflict",
+            FindingDetail::JwtClaimType { .. } => "inspect.jwt_claim_type",
+            FindingDetail::ReplicatedClaimMismatch { .. } => "inspect.replicated_claim_mismatch",
             FindingDetail::KidMissing => "inspect.kid_missing",
             FindingDetail::KidNotAbsolute { .. } => "inspect.kid_not_absolute",
             FindingDetail::KidForeign { .. } => "inspect.kid_foreign",
@@ -579,10 +608,10 @@ pub enum IssuerProblem {
     NotUrl { error: String },
 }
 
-/// Where an `iss` was found. VC-JOSE-COSE §4.1.2 reads it from the JWT claims or the
-/// JOSE header.
+/// Where a JWT claim was found: in the claims, or in the JOSE header, where RFC 7519
+/// §5.3 lets a claim be replicated and VC-JOSE-COSE §4.1.2 reads `iss`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IssLocation {
+pub enum ClaimLocation {
     Header,
     Payload,
 }

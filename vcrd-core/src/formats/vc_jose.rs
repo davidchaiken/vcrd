@@ -11,7 +11,7 @@ use crate::document::{
     ProofTimes, Timestamp,
 };
 use crate::finding::{
-    Attribution, Base64urlProblem, CritProblem, Finding, FindingDetail, IssLocation, JwkProblem,
+    Attribution, Base64urlProblem, ClaimLocation, CritProblem, Finding, FindingDetail, JwkProblem,
     JwsJsonSyntax, JwsSegment, Severity,
 };
 use crate::json::{Json, Step, nesting_depth, path_string};
@@ -115,9 +115,10 @@ impl CredentialFormat for VcJose {
             return PhaseOutcome::from_findings(output, findings);
         };
         let header = detail.header.as_ref();
+        let kind = parsed.document.as_ref().map(|d| d.kind);
         if let Some(header) = header {
             duplicates(&header.parsed, JwsSegment::Header, &mut findings);
-            header_members(header, &mut findings);
+            header_members(header, kind, &mut findings);
         }
         if let (Some(payload), Some(document)) = (&detail.payload, &parsed.document) {
             duplicates(payload, JwsSegment::Payload, &mut findings);
@@ -153,8 +154,13 @@ fn duplicates(json: &Json, segment: JwsSegment, findings: &mut Vec<Finding>) {
 }
 
 /// The JSON types of the registered members (RFC 7515 §4.1), `typ` and `cty`
-/// (VC-JOSE-COSE §3.1.1), and the form of `crit` (RFC 7515 §4.1.11).
-fn header_members(header: &JoseHeader, findings: &mut Vec<Finding>) {
+/// (VC-JOSE-COSE §3.1.1, and §3.1.2 for a presentation), and the form of `crit`
+/// (RFC 7515 §4.1.11).
+fn header_members(header: &JoseHeader, kind: Option<DocumentKind>, findings: &mut Vec<Finding>) {
+    let (typ_expected, cty_expected) = match kind {
+        Some(DocumentKind::Presentation) => ("vp+jwt", "vp"),
+        Some(DocumentKind::Credential) | None => ("vc+jwt", "vc"),
+    };
     for (member, expected) in TYPED_HEADER_PARAMETERS {
         if let Some(value) = header.parsed.get(member)
             && !has_type(value, expected)
@@ -171,18 +177,18 @@ fn header_members(header: &JoseHeader, findings: &mut Vec<Finding>) {
         .parsed
         .get("typ")
         .is_some_and(|typ| typ.as_str().is_none());
-    if !typ_not_string
-        && header.typ.as_deref().map(media_type).as_deref() != Some("application/vc+jwt")
-    {
+    if !typ_not_string && header.typ.as_deref().map(media_type) != Some(media_type(typ_expected)) {
         findings.push(inspect_warning(FindingDetail::TypUnexpected {
             found: header.typ.clone(),
+            expected: typ_expected,
         }));
     }
     if let Some(cty) = &header.cty
-        && media_type(cty) != "application/vc"
+        && media_type(cty) != media_type(cty_expected)
     {
         findings.push(inspect_warning(FindingDetail::CtyUnexpected {
             found: cty.clone(),
+            expected: cty_expected,
         }));
     }
     if let Some(crit) = header.parsed.get("crit") {
@@ -248,6 +254,9 @@ fn has_type(value: &Json, expected: &str) -> bool {
     match (expected, value) {
         ("array_of_strings", Json::Array(items)) => items.iter().all(|i| i.as_str().is_some()),
         ("string", value) => value.as_str().is_some(),
+        ("string_or_array_of_strings", value) => {
+            has_type(value, "string") || has_type(value, "array_of_strings")
+        }
         _ => false,
     }
 }
@@ -356,6 +365,18 @@ fn inspect_payload(
         findings.push(finding);
         return;
     }
+    if document.kind == DocumentKind::Presentation {
+        // As for VCDM 1.1's encoding: a presentation would fail each credential check,
+        // attributed to the input, when the cause is that vcrd does not read it yet
+        // (DEVELOPMENT-PLAN.md, milestone 4). It names a holder, not an issuer.
+        findings.push(Finding::error(
+            Phase::Inspect,
+            Attribution::Vcrd,
+            FindingDetail::PresentationUnsupported,
+        ));
+        output.no_issuer_identifier = true;
+        return;
+    }
     if let Some(claim) = v1_claim {
         findings.push(inspect_error(FindingDetail::JwtClaimForbidden { claim }));
     }
@@ -374,6 +395,14 @@ fn inspect_payload(
             why: NotEvaluatedReason::NoParametersSupplied,
         });
     }
+    // VC-JOSE-COSE §4.1.3: `cnf` binds the credential to a holder's key, which only a
+    // presentation can show is held (DEVELOPMENT-PLAN.md, milestone 4).
+    if payload.get("cnf").is_some() || header.is_some_and(|h| h.parsed.get("cnf").is_some()) {
+        output.not_evaluated.push(NotEvaluated {
+            what: Check::HolderBinding,
+            why: NotEvaluatedReason::NotImplemented,
+        });
+    }
     output.not_evaluated.extend(inspected.not_evaluated);
     output.no_issuer_identifier = inspected.no_issuer_identifier;
 
@@ -382,6 +411,9 @@ fn inspect_payload(
         .as_deref()
         .filter(|_| !output.no_issuer_identifier);
     jwt_claims(payload, header, issuer, findings);
+    if let Some(header) = header {
+        replicated_claims(header, payload, findings);
+    }
     for claim in JWT_TIMES {
         if payload.get(claim).is_some_and(|v| v.as_number().is_none()) {
             findings.push(inspect_error(FindingDetail::NumericDateInvalid { claim }));
@@ -392,34 +424,65 @@ fn inspect_payload(
     }
 }
 
+/// The JSON types RFC 7519 gives the registered claims vcrd compares or reads: a
+/// StringOrURI is a string (§4.1.1, §4.1.2, §4.1.7), and `aud` one or an array of them
+/// (§4.1.3).
+const TYPED_CLAIMS: [(&str, &str); 4] = [
+    ("iss", "string"),
+    ("sub", "string"),
+    ("jti", "string"),
+    ("aud", "string_or_array_of_strings"),
+];
+
 /// The JWT claims that duplicate credential properties: `iss` MUST match the issuer
 /// (VC-JOSE-COSE §4.1.2); `jti` and `id`, and `sub` and `credentialSubject.id`, SHOULD
 /// NOT conflict (§3.1.3). Compared exactly, as RFC 7519 §2 compares StringOrURI
-/// values. `issuer` is `None` when inspect found it unusable.
+/// values, once each is shown to be a string. `issuer` is `None` when inspect found it
+/// unusable.
 fn jwt_claims(
     payload: &Json,
     header: Option<&JoseHeader>,
     issuer: Option<&str>,
     findings: &mut Vec<Finding>,
 ) {
+    let header_iss = header.and_then(|h| h.parsed.get("iss"));
+    let located = TYPED_CLAIMS
+        .iter()
+        .map(|&(claim, expected)| (ClaimLocation::Payload, claim, expected, payload.get(claim)))
+        .chain([(ClaimLocation::Header, "iss", "string", header_iss)]);
+    for (location, claim, expected, value) in located {
+        if let Some(value) = value
+            && !has_type(value, expected)
+        {
+            findings.push(inspect_error(FindingDetail::JwtClaimType {
+                location,
+                claim,
+                expected,
+                found: value.type_name(),
+            }));
+        }
+    }
+    // A claim of another type was reported above, and is not compared.
+    fn string(claim: Option<&Json>) -> Option<&Json> {
+        claim.filter(|c| c.as_str().is_some())
+    }
     if let Some(issuer) = issuer {
-        let header_iss = header.and_then(|h| h.parsed.get("iss"));
         for (location, iss) in [
-            (IssLocation::Payload, payload.get("iss")),
-            (IssLocation::Header, header_iss),
+            (ClaimLocation::Payload, payload.get("iss")),
+            (ClaimLocation::Header, header_iss),
         ] {
-            if let Some(iss) = iss.map(Json::as_str)
-                && iss != Some(issuer)
+            if let Some(iss) = iss.and_then(Json::as_str)
+                && iss != issuer
             {
                 findings.push(inspect_error(FindingDetail::IssMismatch {
                     location,
-                    iss: iss.map(str::to_owned),
+                    iss: iss.to_owned(),
                     issuer: issuer.to_owned(),
                 }));
             }
         }
     }
-    if let (Some(jti), Some(id)) = (payload.get("jti"), payload.get("id"))
+    if let (Some(jti), Some(id)) = (string(payload.get("jti")), payload.get("id"))
         && jti != id
     {
         findings.push(inspect_warning(FindingDetail::JwtClaimConflict {
@@ -427,7 +490,7 @@ fn jwt_claims(
             property: "id",
         }));
     }
-    if let Some(sub) = payload.get("sub") {
+    if let Some(sub) = string(payload.get("sub")) {
         let ids: Vec<&Json> = match payload.get("credentialSubject") {
             Some(Json::Array(subjects)) => subjects.iter().filter_map(|s| s.get("id")).collect(),
             Some(subject) => subject.get("id").into_iter().collect(),
@@ -437,6 +500,29 @@ fn jwt_claims(
             findings.push(inspect_warning(FindingDetail::JwtClaimConflict {
                 claim: "sub",
                 property: "credentialSubject.id",
+            }));
+        }
+    }
+}
+
+/// RFC 7519 §5.3, which VC-JOSE-COSE §3.1.3 applies to credentials: a claim replicated
+/// as a header parameter SHOULD be identical to the claim. RFC 7515's own parameters are
+/// not claims, and `iss` is compared with the issuer instead (§4.1.2). A name repeated
+/// in the header is compared once, by the value the parse kept.
+fn replicated_claims(header: &JoseHeader, payload: &Json, findings: &mut Vec<Finding>) {
+    let mut compared: Vec<&str> = Vec::new();
+    for member in header.parsed.members().unwrap_or_default() {
+        let name = member.name.as_str();
+        if name == "iss" || REGISTERED_HEADER_PARAMETERS.contains(&name) || compared.contains(&name)
+        {
+            continue;
+        }
+        compared.push(name);
+        if let Some(claim) = payload.get(name)
+            && header.parsed.get(name) != Some(claim)
+        {
+            findings.push(inspect_warning(FindingDetail::ReplicatedClaimMismatch {
+                claim: name.to_owned(),
             }));
         }
     }
@@ -781,10 +867,19 @@ fn document(payload: &Json, limits: &Limits, findings: &mut Vec<Finding>) -> Doc
             limit: limits.max_claims,
         }));
     }
+    let types = strings(payload.get("type"));
+    // VCDM 2.0's types for each. One with both is checked as a credential, which fails
+    // on what it is not.
+    let has = |t: &str| types.iter().any(|s| s == t);
+    let kind = if has("VerifiablePresentation") && !has("VerifiableCredential") {
+        DocumentKind::Presentation
+    } else {
+        DocumentKind::Credential
+    };
     Document {
-        kind: DocumentKind::Credential,
+        kind,
         contexts: contexts(payload.get("@context")),
-        types: strings(payload.get("type")),
+        types,
         issuer,
         valid_from: timestamp(payload.get("validFrom")),
         valid_until: timestamp(payload.get("validUntil")),

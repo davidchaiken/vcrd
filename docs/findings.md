@@ -96,8 +96,8 @@ repository; neither has a dated copy, so each is linked where it is published no
 - **Attribution and severity.** `vcrd`, `error`.
 - **Detail.** `syntax`: `general`, a `signatures` array, or `flattened`, one `signature`
   beside `payload`.
-- **Standard.** [RFC 7515] §7.2. [VC-JOSE-COSE] §3.1.1 requires verifiers to support the
-  compact serialization and does not recommend the JSON one.
+- **Standard.** [RFC 7515] §7.2. [VC-JOSE-COSE] requires implementations to support the
+  compact serialization and does not recommend the JSON one, at the end of §3.1.2.
 - **Remedy.** Use a verifier that reads JSON serialization. Reading it is planned
   ([ARCHITECTURE] §10 [F1]; [DEVELOPMENT-PLAN.md], milestone 4).
 
@@ -350,18 +350,26 @@ repository; neither has a dated copy, so each is linked where it is published no
 
 ### <a id="inspect.typ_unexpected"></a>`inspect.typ_unexpected`
 
-- **Meaning.** The header's `typ` (Type) is absent, or not `vc+jwt`.
+- **Meaning.** The header's `typ` (Type) is absent, or not `vc+jwt`: `vp+jwt` for a
+  presentation.
 - **Attribution and severity.** `input`, `warning`.
-- **Detail.** `found`: the value, or `null` when absent. `expected`: `vc+jwt`. A `typ`
-  that is not a string is `inspect.header_member_type` instead.
-- **Standard and remedy.** Round 3 of the milestone 1 review.
+- **Detail.** `found`: the value, or `null` when absent. `expected`: `vc+jwt` or `vp+jwt`.
+  A `typ` that is not a string is `inspect.header_member_type` instead.
+- **Standard.** [VC-JOSE-COSE] §3.1.1: `typ` SHOULD be `vc+jwt`; §3.1.2: `vp+jwt` for a
+  presentation. Compared as a media type, ignoring case, with `application/` implied
+  before a value with no `/` ([RFC 7515] §4.1.9).
+- **Remedy.** None needed to verify. A verifier that checks `typ` may reject the token;
+  the issuer can set it to `expected`.
 
 ### <a id="inspect.cty_unexpected"></a>`inspect.cty_unexpected`
 
-- **Meaning.** The header's `cty` (Content Type) is present and not `vc`.
+- **Meaning.** The header's `cty` (Content Type) is present and not `vc`: `vp` for a
+  presentation.
 - **Attribution and severity.** `input`, `warning`.
-- **Detail.** `found`: the value. `expected`: `vc`.
-- **Standard and remedy.** Round 3 of the milestone 1 review.
+- **Detail.** `found`: the value. `expected`: `vc` or `vp`.
+- **Standard.** [VC-JOSE-COSE] §3.1.1 and §3.1.2: when present, `cty` SHOULD be `vc`, or
+  `vp` for a presentation. Compared as `typ` is ([RFC 7515] §4.1.10).
+- **Remedy.** As for `inspect.typ_unexpected`; the issuer can also leave `cty` out.
 
 ### <a id="inspect.vcdm_1_1_jwt_encoding"></a>`inspect.vcdm_1_1_jwt_encoding`
 
@@ -370,22 +378,48 @@ repository; neither has a dated copy, so each is linked where it is published no
   it yet, and does not verify it.
 - **Attribution and severity.** `vcrd`, `error`.
 - **Detail.** `claim`: `vc` or `vp`.
-- **Standard and remedy.** Round 3 of the milestone 1 review.
+- **Standard.** [VCDM 1.1]'s JWT encoding. [VC-JOSE-COSE] §1.1.2.1 forbids `vc` and `vp`
+  in a credential it secures, so this is not a [VC-JOSE-COSE] credential.
+- **Remedy.** Use a verifier that reads [VCDM 1.1]'s JWTs. vcrd plans to read them in
+  milestone 5 ([ARCHITECTURE] §10 [F2]).
+
+### <a id="inspect.presentation_unsupported"></a>`inspect.presentation_unsupported`
+
+- **Meaning.** The payload is a verifiable presentation: its `type` has
+  `VerifiablePresentation` and not `VerifiableCredential`. vcrd does not read
+  presentations yet, so it does not check this one as a credential, and does not verify
+  it: a presentation names a holder, not an issuer. `credential.kind` is
+  `presentation`.
+- **Attribution and severity.** `vcrd`, `error`.
+- **Detail.** None.
+- **Standard.** [VC-JOSE-COSE] §3.1.2 secures presentations; [VCDM 2.0] defines them.
+- **Remedy.** Use a verifier that reads presentations, or verify each credential the
+  presentation carries on its own. vcrd reads presentations from milestone 4
+  ([DEVELOPMENT-PLAN.md]).
 
 ### <a id="inspect.jwt_claim_forbidden"></a>`inspect.jwt_claim_forbidden`
 
 - **Meaning.** A `vc` or `vp` claim beside a [VCDM 2.0] payload.
 - **Attribution and severity.** `input`, `error`.
 - **Detail.** `claim`: `vc` or `vp`.
-- **Standard and remedy.** Round 3 of the milestone 1 review.
+- **Standard.** [VC-JOSE-COSE] §1.1.2.1: `vc` and `vp` MUST NOT be present in a JWT
+  Claims Set that is a credential or a presentation.
+- **Remedy.** The payload mixes [VCDM 1.1]'s encoding with [VCDM 2.0]'s. Obtain the
+  credential again from its issuer, in one of them.
 
 ### <a id="inspect.iss_mismatch"></a>`inspect.iss_mismatch`
 
 - **Meaning.** `iss` (Issuer) does not match `issuer`, or `issuer.id`.
 - **Attribution and severity.** `input`, `error`.
-- **Detail.** `location`: `header` or `payload`, where the `iss` is. `iss`: its value, or
-  `null` when it is not a string. `issuer`: the credential's issuer identifier.
-- **Standard and remedy.** Round 3 of the milestone 1 review.
+- **Detail.** `location`: `header` or `payload`, where the `iss` is. `iss`: its value.
+  `issuer`: the credential's issuer identifier. An `iss` that is not a string is
+  `inspect.jwt_claim_type` instead.
+- **Standard.** [VC-JOSE-COSE] §4.1.2: `iss`, if present, MUST match `issuer`, or
+  `issuer.id` when `issuer` is an object. Compared exactly, as [RFC 7519] §7.3 compares
+  strings.
+- **Remedy.** vcrd takes the key from `issuer`, so the finding says that the two
+  disagree, not which is right. A verifier that reads `iss` would look for another
+  issuer's key.
 
 ### <a id="inspect.jwt_claim_conflict"></a>`inspect.jwt_claim_conflict`
 
@@ -394,7 +428,36 @@ repository; neither has a dated copy, so each is linked where it is published no
   not shown, since they are claims.
 - **Attribution and severity.** `input`, `warning`.
 - **Detail.** `claim`: `jti` or `sub`. `property`: `id` or `credentialSubject.id`.
-- **Standard and remedy.** Round 3 of the milestone 1 review.
+- **Standard.** [VC-JOSE-COSE] §3.1.3, a non-normative section: implementers SHOULD avoid
+  JWT claims whose values conflict with the credential's properties.
+- **Remedy.** A reader of the JWT claims and a reader of the credential would identify
+  different things. `--unsafe` shows both values. A claim that is not a string is
+  `inspect.jwt_claim_type` instead.
+
+### <a id="inspect.jwt_claim_type"></a>`inspect.jwt_claim_type`
+
+- **Meaning.** A registered JWT claim's value has the wrong JSON type. It is reported as
+  that, and not compared with the credential.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `location`: `payload`, or `header` for an `iss` there. `claim`: `iss`,
+  `sub`, `jti` or `aud`. `expected`: `string`, or for `aud`
+  `string_or_array_of_strings`. `found`: the value's JSON type.
+- **Standard.** [RFC 7519] §4.1.1, §4.1.2 and §4.1.7 make `iss`, `sub` and `jti` strings,
+  and §4.1.3 makes `aud` a string or an array of strings. [VC-JOSE-COSE] §3.1.3 has
+  registered claims interpreted as their specifications define.
+- **Remedy.** The issuer must give the claim the type its specification does.
+
+### <a id="inspect.replicated_claim_mismatch"></a>`inspect.replicated_claim_mismatch`
+
+- **Meaning.** A claim replicated as a header parameter differs from the claim in the
+  payload. The values are not shown, since they may be claims.
+- **Attribution and severity.** `input`, `warning`.
+- **Detail.** `claim`: its name. `iss` is compared with the issuer instead, as
+  `inspect.iss_mismatch`, and the header parameters [RFC 7515] defines are not claims.
+- **Standard.** [RFC 7519] §5.3: a recipient SHOULD check that a replicated claim is
+  identical to the claim. [VC-JOSE-COSE] §3.1.3 applies §5.3 to credentials.
+- **Remedy.** vcrd reads claims from the payload. A reader of the header sees another
+  value; `--unsafe` shows the payload's.
 
 ### <a id="inspect.kid_missing"></a>`inspect.kid_missing`
 
@@ -403,7 +466,11 @@ repository; neither has a dated copy, so each is linked where it is published no
   `inspect.header_member_type` instead.
 - **Attribution and severity.** `input`, `error`.
 - **Detail.** None.
-- **Standard and remedy.** Round 3 of the milestone 1 review.
+- **Standard.** [VC-JOSE-COSE] §4.1.1: `kid` MUST be present when the issuer's key is
+  expressed as a DID URL. §4.2: with `iss` absent and the issuer a URL, `kid` MUST be an
+  absolute URL to a verification method.
+- **Remedy.** vcrd never chooses the key by `kid`, so verify is unaffected. A verifier
+  that does may not find the key.
 
 ### <a id="inspect.kid_not_absolute"></a>`inspect.kid_not_absolute`
 
@@ -411,7 +478,9 @@ repository; neither has a dated copy, so each is linked where it is published no
   URL.
 - **Attribution and severity.** `input`, `error`.
 - **Detail.** `kid`: its value.
-- **Standard and remedy.** Round 3 of the milestone 1 review.
+- **Standard.** [VC-JOSE-COSE] §4.2.
+- **Remedy.** As for `inspect.kid_missing`. With `iss` present, a relative `kid` is
+  resolved against the issuer instead, and is not reported.
 
 ### <a id="inspect.kid_foreign"></a>`inspect.kid_foreign`
 
@@ -420,7 +489,12 @@ repository; neither has a dated copy, so each is linked where it is published no
 - **Attribution and severity.** `input`, `error`.
 - **Detail.** `kid`: its value. `issuer`: the issuer identifier. `expected`: the key's
   identifier when the DID method determines it, as `did:key` does, otherwise `null`.
-- **Standard and remedy.** Round 3 of the milestone 1 review.
+- **Standard.** [VC-JOSE-COSE] §4.1.1 requires `kid` when the issuer's key is a DID URL;
+  vcrd reads that as requiring the issuer's key's DID URL, not another one
+  ([DEVELOPMENT-PLAN.md], milestone 1, known input 4). [RFC 7515] §4.1.4 makes `kid` a
+  hint.
+- **Remedy.** vcrd verifies with the issuer's key whatever `kid` says. A verifier that
+  follows `kid` would look for another key.
 
 ### <a id="inspect.kid_without_thumbprint"></a>`inspect.kid_without_thumbprint`
 
@@ -428,7 +502,12 @@ repository; neither has a dated copy, so each is linked where it is published no
   Thumbprint URI.
 - **Attribution and severity.** `input`, `warning`.
 - **Detail.** `kid`: its value.
-- **Standard and remedy.** Round 3 of the milestone 1 review.
+- **Standard.** [VC-JOSE-COSE] §4.2: with URL identifiers, `kid` is RECOMMENDED to be an
+  absolute URL that includes a JWK Thumbprint URI ([RFC 7638]). vcrd applies it to URLs
+  other than DIDs, whose key identifiers each DID method defines ([DEVELOPMENT-PLAN.md],
+  milestone 1).
+- **Remedy.** None needed to verify. A thumbprint in `kid` lets a verifier check the key
+  it finds against the one the issuer meant.
 
 ### <a id="inspect.expired"></a>`inspect.expired`
 
@@ -721,6 +800,7 @@ repository; neither has a dated copy, so each is linked where it is published no
 [RFC 7517]: https://www.rfc-editor.org/rfc/rfc7517
 [RFC 7518]: https://www.rfc-editor.org/rfc/rfc7518
 [RFC 7519]: https://www.rfc-editor.org/rfc/rfc7519
+[RFC 7638]: https://www.rfc-editor.org/rfc/rfc7638
 [RFC 8032]: https://www.rfc-editor.org/rfc/rfc8032
 [RFC 8037]: https://www.rfc-editor.org/rfc/rfc8037
 [RFC 8259]: https://www.rfc-editor.org/rfc/rfc8259

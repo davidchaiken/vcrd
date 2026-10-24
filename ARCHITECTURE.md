@@ -245,7 +245,8 @@ pub enum Severity { Info, Warning, Error }
   exposure.
 - **`NotEvaluated { what, why }`** lists the checks REQUIREMENTS §12 requires a result to
   disclose as not performed — revocation status, context resolution, audience (RFC 7519
-  §4.1.3), holder binding, replay binding, issuer accreditation, schema conformance — each
+  §4.1.3), holder binding (VC-JOSE-COSE §4.1.3's `cnf`), replay binding, issuer
+  accreditation, schema conformance — each
   with a reason: requires network, no parameters supplied, not implemented, out of scope,
   or phase not reached.
 
@@ -366,7 +367,9 @@ In the prototype the corresponding path was traced to the arithmetic: for ES256 
   (`vcrd-core/src/runner.rs`, `blocked_by_inspect`). Milestone 1 has no other source, so
   those findings always block; milestone 2's caller-supplied keys are consulted at that
   point. The findings are a missing `issuer`, one that is neither a URL nor an object
-  whose `id` is a URL, and VCDM 1.1's JWT encoding (§10 [F2]). A well-formed issuer vcrd
+  whose `id` is a URL, VCDM 1.1's JWT encoding (§10 [F2]), and a presentation, which
+  names a holder rather than an issuer and which vcrd reads from milestone 4
+  (`inspect.presentation_unsupported`). A well-formed issuer vcrd
   cannot resolve, such as an `https:` URL, does not block: verify runs and fails,
   attributed to vcrd. A credential that carries a key about itself is not blocked
   either: that key is a source the runner consults, though it refuses it without the

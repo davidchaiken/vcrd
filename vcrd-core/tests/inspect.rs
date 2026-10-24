@@ -4,7 +4,7 @@
 
 use serde_json::{Value, json};
 use vcrd_core::{
-    Attribution, BlockReason, Blocked, Check, CritProblem, FindingDetail, IssLocation,
+    Attribution, BlockReason, Blocked, Check, ClaimLocation, CritProblem, FindingDetail,
     KeySourceKind, Missing, NotEvaluated, NotEvaluatedReason, Phase, PhaseOutcome, Severity,
     Validity,
 };
@@ -722,7 +722,7 @@ fn iss_must_match_the_issuer() {
     let report = inspect_token(&with_member("iss", Some(json!("did:example:other"))));
     let detail = &report.inspect.findings()[0].detail;
     assert!(
-        matches!(detail, FindingDetail::IssMismatch { location: IssLocation::Payload, iss: Some(iss), issuer: i }
+        matches!(detail, FindingDetail::IssMismatch { location: ClaimLocation::Payload, iss, issuer: i }
             if iss == "did:example:other" && *i == issuer),
         "{detail:?}"
     );
@@ -733,7 +733,7 @@ fn iss_must_match_the_issuer() {
     assert!(matches!(
         report.inspect.findings()[0].detail,
         FindingDetail::IssMismatch {
-            location: IssLocation::Header,
+            location: ClaimLocation::Header,
             ..
         }
     ));
@@ -776,6 +776,167 @@ fn jti_and_sub_should_not_conflict() {
         ]);
     }));
     assert_eq!(codes(&report), Vec::<&str>::new());
+}
+
+/// RFC 7519 §4.1.1–4.1.3 and §4.1.7: `iss`, `sub` and `jti` are strings, and `aud` a
+/// string or an array of strings. A claim of another type is reported as that, and is
+/// not compared with the credential.
+#[test]
+fn registered_claims_have_their_types() {
+    let types = |report: &vcrd_core::Report| {
+        report
+            .inspect
+            .findings()
+            .iter()
+            .map(|f| match &f.detail {
+                FindingDetail::JwtClaimType {
+                    location,
+                    claim,
+                    expected,
+                    found,
+                } => (*location, *claim, *expected, *found),
+                other => panic!("{other:?}"),
+            })
+            .collect::<Vec<_>>()
+    };
+    let report = inspect_token(&with_payload(|p| {
+        p["iss"] = json!(1);
+        p["sub"] = json!(1);
+        p["jti"] = json!(1);
+        p["aud"] = json!([1]);
+    }));
+    let payload = ClaimLocation::Payload;
+    assert_eq!(
+        types(&report),
+        [
+            (payload, "iss", "string", "number"),
+            (payload, "sub", "string", "number"),
+            (payload, "jti", "string", "number"),
+            (payload, "aud", "string_or_array_of_strings", "array"),
+        ]
+    );
+    let report = inspect_token(&with_header(|h| h["iss"] = json!(true)));
+    assert_eq!(
+        types(&report),
+        [(ClaimLocation::Header, "iss", "string", "bool")]
+    );
+    for aud in [
+        json!("https://verifier.example"),
+        json!(["https://verifier.example"]),
+    ] {
+        let report = inspect_token(&with_member("aud", Some(aud)));
+        assert_eq!(codes(&report), Vec::<&str>::new());
+    }
+}
+
+/// RFC 7519 §5.3, which VC-JOSE-COSE §3.1.3 applies to credentials: a claim replicated
+/// as a header parameter SHOULD be identical to the claim. The values stay out of the
+/// finding.
+#[test]
+fn a_claim_replicated_in_the_header_matches_the_claim() {
+    let replicated = |header_sub: Value| {
+        let (mut header, mut payload) = example_parts();
+        payload["sub"] = payload["credentialSubject"]["id"].clone();
+        header["sub"] = header_sub;
+        // Only in the header: nothing to compare.
+        header["exp"] = json!(1);
+        inspect_token(&token(&header, &payload))
+    };
+    let (_, payload) = example_parts();
+    let report = replicated(payload["credentialSubject"]["id"].clone());
+    assert_eq!(codes(&report), Vec::<&str>::new());
+
+    let report = replicated(json!("did:example:canary-header-sub"));
+    assert_eq!(
+        inspected(&report),
+        [(
+            "inspect.replicated_claim_mismatch",
+            Attribution::Input,
+            Severity::Warning
+        )]
+    );
+    assert!(matches!(
+        &report.inspect.findings()[0].detail,
+        FindingDetail::ReplicatedClaimMismatch { claim } if claim == "sub"
+    ));
+    let debug = format!("{report:?}");
+    assert!(!debug.contains("canary"), "{debug}");
+}
+
+/// VC-JOSE-COSE §4.1.3: `cnf` names the key that binds the credential to its holder,
+/// which only a presentation can show is held (DEVELOPMENT-PLAN.md, milestone 4).
+#[test]
+fn cnf_lists_holder_binding_as_not_evaluated() {
+    let holder_binding = (Check::HolderBinding, NotEvaluatedReason::NotImplemented);
+    let cnf = json!({"jkt": "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"});
+    for token in [
+        with_member("cnf", Some(cnf.clone())),
+        with_header(|h| h["cnf"] = cnf.clone()),
+    ] {
+        let report = inspect_token(&token);
+        let not_evaluated: Vec<_> = report
+            .not_evaluated
+            .iter()
+            .map(|n| (n.what, n.why))
+            .collect();
+        assert!(not_evaluated.contains(&holder_binding), "{not_evaluated:?}");
+        assert_eq!(codes(&report), Vec::<&str>::new());
+    }
+    let report = inspect_token(&with_header(|_| {}));
+    assert!(
+        !report
+            .not_evaluated
+            .iter()
+            .any(|n| (n.what, n.why) == holder_binding)
+    );
+}
+
+/// VC-JOSE-COSE §3.1.2: a presentation, which vcrd reads from milestone 4, is named and
+/// attributed to vcrd, not checked as a credential. Its header is checked against
+/// §3.1.2's `vp+jwt` and `vp`, and verify is blocked: a presentation names no issuer.
+#[test]
+fn a_presentation_is_named_and_not_checked_as_a_credential() {
+    let presentation = |typ: &str| {
+        let (mut header, _) = example_parts();
+        header["typ"] = json!(typ);
+        header["cty"] = json!("vp");
+        let payload = json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiablePresentation"],
+            "holder": "did:example:holder",
+        });
+        token(&header, &payload)
+    };
+    let report = verify_token(&presentation("vp+jwt"));
+    assert_eq!(
+        inspected(&report),
+        [(
+            "inspect.presentation_unsupported",
+            Attribution::Vcrd,
+            Severity::Error
+        )]
+    );
+    assert!(
+        matches!(
+            report.verify,
+            PhaseOutcome::NotReached(Blocked {
+                by: Phase::Inspect,
+                ..
+            })
+        ),
+        "{:?}",
+        report.verify
+    );
+
+    let report = inspect_token(&presentation("vc+jwt"));
+    assert!(
+        report.inspect.findings().iter().any(|f| matches!(
+            &f.detail,
+            FindingDetail::TypUnexpected { found: Some(found), expected: "vp+jwt" } if found == "vc+jwt"
+        )),
+        "{:?}",
+        report.inspect.findings()
+    );
 }
 
 /// VC-JOSE-COSE §4.1.1 and §4.2 for a `did:key` issuer.

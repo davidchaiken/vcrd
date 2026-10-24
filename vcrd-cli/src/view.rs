@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use vcrd_core::{
-    Attribution, Base64urlProblem, BlockReason, Check, Context, CritProblem, DateField,
-    DeclaredAlgorithm, DidKeyProblem, Document, DocumentKind, Finding, FindingDetail, IssLocation,
+    Attribution, Base64urlProblem, BlockReason, Check, ClaimLocation, Context, CritProblem,
+    DateField, DeclaredAlgorithm, DidKeyProblem, Document, DocumentKind, Finding, FindingDetail,
     IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment, KeyRef, KeySourceKind, LeafClass,
     Missing, NotEvaluatedReason, Phase, PhaseOutcome, ProofOutcome, PublicJwk, Rendered,
     RenderedJson, Report, RevealLocation, Revealed, Severity, Treatment, Validity, ValueKind,
@@ -651,15 +651,16 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
             "valid_from": rfc3339(*valid_from),
             "valid_until": rfc3339(*valid_until),
         }),
-        FindingDetail::TypUnexpected { found } => {
-            json!({"type": "typ_unexpected", "found": found, "expected": "vc+jwt"})
+        FindingDetail::TypUnexpected { found, expected } => {
+            json!({"type": "typ_unexpected", "found": found, "expected": expected})
         }
-        FindingDetail::CtyUnexpected { found } => {
-            json!({"type": "cty_unexpected", "found": found, "expected": "vc"})
+        FindingDetail::CtyUnexpected { found, expected } => {
+            json!({"type": "cty_unexpected", "found": found, "expected": expected})
         }
         FindingDetail::VcdmV1JwtEncoding { claim } => {
             json!({"type": "vcdm_1_1_jwt_encoding", "claim": claim})
         }
+        FindingDetail::PresentationUnsupported => json!({"type": "presentation_unsupported"}),
         FindingDetail::JwtClaimForbidden { claim } => {
             json!({"type": "jwt_claim_forbidden", "claim": claim})
         }
@@ -669,15 +670,27 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
             issuer,
         } => json!({
             "type": "iss_mismatch",
-            "location": match location {
-                IssLocation::Header => "header",
-                IssLocation::Payload => "payload",
-            },
+            "location": claim_location(*location),
             "iss": iss,
             "issuer": issuer,
         }),
         FindingDetail::JwtClaimConflict { claim, property } => {
             json!({"type": "jwt_claim_conflict", "claim": claim, "property": property})
+        }
+        FindingDetail::JwtClaimType {
+            location,
+            claim,
+            expected,
+            found,
+        } => json!({
+            "type": "jwt_claim_type",
+            "location": claim_location(*location),
+            "claim": claim,
+            "expected": expected,
+            "found": found,
+        }),
+        FindingDetail::ReplicatedClaimMismatch { claim } => {
+            json!({"type": "replicated_claim_mismatch", "claim": claim})
         }
         FindingDetail::KidMissing => json!({"type": "kid_missing"}),
         FindingDetail::KidNotAbsolute { kid } => {
@@ -931,6 +944,13 @@ fn key_source_kind(kind: KeySourceKind) -> &'static str {
         KeySourceKind::CallerSupplied => "caller_supplied",
         KeySourceKind::IssuerIdentifier => "issuer_identifier",
         KeySourceKind::CredentialEmbedded => "credential_embedded",
+    }
+}
+
+fn claim_location(location: ClaimLocation) -> &'static str {
+    match location {
+        ClaimLocation::Header => "header",
+        ClaimLocation::Payload => "payload",
     }
 }
 

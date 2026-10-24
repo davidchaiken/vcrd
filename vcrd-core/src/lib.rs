@@ -34,9 +34,9 @@ pub use document::{
     ProofMaterial, ProofTime, ProofTimes, Timestamp,
 };
 pub use finding::{
-    Attribution, Base64urlProblem, CarriedKeyRef, CritProblem, DateField, DidKeyProblem, Finding,
-    FindingDetail, IssLocation, IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment, KeyRef,
-    KeySourceKind, Severity, WeakKeyCriterion,
+    Attribution, Base64urlProblem, CarriedKeyRef, ClaimLocation, CritProblem, DateField,
+    DidKeyProblem, Finding, FindingDetail, IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment,
+    KeyRef, KeySourceKind, Severity, WeakKeyCriterion,
 };
 pub use json::{DuplicateName, Json, Member, nesting_depth};
 pub use keys::{CredentialKey, Jwk, KeyProvenance, KeySource, PublicJwk, PublicKey};
