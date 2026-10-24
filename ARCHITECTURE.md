@@ -899,14 +899,26 @@ Each becomes a test observed to fail and then to pass (REQUIREMENTS §11):
 
 - **[S1]** RSA keys shorter than 2048 bits are accepted (RFC 7518 §3.3; §8).
 - **[S2]** HS256 keys shorter than 256 bits are accepted (RFC 7518 §3.2; §8).
-- **[S3]** `validUntil` earlier than `validFrom` is not rejected (VCDM 2.0 §4.9).
-- **[S4]** The form of `issuer` — a URL, or an object whose `id` is a URL — is not checked
-  (VCDM 2.0 §4.7).
-- **[S5]** An empty `credentialSubject` object is reported as missing (VCDM 2.0 §4.8).
-- **[S6]** JWT `iat` and `exp`, the signature's own times, are ignored (VC-JOSE-COSE
-  §3.1.3).
-- **[S7]** Conflicts between `iss` and `issuer`, `jti` and `id`, and `sub` and
-  `credentialSubject.id` are not reported (VC-JOSE-COSE §3.1.3).
+- ~~**[S3]** `validUntil` earlier than `validFrom` is not rejected (VCDM 2.0 §4.9).~~
+  Resolved in milestone 1, slice 3: `inspect.valid_until_before_valid_from`, on
+  `fixtures/validity-reversed.jwt`.
+- ~~**[S4]** The form of `issuer` — a URL, or an object whose `id` is a URL — is not
+  checked (VCDM 2.0 §4.7).~~ Resolved in milestone 1, slice 3: `inspect.issuer_invalid`,
+  which blocks verify for want of a key.
+- ~~**[S5]** An empty `credentialSubject` object is reported as missing (VCDM 2.0
+  §4.8).~~ Resolved in milestone 1, slice 3: `inspect.credential_subject_empty`, apart
+  from `inspect.credential_subject_missing`.
+- ~~**[S6]** JWT `iat` and `exp`, the signature's own times, are ignored (VC-JOSE-COSE
+  §3.1.3).~~ Resolved in milestone 1, slice 4: `verify.proof_expired` and
+  `verify.proof_not_yet_valid`, errors, and `verify.proof_issued_in_future`, a warning,
+  with each proof's own `validity`, on `fixtures/exp-past.jwt`.
+- ~~**[S7]** Conflicts between `iss` and `issuer`, `jti` and `id`, and `sub` and
+  `credentialSubject.id` are not reported (VC-JOSE-COSE §3.1.3).~~ Resolved in milestone
+  1, slice 3: `inspect.iss_mismatch`, an error (VC-JOSE-COSE §4.1.2's MUST), on
+  `fixtures/iss-mismatch.jwt`, and `inspect.jwt_claim_conflict`, a warning.
+
+`docs/reviews/milestone-1.md` records which of their tests were seen to fail before the
+change.
 
 ### [T] Testing and CI
 

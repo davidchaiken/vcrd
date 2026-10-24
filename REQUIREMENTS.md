@@ -1193,10 +1193,17 @@ checked for such conflicts when the standard comes into scope (§11).
   credentials use in place of JSON.
 - **COSE** — CBOR Object Signing and Encryption, the CBOR-based analog to JOSE's
   signing/encryption mechanics.
+- **Data Integrity** — the W3C *Verifiable Credential Data Integrity 1.0* mechanism, which
+  secures a JSON-LD credential with a `proof` inside it, by a cryptosuite such as
+  `eddsa-rdfc-2022`; the embedded counterpart of VC-JOSE-COSE's enveloping JWS.
 - **DID** — Decentralized Identifier.
 - **DID URL** — a DID followed by a path, query or fragment, identifying a resource the
   DID's controller names, such as one of its keys (`did:key:z6Mk…#z6Mk…`). A relative DID
   URL (`#z6Mk…`) is resolved against the DID.
+- **did:key** — a DID method whose identifier encodes its one public key: a *multibase*
+  value (base58btc, prefix `z`) of a *multicodec* prefix naming the key type, then the key
+  (did:key v0.9, a W3C Credentials Community Group draft). vcrd derives the key from the
+  identifier alone, with no network access.
 - **DIDComm** — DID Communication, a secure agent-to-agent messaging protocol built on
   DIDs.
 - **EIP-712** — Ethereum Improvement Proposal 712, a typed structured-data
@@ -1205,6 +1212,12 @@ checked for such conflicts when the standard comes into scope (§11).
   reference implementation discussed in §3.
 - **FFI** — Foreign Function Interface, a dependency that crosses a non-Rust language
   boundary.
+- **Finding** — one condition a phase found, reported as data rather than prose (§6): a
+  stable code (`<phase>.<condition>`), its *attribution*, its severity (`error`, which
+  fails the phase, `warning` or `info`), and a structured detail. `docs/findings.md`
+  lists every code.
+- **Holder** — the role of whoever has a credential and presents it, usually inside a
+  presentation (VCDM 2.0 §2); often, not always, its subject.
 - **HSM** — Hardware Security Module.
 - **Inspect** — the second phase (§4): conformance to the data model and securing format,
   and the validity period, without cryptography or network access. Also the CLI
@@ -1227,6 +1240,9 @@ checked for such conflicts when the standard comes into scope (§11).
     `vc+jwt`.
   - `x5c` (X.509 Certificate Chain), `x5t` and `x5t#S256` (X.509 certificate SHA-1 and
     SHA-256 thumbprints) — certificates for the signing key.
+- **JSON-LD** — JSON for Linked Data (W3C *JSON-LD 1.1*), the syntax VCDM 2.0 is written
+  in (VCDM 2.0 §6.1): `@context` maps each term to a URL. vcrd reads the base context's
+  terms without JSON-LD processing, and says so in each result's *not evaluated* list.
 - **JWK** — JSON Web Key.
 - **JWK member names** — the members of a JWK, defined in RFC 7517 §4 and, for each key
   type, RFC 7518 §6 and RFC 8037 §2:
@@ -1266,6 +1282,14 @@ checked for such conflicts when the standard comes into scope (§11).
   are an instance of.
 - **MITM** — Man-in-the-Middle (attack).
 - **MSRV** — Minimum Supported Rust Version.
+- **Multibase**, **multicodec** — self-describing encodings from the Multiformats
+  project: a multibase string's first character names its base encoding, and a
+  multicodec's unsigned-varint prefix names the content type, such as `0xed` for an
+  Ed25519 public key. `did:key` uses both.
+- **Not evaluated** — a check a result discloses it did not make, with the reason: it
+  requires network access, the caller supplied no parameters for it, vcrd does not
+  implement it yet, it is out of scope, or its phase was not reached (§12). Listed in
+  every result as `not_evaluated`, so that a result never reads as more than it checked.
 - **OIDC** — OpenID Connect.
 - **OpenID4VCI** — OpenID for Verifiable Credential Issuance.
 - **OpenID4VP** — OpenID for Verifiable Presentations.
@@ -1285,7 +1309,9 @@ checked for such conflicts when the standard comes into scope (§11).
 - **SSRF** — Server-Side Request Forgery.
 - **Trust evaluation** — deciding whether a verified credential should be relied upon for
   a particular use. Outside vcrd's scope (§1, §4). The W3C VC Data Model 2.0 calls this
-  *validation*.
+  *validation*. Checking an issuer against a trust anchor the caller supplies is not
+  trust evaluation, and is planned (§9, §16 item 14): until then each result lists
+  `issuer_accreditation` as not evaluated, not implemented.
 - **TTY** — teletypewriter, i.e. an interactive terminal.
 - **URDNA2015** — Universal RDF Dataset Normalization Algorithm 2015, RDFC-1.0's
   predecessor.
@@ -1293,7 +1319,9 @@ checked for such conflicts when the standard comes into scope (§11).
   the W3C VC Data Model 2.0 (§2) for assurance that a claim meets a verifier's business
   requirements for a particular use, which vcrd calls trust evaluation; RFC 7515 (§5.2)
   for checking a JWS signature or MAC, part of vcrd's verify phase; and RFC 5280 (§6) for
-  certification path checking.
+  certification path checking. vcrd quotes the WHATWG URL Standard's *validation error*,
+  a correction the URL parser made, as that standard's name for it
+  (`inspect.url_nonconforming`).
 - **VC** — Verifiable Credential.
 - **VC-API** — the W3C Credentials Community Group's HTTP API specification for VC
   issuance/verification services.
@@ -1304,8 +1332,11 @@ checked for such conflicts when the standard comes into scope (§11).
   the structure of credentials and presentations, independent of how they are secured.
 - **Verify** — the third phase (§4): checking the proof against key material, and whether
   the securing mechanism is current. As a CLI operation, `verify` runs all three phases,
-  and so covers what the W3C VC Data Model 2.0 (§2) defines as *verification*: whether a
-  credential is an authentic and current statement of its issuer.
+  and so covers what the W3C VC Data Model 2.0 (§2) defines as *verification* — whether a
+  credential is an authentic and current statement of its issuer — except its status
+  check: VCDM 2.0 §2's verification includes it when `credentialStatus` is present, and
+  vcrd lists it as not evaluated (`revocation_status`), since checking it means fetching
+  a status list.
 - **VP** — Verifiable Presentation.
 - **WASM** — WebAssembly.
 - **WHATWG** — the Web Hypertext Application Technology Working Group, whose URL Standard

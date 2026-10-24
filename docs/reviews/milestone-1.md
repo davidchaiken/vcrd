@@ -10,7 +10,7 @@ review runs in rounds, one or two standards at a time, and this record grows wit
 | 2 | [RFC 8037], [RFC 9864] and [RFC 8032] (EdDSA); key resolution ([did:key], [REQUIREMENTS] §10, [ARCHITECTURE] §8) | below; gaps 4–10 fixed |
 | 3 | [VC-JOSE-COSE], the Recommendation of 2026-10-13, which is later than the text milestone 1 was built from (read 2026-09-19) | below; gaps 11–14 fixed |
 | 4 | [VCDM 2.0] (the Verifiable Credentials Data Model) | below; gaps 15–17 and 19 fixed, gap 18 recorded as [ARCHITECTURE] §10 [Q7] |
-| 5 | the terminology check ([REQUIREMENTS] §15); slices 3–5's red-then-green records | to do |
+| 5 | the terminology check ([REQUIREMENTS] §15); slices 3–5's red-then-green records | below |
 
 Each round also completes the entries of [docs/findings.md](../findings.md) whose
 standard it reads.
@@ -228,6 +228,46 @@ The plan's list is §1.3, §2, §4.3–4.9, §6.1 and §7.1–7.2. Round 4 also 
 | §7.1 | MUST; MAY | The algorithm verifies the securing mechanism, then checks that the document conforms, returning `status`, `document`, `mediaType`, `controller`, `controlledIdentifierDocument`, `warnings` and `errors`; the order may differ if the same inputs fail. | Inspect runs before verify, and both run. vcrd's result has its own structure (known input 7). | — | Later: [ARCHITECTURE] §10 [Q7], milestone 3, gap 18 |
 | §7.2 | MUST; SHOULD | Each problem has a `type` URL, among `PARSING_ERROR`, `CRYPTOGRAPHIC_SECURITY_ERROR`, `MALFORMED_VALUE_ERROR` and `RANGE_ERROR`, and should have a `title` and `detail`. | A finding has a code, attribution, severity and structured detail, not a problem type ([REQUIREMENTS] §6). | — | Later: [ARCHITECTURE] §10 [Q7], milestone 3, gap 18 |
 | §11.1 | MUST; SHOULD; MAY | A language value object has `@value`, a string; should have `@language`; may have `@direction`; has no other key; several may be an array. | `language_value_problem` (`vcdm.rs:211-231`): `value_missing`, `other_member`, `wrong_type`. `@language`'s form and `@direction`'s value are not checked. | `vcrd-core/tests/inspect.rs` `checks_names_and_descriptions` | Met, as a warning (gap 17) |
+
+## Terminology, [REQUIREMENTS] §15
+
+Each glossary entry vcrd's own concepts use was read against the standards rounds 1–4
+read and against the code. Changed:
+
+| Entry | Found | Change |
+|---|---|---|
+| *Verify* | Said the `verify` operation covers [VCDM 2.0] §2's *verification*, which includes the status check when `credentialStatus` is present; vcrd does not make it ([DEVELOPMENT-PLAN.md], milestone 1, known input 8). | Says so, and that the check is listed as not evaluated, `revocation_status`. |
+| *Trust evaluation* | Said it is outside vcrd's scope, without the issuer accreditation [REQUIREMENTS] §9 plans against a caller's trust anchor (round 4, gap 19). | Says that check is not trust evaluation, and is listed as not implemented. |
+| *Validation* | Said vcrd does not use the word; vcrd quotes the [WHATWG URL Standard]'s *validation error* in `inspect.url_nonconforming`. | Names that use, as the URL Standard's term. |
+| *Data Integrity*, *did:key*, *Finding*, *Holder*, *JSON-LD*, *Multibase* and *multicodec*, *Not evaluated* | Used in [REQUIREMENTS], [ARCHITECTURE] and the user documents, with no entry: before this round, *finding* in 130 of their lines and *severity*, now defined in *Finding*, in 88 (`grep -ci`). | Added. |
+
+Unchanged, and consistent with the code: *Attribution*, *Inspect*, *Key provenance*,
+*Parse*, *Phase*, *JWK Thumbprint*, *DID URL*, the JOSE header parameter, JWK member and
+JWT claim names, *VCDM*, *VC-JOSE-COSE*, *WHATWG* and *XSD*.
+
+## Slices 3–5: the checks shown to fail
+
+Recorded at the time, in the sessions' notes rather than CI logs, and not run again for
+this record. [ARCHITECTURE] §10's [S3]–[S7] are struck through, each with the code that
+closed it.
+
+- **Slice 3** (`edda5a1`; [S3], [S4], [S5], [S7]). Four gap tests failed before the
+  change: [S3]'s reversed validity, [S4]'s issuer forms, a missing issuer, and [S5]'s
+  empty subject. Through the binary, an issuer of `acme` exited 6 attributed to vcrd,
+  and a missing issuer 4 attributed to the environment. Afterward all passed. No note
+  records [S7]'s tests failing first.
+- **Slice 4** (`8ea3057`; [S6]). Ten tests in `vcrd-cli/tests/verify.rs`. Before the
+  change six failed: `exp-past.jwt` exited 0; `crit-unsupported.jwt` exited 0;
+  `embedded-jwk-only.jwt` exited 3, blocked; `embedded-jwk.jwt` had no `credential_key`
+  and no mismatch; `small-order-r.jwt` gave only `verify.signature_invalid`; and proofs
+  had no `validity`. Four passed at once, for what was already implemented: a tampered
+  claim, `alg: none`, an unsupported algorithm, and the weak key.
+  `vcrd-core/tests/fixtures.rs` `a_lax_verifier_accepts_the_weak_key_and_small_order_signatures`
+  shows `ed25519-dalek`'s lax `verify` accepting `weak-key.jwt` and `small-order-r.jwt`,
+  which `verify_strict` rejects.
+- **Slice 5** (output). The canary test failed with claim masking broken in core,
+  `LeafClass::Claim => true`, and passed once it was restored. The exit-code test would
+  have failed on the draft, in which `--verbosity 0 --unsafe` exited 1.
 
 ## The checks shown to fail
 
