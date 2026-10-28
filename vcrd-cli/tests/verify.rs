@@ -5,7 +5,7 @@
 mod support;
 
 use helpers::{finding, verify_fixture};
-use serde_json::json;
+use serde_json::{Value, json};
 
 /// In a `#[cfg(test)]` module so that the workspace's panic lints exempt it, as they
 /// do test functions (docs/reviews/milestone-0.md, gap 1).
@@ -42,7 +42,7 @@ fn a_claim_changed_after_signing_fails_the_signature() {
     let out = verify_fixture("tampered-claim.jwt", 4);
     finding(&out, "verify.signature_invalid", "input", "error");
     assert_eq!(out["phases"]["inspect"]["outcome"], "passed");
-    assert_eq!(out["proofs"][0]["outcome"], "failed");
+    assert_eq!(out["proofs"][0]["outcome"], "incorrect");
 }
 
 #[test]
@@ -70,7 +70,7 @@ fn the_fully_specified_name_ed25519_verifies() {
     let out = verify_fixture("alg-ed25519.jwt", 0);
     let proof = &out["proofs"][0];
     assert_eq!(proof["algorithm"], "Ed25519");
-    assert_eq!(proof["outcome"], "verified");
+    assert_eq!(proof["outcome"], "correct");
     assert_eq!(out["findings"], json!([]));
 }
 
@@ -89,7 +89,7 @@ fn the_deprecated_name_eddsa_is_reported_for_information() {
         json!({"type": "algorithm_deprecated", "declared": "EdDSA", "replacement": "Ed25519"})
     );
     assert_eq!(out["phases"]["verify"]["outcome"], "passed");
-    assert_eq!(out["proofs"][0]["outcome"], "verified");
+    assert_eq!(out["proofs"][0]["outcome"], "correct");
 }
 
 /// The signature would pass a verifier without the weak-key check
@@ -130,40 +130,52 @@ fn a_small_order_r_is_named() {
         f["detail"],
         json!({"type": "signature_small_order", "algorithm": "EdDSA"})
     );
-    assert_eq!(out["proofs"][0]["outcome"], "failed");
+    assert_eq!(out["proofs"][0]["outcome"], "incorrect");
 }
 
-/// ARCHITECTURE §8: `matched: false` with `verifies_signature: true` is specific
-/// evidence of key substitution.
+/// ARCHITECTURE §8: the issuer proof is incorrect and the proof with a different,
+/// embedded key correct. Each is its own finding, beside the values.
 #[test]
 fn key_substitution_is_reported() {
     let out = verify_fixture("embedded-jwk.jwt", 4);
     finding(&out, "verify.signature_invalid", "input", "error");
-    let mismatch = finding(&out, "verify.credential_key_mismatch", "input", "warning");
-    let provenance = &out["proofs"][0]["key_provenance"];
+    let mismatch = finding(&out, "verify.embedded_key_mismatch", "input", "warning");
+    let correct = finding(
+        &out,
+        "verify.embedded_key_proof_correct",
+        "input",
+        "warning",
+    );
+    let proof = &out["proofs"][0];
+    assert_eq!(proof["outcome"], "incorrect");
+    let provenance = &proof["key_provenance"];
     assert_eq!(provenance["source"], "issuer_identifier");
-    let key = &provenance["credential_key"];
+    let key = &provenance["embedded_key"];
     assert_eq!(key["location"], "header.jwk");
-    assert_eq!(key["matched"], false);
-    assert_eq!(key["verifies_signature"], true);
+    assert_eq!(key["same_as_issuer_key"], false);
+    assert_eq!(key["proof"], "correct");
     assert_ne!(key["thumbprint"], provenance["thumbprint"]);
     // Each thumbprint is shown with the key it names.
     assert_eq!(provenance["jwk"]["kty"], "OKP");
     assert_eq!(key["jwk"]["kty"], "OKP");
     assert_ne!(key["jwk"]["x"], provenance["jwk"]["x"]);
-    // The finding says where each key came from.
-    assert_eq!(
-        mismatch["detail"],
-        json!({
-            "type": "credential_key_mismatch",
-            "carried_key": {"location": "header.jwk", "thumbprint": key["thumbprint"]},
-            "key": {
-                "source": "issuer_identifier",
-                "method": "did:key",
-                "thumbprint": provenance["thumbprint"],
-            },
-        })
-    );
+    // The findings say where each key came from.
+    let keys = json!({
+        "embedded_key": {"location": "header.jwk", "thumbprint": key["thumbprint"]},
+        "key": {
+            "source": "issuer_identifier",
+            "method": "did:key",
+            "thumbprint": provenance["thumbprint"],
+        },
+    });
+    for (f, kind) in [
+        (mismatch, "embedded_key_mismatch"),
+        (correct, "embedded_key_proof_correct"),
+    ] {
+        let mut detail = keys.clone();
+        detail["type"] = json!(kind);
+        assert_eq!(f["detail"], detail);
+    }
 }
 
 /// REQUIREMENTS §10: the refusal is reported, not treated as "no key material", so
@@ -182,9 +194,21 @@ fn a_key_the_credential_asserts_alone_is_refused() {
     let proof = &out["proofs"][0];
     assert_eq!(proof["outcome"], "not_attempted");
     assert!(proof["key_provenance"].get("source").is_none(), "{out}");
-    let key = &proof["key_provenance"]["credential_key"];
-    assert_eq!(key["matched"], false);
-    assert_eq!(key["verifies_signature"], true);
+    // With no issuer key, there is nothing to compare the embedded key with, and no
+    // deciding proof for its proof to differ from.
+    let key = &proof["key_provenance"]["embedded_key"];
+    assert!(key.get("same_as_issuer_key").is_none(), "{out}");
+    assert_eq!(key["proof"], "correct");
+    let codes: Vec<&Value> = out["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| &f["code"])
+        .collect();
+    assert!(
+        !codes.contains(&&json!("verify.embedded_key_proof_correct")),
+        "{out}"
+    );
     assert_eq!(out["status"], "inspect_failed");
 }
 
@@ -207,7 +231,7 @@ fn an_expired_signature_fails_verify() {
     assert_eq!(out["phases"]["inspect"]["outcome"], "passed");
     assert_eq!(out["credential"]["validity"], "current");
     let proof = &out["proofs"][0];
-    assert_eq!(proof["outcome"], "verified");
+    assert_eq!(proof["outcome"], "correct");
     assert_eq!(proof["validity"], "expired");
 }
 
@@ -226,7 +250,7 @@ fn a_critical_extension_vcrd_does_not_implement_fails_verify() {
         })
     );
     assert_eq!(out["phases"]["inspect"]["outcome"], "passed");
-    assert_eq!(out["proofs"][0]["outcome"], "verified");
+    assert_eq!(out["proofs"][0]["outcome"], "correct");
 }
 
 /// The example's JWT has no `exp` or `nbf`, so its signature has no validity

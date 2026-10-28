@@ -168,8 +168,8 @@ every other `alg` exercise the by-name rejection path from day one.
   - A small-order R is named, `verify.signature_small_order`, by checking R with
     `curve25519-dalek` before `verify_strict`, which rejects it without saying why.
   - A credential that carries a key is not blocked for want of an issuer: verify runs
-    and refuses the key, attributed to caller policy (exit 5). A carried key unlike
-    the issuer's is a warning. Inspect reports a `jwk` it cannot read, one with
+    and refuses the key, attributed to caller policy (exit 5). An embedded key unlike
+    the issuer key is a warning. Inspect reports a `jwk` it cannot read, one with
     private-key members, and an unknown key type (a warning attributed to vcrd).
   - A critical extension the suite does not implement fails verify, attributed to vcrd.
     The signature is still checked, and its outcome reported (decided 2026-10-07).
@@ -179,7 +179,7 @@ every other `alg` exercise the by-name rejection path from day one.
     `info`, attributed to the input, and always in JSON. At level 1, `text` and `plain`
     leave out every `info` finding and count them; level 2 lists them. An Ed25519 key
     not encoded as RFC 8032 §5.1.3 requires is `did_key_undecodable`,
-    `point_not_canonical` (in a carried `jwk`, `inspect.jwk_invalid`); a component before
+    `point_not_canonical` (in an embedded `jwk`, `inspect.jwk_invalid`); a component before
     the multibase value is `version_present`. An S not less than the group order is
     `verify.signature_scalar_out_of_range`, checked by vcrd. An X25519 or X448 `did:key`
     is `verify.did_key_not_for_signing`, attributed to the input; `ed448-pub` is named.
@@ -205,22 +205,38 @@ every other `alg` exercise the by-name rejection path from day one.
     `plain` is one `name: value` line per item, a finding on one line with its detail as
     `name=value` pairs (kept on trial). No color.
   - `--verbosity` never changes JSON; 0 prints nothing in any format. For `text` and
-    `plain`: level 1 shows the status, the credential's kind, issuer, types and validity,
-    the inspect and verify phases with `blocked_by`, each proof's outcome and key
-    source, the claims, the findings (from 2026-10-23, the `info` ones counted, not
-    listed) and `not_evaluated`; level 2 everything except
-    `credential.metadata`, the header included; level 3 everything. How level 1 presents
-    `not_evaluated`, key provenance, and the types and validity is to be revisited.
+    `plain`: level 1 shows the status, the credential's kind, issuer, types, and validity
+    with its bounds, the inspect and verify phases with `blocked_by`, each proof's
+    outcome, own validity, key source and the key's thumbprint, the claims, the findings
+    (from 2026-10-23, the `info` ones counted, not listed) and, last, `not_evaluated`;
+    level 2 everything except `credential.metadata`, the header included;
+    level 3 everything. Decided 2026-10-24, in the milestone review
+    (docs/reviews/milestone-1.md): `text` gives the credential's validity, the key's
+    source and the embedded key as phrases, where `plain` keeps the values; below the
+    checks not evaluated, it names docs/findings.md's section "Checks not evaluated",
+    which describes each check and reason.
+  - Decided 2026-10-27, in the milestone review (docs/reviews/milestone-1.md, round 7):
+    the terms of ARCHITECTURE §8's "Keys and proofs" (embedded key, issuer key,
+    caller-supplied key, proof key, deciding proof key, refused), and its key and proof
+    table, with a test of the ten rows milestone 1 produces. A proof's result is
+    `correct`, `incorrect` or `not_attempted`. `key_provenance.embedded_key` replaces
+    `credential_key`, with `same_as_issuer_key` (absent when there is no issuer key) and
+    `proof`; `verify.embedded_key_mismatch` replaces `verify.credential_key_mismatch`,
+    and `verify.embedded_key_proof_correct` names key substitution. At level 1, `text`
+    says `Deciding proof key   issuer key, from did:key` and, for example,
+    `Embedded key   header.jwk: a different key; proof correct`. A caller-supplied key
+    must be the same key as the issuer key (REQUIREMENTS §10, amended); milestone 2
+    implements it.
   - Every value carries its visibility, `non_sensitive`, `masked` or `revealed`: in JSON
     on each value, in a Visibility column in `text` and `plain` (decided 2026-10-21,
     after review, in place of an Unmasked column and JSON's `treatment`). JSON keeps
     `reveals`, each entry naming the key its path is relative to and its visibility,
     `revealed`; milestone 3's hashed designation adds `hashed`.
   - Each key is shown with its JWK beside its thumbprint (`key_provenance.jwk`,
-    `credential_key.jwk`), and key findings say where each key came from: `key` with
-    its source, method and thumbprint, `carried_key` with its location and thumbprint;
-    `verify.weak_key` adds the `criterion` it fails. A carried key, and whether the
-    signature verifies under it, is shown at level 1 (decided 2026-10-21, after review).
+    `embedded_key.jwk`), and key findings say where each key came from: `key` with
+    its source, method and thumbprint, `embedded_key` with its location and thumbprint;
+    `verify.weak_key` adds the `criterion` it fails. The embedded key, and its proof's
+    result, is shown at level 1 (decided 2026-10-21, after review).
   - `--unsafe` has three levels: 0 masks claims and secrets, 1 (`--unsafe`) shows claims,
     2 also shows cryptographic secrets, such as a header `jwk`'s private members.
     Caller errors and the warning are the only stderr output; milestone 3 adds
@@ -328,11 +344,22 @@ RFC 7519 §4.1, §7.2; RFC 8037 §2–3; RFC 8032 as the crate implements it. Kn
 **Scope.** ES256, ES512, RS256, HS256 as prototyped (finding 5); a recorded decision on
 ES384, ES256K and the PS and RS384/RS512 families ([C3]), implementing what is decided. A
 caller-supplied JWK set (flag name is implementation-time), matched by `kid` else the sole
-key. The full precedence of REQUIREMENTS §10 with RFC 7638 thumbprint matching, the
-embedded-key opt-in, and the `credential_key` block with `matched` and `verifies_signature`
-(ARCHITECTURE §8). A `kid` that is a `did:key` URL, in a credential whose issuer gives no
-key, as a key the credential carries about itself: refused without the opt-in and
-reported as an embedded `jwk` is, with `credential_key.location: header.kid`, so that
+key. The rules of ARCHITECTURE §8's key and proof table, with RFC 7638 thumbprint
+matching: a caller-supplied key must be the same key as the issuer key when both are
+present, whatever the issuer key's source (decided 2026-10-27), and the embedded key
+decides alone only with the caller's opt-in. A second opt-in lets a caller-supplied key
+override the issuer key. The rules in one function, tested with every row of the table.
+For each distinct key, the kinds of key it is and its proof's result (correct, incorrect
+or not attempted), and which is the deciding proof key, in place of milestone 1's
+separate reports of the issuer key and the embedded key. Open question, to decide with
+the override opt-in: a caller-supplied key when vcrd cannot obtain the issuer key (a DID
+method it does not resolve, or `did:web` without network access). The table counts that
+issuer key as not present, so the caller-supplied key decides, but a key set matched by
+`kid` binds no key to an issuer: a key of issuer B could give a correct proof for a
+credential naming issuer A (RFC 8725 §3.8). A `kid` that is a `did:key` URL, in a
+credential whose issuer gives no key, as a key the credential carries about itself:
+refused without the opt-in and reported as an embedded `jwk` is, with location
+`header.kid`, so that
 such a credential is not blocked for want of key material (milestone 1's review of
 slice 5, N12: nothing binds such a key to an issuer). The algorithm allowlist as a `Context` input and a CLI flag; policy
 rejection (exit 5) distinct from unsupported (exit 6), both reported when both apply.
@@ -345,12 +372,15 @@ generation. [G2] the debugging guide run on Linux, at a time the maintainer choo
 within the milestone, so that it is ready before a Linux-only failure needs it.
 
 **Delivers.** `vcrd verify` for five algorithms, with caller keys, the embedded-key opt-in
-and the allowlist; provenance for every row of ARCHITECTURE §8's situation table.
+and the allowlist; the keys and their proofs' results for every row of ARCHITECTURE §8's
+key and proof table.
 
 **Exit criteria.** Fixtures: algorithm confusion (HS256 with the issuer's public-key bytes
 as secret, reported as key-type mismatch, not as unsupported); `none`; unsupported
 (ES256K); policy-rejected; unsupported and policy-rejected at once (exit 6, two findings);
-key substitution (`matched: false`, `verifies_signature: true`, exit 4); embedded-only
+key substitution (embedded proof key correct, issuer proof key incorrect, exit 4); a
+caller-supplied key unlike a `did:key` issuer key, with its proof correct, not successful
+without the override opt-in and successful with it; embedded-only
 refused, and accepted with the opt-in (exit 0, `source: credential_embedded`); RSA 1024
 and HS256 128-bit keys (weak-key findings); a P-384 `did:key` (named, exit 6); ES512
 happy path, the EUDI evidence point of REQUIREMENTS §10.

@@ -11,7 +11,7 @@
 #[cfg(test)]
 mod support;
 
-use helpers::{CASES, expected_path, run};
+use helpers::{CASES, expected_path, run, verify, words};
 
 /// In a `#[cfg(test)]` module so that the workspace's panic lints exempt it, as they
 /// do test functions (docs/reviews/milestone-0.md, gap 1).
@@ -91,7 +91,7 @@ mod helpers {
             Input::Fixture("issuer-missing.jwt"),
             &[],
         ),
-        // The carried key, refused, and whether the signature verifies under it, at
+        // The embedded key, refused, and the proof with it, at
         // the default level (review of slice 5, N10).
         case(
             "embedded-jwk-only-verify-text-1",
@@ -161,6 +161,22 @@ mod helpers {
         let output = command.args(case.args).output().unwrap();
         String::from_utf8(output.stdout).unwrap()
     }
+
+    /// The stdout of `verify` on this input at [`NOW`], with these arguments added.
+    pub fn verify(input: &str, args: &[&str]) -> String {
+        let output = vcrd()
+            .args(["verify", input, "--now", NOW])
+            .args(args)
+            .output()
+            .unwrap();
+        String::from_utf8(output.stdout).unwrap()
+    }
+
+    /// The text with every run of whitespace made one space, so that a phrase `text`
+    /// wraps across lines can be found whole.
+    pub fn words(text: &str) -> String {
+        text.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
 }
 
 #[test]
@@ -210,6 +226,126 @@ fn level_1_counts_the_info_findings_that_level_2_lists() {
         let full = stdout(&["--format", format, "--verbosity", "2"]);
         assert!(full.contains("verify.algorithm_deprecated"), "{full}");
         assert!(!full.contains(count), "{full}");
+    }
+}
+
+/// docs/output.md: level 1 lists the checks not evaluated at the end, after the findings,
+/// and `text` names the document and section that describe them; `plain` keeps the
+/// identifiers alone.
+#[test]
+fn level_1_lists_the_checks_not_evaluated_and_where_they_are_described() {
+    let text = verify(support::EXAMPLE, &[]);
+    let (_, after_findings) = text.split_once("\nFindings\n").unwrap();
+    let (_, not_evaluated) = after_findings.split_once("\nNot evaluated\n").unwrap();
+    assert!(
+        words(not_evaluated).contains("issuer_accreditation | not_implemented"),
+        "{text}"
+    );
+    assert_eq!(
+        not_evaluated.lines().last().map(words).as_deref(),
+        Some(r#"Described in docs/findings.md, section "Checks not evaluated""#),
+        "{text}"
+    );
+    let reference =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/findings.md"))
+            .unwrap();
+    assert!(
+        reference.lines().any(|l| l == "## Checks not evaluated"),
+        "docs/findings.md has no section named so"
+    );
+
+    let plain = verify(support::EXAMPLE, &["--format", "plain"]);
+    let lines: Vec<&str> = plain.lines().collect();
+    let findings = lines
+        .iter()
+        .rposition(|l| l.starts_with("findings"))
+        .unwrap();
+    assert_eq!(
+        &lines[findings + 1..],
+        [
+            "not_evaluated.issuer_accreditation: reason=not_implemented",
+            "not_evaluated.context_resolution: reason=not_implemented",
+        ],
+        "{plain}"
+    );
+}
+
+/// docs/output.md: level 1 names the deciding proof key by its thumbprint, gives the
+/// proof's own validity beside the credential's, and the credential's bounds. `text`
+/// says which kind of key it is in a phrase; `plain` keeps `source` and `method`.
+#[test]
+fn level_1_names_the_key_and_both_validity_periods() {
+    let thumbprint = "0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c";
+    let text = words(&verify(support::EXAMPLE, &[]));
+    for phrase in [
+        "Credential validity current, 2026-01-01T00:00:00Z to 2031-01-01T00:00:00Z",
+        "Validity unbounded",
+        "Deciding proof key issuer key, from did:key",
+        &format!("Thumbprint {thumbprint}"),
+    ] {
+        assert!(text.contains(phrase), "{phrase:?} not in {text}");
+    }
+    assert!(!text.contains("Key source"), "{text}");
+    let expired = words(&verify(&support::fixture("exp-past.jwt"), &[]));
+    assert!(
+        expired.contains("Outcome correct Validity expired"),
+        "{expired}"
+    );
+
+    let plain = verify(support::EXAMPLE, &["--format", "plain"]);
+    for line in [
+        "credential.validity: current",
+        "credential.valid_from: 2026-01-01T00:00:00Z",
+        "credential.valid_until: 2031-01-01T00:00:00Z",
+        "proofs[0].validity: unbounded",
+        "proofs[0].key_provenance.source: issuer_identifier",
+        "proofs[0].key_provenance.method: did:key",
+        &format!("proofs[0].key_provenance.thumbprint: {thumbprint}"),
+    ] {
+        assert!(plain.lines().any(|l| l == line), "{line:?} not in {plain}");
+    }
+}
+
+/// docs/output.md: `text` describes the embedded key in a phrase, whether it is the
+/// issuer key and its proof's result; `plain` keeps the values.
+#[test]
+fn level_1_describes_the_embedded_key_in_a_phrase() {
+    let embedded = "proofs[0].key_provenance.embedded_key";
+    for (fixture, phrase, values) in [
+        (
+            "embedded-jwk-only.jwt",
+            "header.jwk: no issuer key to compare with; proof correct",
+            &["proof: correct"][..],
+        ),
+        (
+            "embedded-jwk.jwt",
+            "header.jwk: a different key; proof correct",
+            &["same_as_issuer_key: false", "proof: correct"][..],
+        ),
+        (
+            "embedded-jwk-same.jwt",
+            "header.jwk: the same key; proof correct",
+            &["same_as_issuer_key: true", "proof: correct"][..],
+        ),
+    ] {
+        let input = support::fixture(fixture);
+        let text = verify(&input, &[]);
+        assert!(
+            words(&text).contains(&format!("Embedded key {phrase}")),
+            "{text}"
+        );
+        assert!(
+            !text
+                .lines()
+                .any(|l| l.starts_with(" Same as issuer key") || l.starts_with(" Proof ")),
+            "{text}"
+        );
+
+        let plain = verify(&input, &["--format", "plain"]);
+        let lines: Vec<&str> = plain.lines().filter(|l| l.starts_with(embedded)).collect();
+        let mut expected = vec![format!("{embedded}.location: header.jwk")];
+        expected.extend(values.iter().map(|v| format!("{embedded}.{v}")));
+        assert_eq!(lines, expected, "{plain}");
     }
 }
 

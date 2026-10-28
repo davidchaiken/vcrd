@@ -117,7 +117,7 @@ fn not_attempted(attribution: Attribution, detail: FindingDetail) -> (ProofOutco
 
 fn failed(detail: FindingDetail) -> (ProofOutcome, Vec<Finding>) {
     (
-        ProofOutcome::Failed,
+        ProofOutcome::Incorrect,
         vec![Finding::error(Phase::Verify, Attribution::Input, detail)],
     )
 }
@@ -165,7 +165,7 @@ fn eddsa(
     }
     // verify_strict also rejects a weak key, which resolution has already refused.
     match key.verify_strict(signing_input, &ed25519_dalek::Signature::from_bytes(bytes)) {
-        Ok(()) => (ProofOutcome::Verified { disclosed: None }, Vec::new()),
+        Ok(()) => (ProofOutcome::Correct { disclosed: None }, Vec::new()),
         Err(_) => failed(FindingDetail::SignatureInvalid { algorithm }),
     }
 }
@@ -225,14 +225,14 @@ mod tests {
     fn verifies_rfc8037_a5_under_either_name() {
         let (outcome, findings) = verify(Some("Ed25519"), SIGNING_INPUT.as_bytes());
         assert!(
-            matches!(outcome, ProofOutcome::Verified { .. }),
+            matches!(outcome, ProofOutcome::Correct { .. }),
             "{outcome:?} {findings:?}"
         );
         assert!(findings.is_empty(), "{findings:?}");
 
         let (outcome, findings) = verify(Some("EdDSA"), SIGNING_INPUT.as_bytes());
         assert!(
-            matches!(outcome, ProofOutcome::Verified { .. }),
+            matches!(outcome, ProofOutcome::Correct { .. }),
             "{outcome:?} {findings:?}"
         );
         let [finding] = findings.as_slice() else {
@@ -249,7 +249,7 @@ mod tests {
         let mut signing_input = SIGNING_INPUT.as_bytes().to_vec();
         *signing_input.last_mut().unwrap() ^= 1;
         let (outcome, findings) = verify(Some("Ed25519"), &signing_input);
-        assert!(matches!(outcome, ProofOutcome::Failed));
+        assert!(matches!(outcome, ProofOutcome::Incorrect));
         assert_eq!(findings[0].code, "verify.signature_invalid");
     }
 
@@ -302,7 +302,7 @@ mod tests {
         assert_eq!(carry, 0);
         let (outcome, findings) =
             verify_signature(Some("Ed25519"), SIGNING_INPUT.as_bytes(), &signature, &[]);
-        assert!(matches!(outcome, ProofOutcome::Failed), "{outcome:?}");
+        assert!(matches!(outcome, ProofOutcome::Incorrect), "{outcome:?}");
         let codes: Vec<_> = findings.iter().map(|f| f.code).collect();
         assert_eq!(codes, ["verify.signature_scalar_out_of_range"]);
     }
@@ -333,7 +333,7 @@ mod tests {
         let (outcome, findings) =
             verify_critical(Some("Ed25519"), SIGNING_INPUT.as_bytes(), &critical);
         assert!(
-            matches!(outcome, ProofOutcome::Verified { .. }),
+            matches!(outcome, ProofOutcome::Correct { .. }),
             "{outcome:?}"
         );
         let [finding] = findings.as_slice() else {

@@ -4,7 +4,9 @@ vcrd reports each condition it finds as a finding with a code, `<phase>.<conditi
 such as `parse.base64url_invalid`. This reference lists every code `vcrd-core` reports,
 grouped by phase. [output.md](output.md) describes a finding's keys, and
 `vcrd-core/tests/finding_reference.rs` fails when a code is missing here, or listed here
-and no longer reported.
+and no longer reported. [Checks not evaluated](#checks-not-evaluated), at the end,
+describes each check a result can list as not evaluated, and each reason;
+`vcrd-cli/tests/not_evaluated_reference.rs` checks those the same way.
 
 Each entry gives:
 
@@ -217,12 +219,13 @@ repository; neither has a dated copy, so each is linked where it is published no
 ### <a id="inspect.jwk_kty_unsupported"></a>`inspect.jwk_kty_unsupported`
 
 - **Meaning.** The header's `jwk` has a key type vcrd cannot read, so vcrd cannot compare
-  it with the issuer's key.
+  it with the issuer key or make a proof with it.
 - **Attribution and severity.** `vcrd`, `warning`.
 - **Detail.** `kty`: the key type.
 - **Standard.** [RFC 7517] §4.1.
-- **Remedy.** None needed: verify uses the issuer's key, not this one. Only the
-  comparison is missing.
+- **Remedy.** None needed: an embedded key never decides the outcome when there is an
+  issuer key, and this one is treated as not present ([ARCHITECTURE] §8, "Keys and
+  proofs"). Only the comparison and its proof are missing.
 
 ### <a id="inspect.jwk_private_key"></a>`inspect.jwk_private_key`
 
@@ -811,8 +814,9 @@ repository; neither has a dated copy, so each is linked where it is published no
 - **Standard.** None: vcrd resolves offline methods first, `did:key` alone in milestone 1,
   and methods that need the network only with the caller's opt-in ([REQUIREMENTS] §8,
   §10).
-- **Remedy.** Use a verifier that resolves `method`, or, from milestone 2, supply the
-  issuer's key ([DEVELOPMENT-PLAN.md]).
+- **Remedy.** Use a verifier that resolves `method`. Whether a caller-supplied key may
+  stand in for an issuer key vcrd cannot obtain is an open question of milestone 2
+  ([DEVELOPMENT-PLAN.md]).
 
 ### <a id="verify.did_key_undecodable"></a>`verify.did_key_undecodable`
 
@@ -865,37 +869,182 @@ repository; neither has a dated copy, so each is linked where it is published no
 - **Standard.** [REQUIREMENTS] §10, with the criteria in [ARCHITECTURE] §8. [RFC 8032]
   does not ask a verifier to check the key; vcrd checks it when the key is resolved, so
   that the finding names it.
-- **Remedy.** Do not rely on the credential. Under a small-order Ed25519 key, signatures
-  can be made that verify for almost any message without a private key.
+- **Remedy.** The signature establishes nothing: under a small-order Ed25519 key,
+  signatures that verify for almost any message can be made without a private key.
 
 ### <a id="verify.embedded_key_refused"></a>`verify.embedded_key_refused`
 
-- **Meaning.** The only key on offer is one the credential carries about itself, which
-  vcrd uses only if the caller opts in.
+- **Meaning.** The only key on offer is the embedded key, one the credential carries
+  about its own proof, which vcrd lets decide the outcome only if the caller opts in.
 - **Attribution and severity.** `policy`, `error`.
 - **Detail.** `location`: where the key is, such as `header.jwk`.
-- **Standard.** [REQUIREMENTS] §10's order of key sources. [RFC 7515] §4.1.3 defines
-  `jwk`.
-- **Remedy.** Such a key shows only that whoever made the credential holds its private
-  key. `key_provenance.credential_key.verifies_signature` says whether it signed. The
-  opt-in arrives in milestone 2 ([DEVELOPMENT-PLAN.md]).
+- **Standard.** [REQUIREMENTS] §10's key sources, with the rules in [ARCHITECTURE] §8,
+  "Keys and proofs". [RFC 7515] §4.1.3 defines `jwk`.
+- **Remedy.** The proof with the embedded key, `key_provenance.embedded_key.proof`,
+  establishes only that whoever made the credential holds its private key. The opt-in
+  arrives in milestone 2 ([DEVELOPMENT-PLAN.md]).
 
-### <a id="verify.credential_key_mismatch"></a>`verify.credential_key_mismatch`
+### <a id="verify.embedded_key_mismatch"></a>`verify.embedded_key_mismatch`
 
-- **Meaning.** The key the credential carries about itself is not the key derived from
-  its issuer. It never changes which key vcrd uses.
+- **Meaning.** The embedded key is not the issuer key. It never changes the deciding
+  proof key.
 - **Attribution and severity.** `input`, `warning`.
-- **Detail.** `carried_key`: the carried key, with its `location` and `thumbprint`.
-  `key`: the key vcrd established, with its `source`, `method` and `thumbprint`.
+- **Detail.** `embedded_key`: the embedded key, with its `location` and `thumbprint`.
+  `key`: the issuer key, with its `source`, `method` and `thumbprint`.
 - **Standard.** [RFC 7515] §4.1.3 makes `jwk` the public key that corresponds to the key
   that signed; [ARCHITECTURE] §8.
-- **Remedy.** Read `key_provenance.credential_key`. When `verifies_signature` is `true`
-  and the signature fails under the issuer's key, someone other than the issuer signed
-  it: specific evidence of key substitution.
+- **Remedy.** The credential carries a key other than the one its issuer identifier
+  gives. `key_provenance.embedded_key.proof` says whether the proof with it is correct;
+  when it is and the deciding proof is not, `verify.embedded_key_proof_correct` says so
+  too.
+
+### <a id="verify.embedded_key_proof_correct"></a>`verify.embedded_key_proof_correct`
+
+- **Meaning.** The proof with the embedded key is correct and the deciding proof is not:
+  whoever signed holds the embedded key's private key, and the embedded key is not the
+  deciding proof key.
+- **Attribution and severity.** `input`, `warning`. The deciding proof's own findings
+  already fail verify.
+- **Detail.** `embedded_key`: the embedded key, with its `location` and `thumbprint`.
+  `key`: the deciding proof key, with its `source`, `method` and `thumbprint`.
+- **Standard.** [RFC 8725] §3.8: the keys must belong to the issuer, or the application
+  must reject the JWT. [ARCHITECTURE] §8's key and proof table, the row with the
+  embedded proof correct and the issuer proof incorrect.
+- **Remedy.** This is key substitution: a credential that names an issuer, signed with a
+  key that is not the issuer's. The signature establishes nothing about the issuer.
+
+## Checks not evaluated
+
+A result's `not_evaluated` lists the checks vcrd did not make, each as `what`, the check,
+and `why`, the reason, so that a result never reads as more than it checked
+([REQUIREMENTS] §12, and §15's *Not evaluated*). A check is listed only when it applies
+to the input: `revocation_status`, for example, only when the credential has
+`credentialStatus`. When parse fails, only `issuer_accreditation` is listed, and `phases`
+says which phases did not run.
+
+vcrd does not assess trust ([REQUIREMENTS] §1, §4). These entries, with the rest of the
+result, are information for the layer that decides whether to rely on a credential: each
+says what the result does not establish, so that the layer can establish it another way,
+or decide without it.
+
+`text` names this section below its table of the checks not evaluated; `plain` and JSON
+give the names alone. Each entry gives:
+
+- **Meaning**: what the check would establish.
+- **Listed**: when a result lists the check, and with which reason.
+- **Standard**: the text the check comes from.
+- **Takeaway**: what a result establishes without the check, and what it leaves to its
+  reader.
+
+### <a id="not_evaluated.issuer_accreditation"></a>`issuer_accreditation`
+
+- **Meaning.** Whether a trust anchor the caller supplies, such as a list of accredited
+  issuers, includes the credential's issuer. The anchor, and what inclusion in it means,
+  are the caller's; vcrd would report whether the issuer is in it.
+- **Listed.** In every result, as `not_implemented`: no caller can supply a trust anchor
+  yet ([REQUIREMENTS] §9, §16 item 14). Once one can, a result made without one lists
+  the check as `no_parameters_supplied`.
+- **Standard.** [VCDM 2.0] Appendix A.3: the `issuer` property identifies the issuer to
+  the verifier, and some ecosystems keep lists of verified issuers. Appendix A gives no
+  conformance criteria for validation, the verifier's decision whether to rely on a
+  credential.
+- **Takeaway.** `passed` establishes that the signature verifies under the key the
+  issuer identifier names: `key_provenance` says how vcrd derived that key, and its
+  thumbprint names it. It does not establish who controls the identifier: anyone can
+  generate a `did:key`, with no registration. The issuer identifier, the thumbprint and
+  the provenance are what a trust layer needs to decide whether this issuer may issue
+  this kind of credential.
+
+### <a id="not_evaluated.context_resolution"></a>`context_resolution`
+
+- **Meaning.** What the credential's `@context` documents define its terms to mean:
+  obtaining each context and expanding the credential with [JSON-LD 1.1], so that each
+  term, such as a type or a claim's name, maps to the IRI (Internationalized Resource
+  Identifier) its issuer intended.
+- **Listed.** For every VC-JOSE-COSE credential, as `not_implemented`.
+- **Standard.** [VCDM 2.0] §4.3: each `@context` item after the first must be
+  processable as a JSON-LD context. §5.3 lets an issuer give the digest of a context
+  document, in `relatedResource`, for a verifier to compare. §6.3 describes processing
+  without JSON-LD: accepting only the `@context` values an application knows, in the
+  order it expects, with documents that match known digests.
+- **Takeaway.** vcrd read the types and the claims' names as JSON strings. It checked
+  that the first `@context` item is the VCDM 2.0 context and that later items are URLs or
+  objects (`inspect.context_missing`, `inspect.context_first_invalid`,
+  `inspect.context_entry_invalid`). It retrieved no context document, so it compared
+  none with a digest. What a name such as `degree` means is whatever the listed contexts
+  define. An application that depends on that meaning processes JSON-LD itself or, as
+  §6.3 describes, accepts only the `@context` values it knows. They are in
+  `credential.metadata`, as `@context[0]`, `@context[1]` and so on.
+
+### <a id="not_evaluated.audience"></a>`audience`
+
+- **Meaning.** Whether the JWT's `aud` claim names the recipient processing it.
+- **Listed.** When the JWT has `aud`, as `no_parameters_supplied`: no caller can supply
+  an expected audience until milestone 4 ([DEVELOPMENT-PLAN.md]).
+- **Standard.** [RFC 7519] §4.1.3: when `aud` is present, a recipient that does not
+  identify itself with one of its values must reject the JWT.
+- **Takeaway.** A credential addressed to another recipient verifies the same. A
+  recipient compares `aud`, in `credential.metadata`, with its own identifiers.
+
+### <a id="not_evaluated.holder_binding"></a>`holder_binding`
+
+- **Meaning.** Whether whoever presents the credential holds the private key that `cnf`
+  names ([RFC 7800] §3.1).
+- **Listed.** When the JWS header or the claims have `cnf`, as `not_implemented`: the
+  check needs a presentation, which vcrd verifies from milestone 4 ([DEVELOPMENT-PLAN.md]).
+- **Standard.** [VC-JOSE-COSE] §4.1.3: `cnf` identifies a proof-of-possession key, and
+  binding a credential to its holder is recommended.
+- **Takeaway.** A credential alone shows nothing about who presents it: a copy verifies
+  the same. Possession of the `cnf` key is shown by a presentation signed with it, over
+  a challenge from the verifier.
+
+### <a id="not_evaluated.revocation_status"></a>`revocation_status`
+
+- **Meaning.** The status the credential's `credentialStatus` points to, such as whether
+  its issuer has revoked or suspended it.
+- **Listed.** When the credential has `credentialStatus`, as `not_implemented`: checking
+  it means fetching a status list ([REQUIREMENTS] §15's *Verify*).
+- **Standard.** [VCDM 2.0] §4.10. VCDM 2.0 §2's *verification* includes the status check
+  when `credentialStatus` is present.
+- **Takeaway.** A credential its issuer has since revoked verifies the same. The
+  `credentialStatus` entry says where the status is published.
+
+### <a id="not_evaluated.schema_conformance"></a>`schema_conformance`
+
+- **Meaning.** Whether the credential conforms to the schemas its `credentialSchema`
+  names.
+- **Listed.** When the credential has `credentialSchema`, as `not_implemented`.
+- **Standard.** [VCDM 2.0] §4.11.
+- **Takeaway.** vcrd checked the structure the data model requires, not the issuer's
+  schema for this kind of credential: a claim that schema requires may be missing, or of
+  another type.
+
+### <a id="not_evaluated.replay_binding"></a>`replay_binding`
+
+- **Meaning.** Whether a presentation is bound to the request it answers, by the
+  verifier's challenge and domain, so that a recorded presentation cannot be replayed.
+- **Listed.** Not yet: vcrd verifies presentations from milestone 4
+  ([DEVELOPMENT-PLAN.md]). [REQUIREMENTS] §10 has a presentation verified without an
+  expected challenge and domain report replay binding as not evaluated; the reason would
+  be `no_parameters_supplied`.
+- **Standard.** [REQUIREMENTS] §10, on presentation verification.
+- **Takeaway.** A replayed presentation's signature verifies the same as the original's:
+  only a comparison with the verifier's own challenge shows that it answers this request.
+
+### Reasons
+
+| `why` | Meaning | Listed |
+|---|---|---|
+| <a id="not_evaluated.reason.not_implemented"></a>`not_implemented` | vcrd does not make the check yet | for `issuer_accreditation`, `context_resolution`, `holder_binding`, `revocation_status` and `schema_conformance` |
+| <a id="not_evaluated.reason.no_parameters_supplied"></a>`no_parameters_supplied` | the check needs a value from the caller, such as an expected audience, and none was supplied | for `audience` |
+| <a id="not_evaluated.reason.requires_network"></a>`requires_network` | the check needs network access, which vcrd does not use by default ([REQUIREMENTS] §6) | not yet: for a check that fetches, such as `revocation_status` once vcrd reads status lists, run without network access |
+| <a id="not_evaluated.reason.out_of_scope"></a>`out_of_scope` | vcrd does not intend to make the check | not yet: none of the checks above is out of scope |
+| <a id="not_evaluated.reason.phase_not_reached"></a>`phase_not_reached` | the check belongs to a phase that did not run | not yet: when parse fails, the later phases' checks are left out, and `phases` says which phases did not run |
 
 [ARCHITECTURE]: ../ARCHITECTURE.md
 [DEVELOPMENT-PLAN.md]: ../DEVELOPMENT-PLAN.md
 [did:key]: https://w3c-ccg.github.io/did-key-spec/
+[JSON-LD 1.1]: https://www.w3.org/TR/2020/REC-json-ld11-20200716/
 [multicodec table]: https://github.com/multiformats/multicodec/blob/master/table.csv
 [REQUIREMENTS]: ../REQUIREMENTS.md
 [RFC 3339]: https://www.rfc-editor.org/rfc/rfc3339
@@ -904,9 +1053,11 @@ repository; neither has a dated copy, so each is linked where it is published no
 [RFC 7518]: https://www.rfc-editor.org/rfc/rfc7518
 [RFC 7519]: https://www.rfc-editor.org/rfc/rfc7519
 [RFC 7638]: https://www.rfc-editor.org/rfc/rfc7638
+[RFC 7800]: https://www.rfc-editor.org/rfc/rfc7800
 [RFC 8032]: https://www.rfc-editor.org/rfc/rfc8032
 [RFC 8037]: https://www.rfc-editor.org/rfc/rfc8037
 [RFC 8259]: https://www.rfc-editor.org/rfc/rfc8259
+[RFC 8725]: https://www.rfc-editor.org/rfc/rfc8725
 [RFC 9864]: https://www.rfc-editor.org/rfc/rfc9864
 [VC-JOSE-COSE]: https://www.w3.org/TR/2026/REC-vc-jose-cose-20261013/
 [VCDM 1.1]: https://www.w3.org/TR/2022/REC-vc-data-model-20220303/

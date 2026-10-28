@@ -7,11 +7,11 @@ use sha2::{Digest, Sha256};
 
 use crate::document::{EmbeddedKey, KeyHints};
 use crate::finding::{
-    Attribution, CarriedKeyRef, DidKeyProblem, Finding, FindingDetail, JwkProblem, KeyRef,
+    Attribution, DidKeyProblem, EmbeddedKeyRef, Finding, FindingDetail, JwkProblem, KeyRef,
     KeySourceKind, Severity, WeakKeyCriterion,
 };
 use crate::json::Json;
-use crate::report::Phase;
+use crate::report::{Phase, ProofOutcome};
 
 /// A resolved public key.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -154,20 +154,22 @@ fn ed25519_key(bytes: &[u8; 32]) -> Result<VerifyingKey, DidKeyProblem> {
     Ok(key)
 }
 
-/// Where the key used came from, and any key the credential offered about itself
-/// (ARCHITECTURE §8). Reported whether verification succeeds or fails.
+/// Where the deciding proof key came from, and the embedded key, if any (ARCHITECTURE
+/// §8). Reported whether verification succeeds or fails.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KeyProvenance {
-    /// Absent when no key was used.
+    /// Present also when the key is refused, as a weak key is, so that the finding's
+    /// key can be told apart; absent when no key could decide the outcome.
     pub source: Option<KeySource>,
     /// How the key was derived from its source, e.g. `did:key`.
     pub method: Option<&'static str>,
-    /// The key used, as an RFC 7638 thumbprint.
+    /// The deciding proof key, as an RFC 7638 thumbprint.
     pub thumbprint: Option<String>,
-    /// The key used, as a JWK: what the thumbprint is of.
+    /// The deciding proof key, as a JWK: what the thumbprint is of.
     pub jwk: Option<PublicJwk>,
-    /// Present whenever the credential offered a key of its own.
-    pub credential_key: Option<CredentialKey>,
+    /// Present whenever the credential carries a key about its own proof that vcrd
+    /// can read.
+    pub embedded_key: Option<EmbeddedKeyReport>,
 }
 
 /// An open set: consumers must accept values they do not recognize (ARCHITECTURE §8).
@@ -193,18 +195,20 @@ impl KeySource {
     }
 }
 
-/// A key the credential offered about itself.
+/// The embedded key: a key the credential carries about its own proof (ARCHITECTURE §8).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CredentialKey {
+pub struct EmbeddedKeyReport {
     /// Where it was, e.g. `header.jwk`.
     pub location: String,
     pub thumbprint: String,
     /// Its public members, as the credential carries them.
     pub jwk: PublicJwk,
-    /// Whether it is the key used.
-    pub matched: bool,
-    /// Whether the signature verifies under it; absent when that cannot be tried.
-    pub verifies_signature: Option<bool>,
+    /// Whether it is the issuer key; absent when there is no issuer key to compare it
+    /// with.
+    pub same_as_issuer_key: Option<bool>,
+    /// The proof's result with it as the proof key, under the same algorithm policy and
+    /// key-type binding as the deciding proof.
+    pub proof: ProofOutcome,
 }
 
 #[derive(Default)]
@@ -212,9 +216,9 @@ pub(crate) struct Resolution {
     pub key: Option<PublicKey>,
     pub provenance: KeyProvenance,
     pub findings: Vec<Finding>,
-    /// The key the credential carries about itself, when vcrd can use it, for the
-    /// runner to fill in `credential_key.verifies_signature`.
-    pub credential_key: Option<PublicKey>,
+    /// The embedded key, when vcrd can use it as a proof key, for the runner's proof
+    /// with it.
+    pub embedded_key: Option<PublicKey>,
 }
 
 impl Resolution {
@@ -249,16 +253,19 @@ pub(crate) fn resolve(hints: &KeyHints) -> Resolution {
     resolution
 }
 
-/// Records the carried key in the provenance (ARCHITECTURE §8): matched when its
-/// thumbprint is that of the key derived from the issuer, refused when no key was
-/// derived, and a warning when the two differ.
+/// Records the embedded key in the provenance (ARCHITECTURE §8): the same key as the
+/// issuer key when their thumbprints are equal, refused when there is no issuer key,
+/// and a warning when the two differ. The runner adds its proof's result.
 fn compare_embedded(embedded: &EmbeddedKey, resolution: &mut Resolution) {
     let thumbprint = &embedded.jwk.thumbprint;
     let provenance = &resolution.provenance;
-    let derived = provenance.source.zip(provenance.thumbprint.clone());
-    let matched = derived.as_ref().map(|(_, t)| t) == Some(thumbprint);
+    let issuer = provenance
+        .source
+        .filter(|s| *s == KeySource::IssuerIdentifier)
+        .zip(provenance.thumbprint.clone());
+    let same_as_issuer_key = issuer.as_ref().map(|(_, t)| t == thumbprint);
     let method = provenance.method;
-    match derived {
+    match issuer {
         // Refused, and reported as such rather than as "no key material"
         // (REQUIREMENTS §10). The opt-in that would allow it is the caller's.
         None => resolution.findings.push(Finding::error(
@@ -268,32 +275,34 @@ fn compare_embedded(embedded: &EmbeddedKey, resolution: &mut Resolution) {
                 location: embedded.location,
             },
         )),
-        Some((source, key)) if !matched => resolution.findings.push(Finding::new(
-            Phase::Verify,
-            Attribution::Input,
-            Severity::Warning,
-            FindingDetail::CredentialKeyMismatch {
-                carried_key: CarriedKeyRef {
-                    location: embedded.location,
-                    thumbprint: thumbprint.clone(),
+        Some((source, key)) if same_as_issuer_key == Some(false) => {
+            resolution.findings.push(Finding::new(
+                Phase::Verify,
+                Attribution::Input,
+                Severity::Warning,
+                FindingDetail::EmbeddedKeyMismatch {
+                    embedded_key: EmbeddedKeyRef {
+                        location: embedded.location,
+                        thumbprint: thumbprint.clone(),
+                    },
+                    key: KeyRef {
+                        source,
+                        method,
+                        thumbprint: key,
+                    },
                 },
-                key: KeyRef {
-                    source,
-                    method,
-                    thumbprint: key,
-                },
-            },
-        )),
+            ));
+        }
         Some(_) => {}
     }
-    resolution.provenance.credential_key = Some(CredentialKey {
+    resolution.provenance.embedded_key = Some(EmbeddedKeyReport {
         location: embedded.location.to_owned(),
         thumbprint: thumbprint.clone(),
         jwk: embedded.jwk.public.clone(),
-        matched,
-        verifies_signature: None,
+        same_as_issuer_key,
+        proof: ProofOutcome::NotAttempted,
     });
-    resolution.credential_key = embedded.jwk.key.clone();
+    resolution.embedded_key = embedded.jwk.key.clone();
 }
 
 /// The key the issuer identifier encodes, when it is a `did:key`.
@@ -331,7 +340,7 @@ fn from_issuer(issuer: &str) -> Resolution {
                 method: Some("did:key"),
                 thumbprint: Some(thumbprint.clone()),
                 jwk: Some(jwk),
-                credential_key: None,
+                embedded_key: None,
             };
             if weak {
                 // Checked at resolution, not left to the verifier (ARCHITECTURE §8).
@@ -714,13 +723,13 @@ mod tests {
     }
 
     #[test]
-    fn an_embedded_key_equal_to_the_did_key_matches() {
+    fn an_embedded_key_equal_to_the_did_key_is_the_same_key() {
         let issuer = did_key(&[0xed, 0x01], &rfc8037_key());
         let resolution = with_embedded(Some(issuer), RFC8037_X);
         assert!(resolution.findings.is_empty(), "{:?}", resolution.findings);
-        let credential_key = resolution.provenance.credential_key.unwrap();
-        assert!(credential_key.matched);
-        assert_eq!(credential_key.location, "header.jwk");
+        let embedded = resolution.provenance.embedded_key.unwrap();
+        assert_eq!(embedded.same_as_issuer_key, Some(true));
+        assert_eq!(embedded.location, "header.jwk");
         assert!(resolution.key.is_some());
     }
 
@@ -733,9 +742,10 @@ mod tests {
         let [finding] = resolution.findings.as_slice() else {
             panic!("one finding: {:?}", resolution.findings)
         };
-        assert_eq!(finding.code, "verify.credential_key_mismatch");
+        assert_eq!(finding.code, "verify.embedded_key_mismatch");
         assert_eq!(finding.severity, Severity::Warning);
-        assert!(!resolution.provenance.credential_key.unwrap().matched);
+        let embedded = resolution.provenance.embedded_key.unwrap();
+        assert_eq!(embedded.same_as_issuer_key, Some(false));
         assert!(resolution.key.is_some(), "the issuer's key is still used");
     }
 
@@ -749,7 +759,7 @@ mod tests {
         assert_eq!(finding.attribution, Attribution::Policy);
         assert_eq!(resolution.provenance.source, None);
         assert!(resolution.key.is_none());
-        assert!(resolution.credential_key.is_some());
+        assert!(resolution.embedded_key.is_some());
     }
 
     #[test]

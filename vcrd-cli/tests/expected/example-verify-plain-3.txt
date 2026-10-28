@@ -15,10 +15,10 @@ phases.inspect: outcome=passed
 phases.verify: outcome=passed findings=verify.algorithm_deprecated
 proofs[0].suite: jws
 proofs[0].algorithm: EdDSA
-proofs[0].outcome: verified
+proofs[0].outcome: correct
+proofs[0].validity: unbounded
 proofs[0].key_provenance.source: issuer_identifier
 proofs[0].key_provenance.method: did:key
-proofs[0].validity: unbounded
 proofs[0].key_provenance.thumbprint: 0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
 proofs[0].key_provenance.jwk: {"crv":"Ed25519","kty":"OKP","x":"mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0"}
 format.header.alg: type=string value=EdDSA visibility=non_sensitive

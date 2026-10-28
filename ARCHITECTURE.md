@@ -292,7 +292,7 @@ disclosure, which is neither present nor absent (§10 [Q3]).
 | `ClaimValue` | one claim leaf | format's parse | no plaintext accessor outside core's rendering (§7) |
 | `ProofDescriptor` | where a proof is, what it covers, and its own times | format's parse | carries key hints, never a resolved key |
 | `KeyHints` | where key material may be | format's parse | typed; an embedded key is parsed, not kept as raw JSON |
-| `KeyProvenance` | where the key used came from | key resolution | reported whether verification succeeds or fails (§8) |
+| `KeyProvenance` | where the deciding proof key came from, and the embedded key | key resolution | reported whether verification succeeds or fails (§8) |
 | `ProofInput` | what a suite verifies | phase runner | carries no provenance (§5) |
 | `ContainedInput` | a credential found inside another | format's parse | bytes, media-type hint, and location; dispatched by the runner, not the format |
 | `Context` | everything injected | frontend | no default clock |
@@ -721,11 +721,109 @@ likewise outside it.
 
 ### Resolution
 
-The precedence is REQUIREMENTS §10's. Resolution runs in the phase runner (§4) and records
-every source it consults, so that a "no key material" finding can say where it looked. An
-embedded key matches independently established key material when their RFC 7638 JWK
-thumbprints are equal. The embedded key is parsed into a typed JWK at the parse boundary
-(§3).
+The rules are REQUIREMENTS §10's, stated in full under "Keys and proofs" below.
+Resolution runs in the phase runner (§4) and records every source it consults, so that a
+"no key material" finding can say where it looked. Two keys are the same key when their
+RFC 7638 JWK thumbprints are equal. The embedded key is parsed into a typed JWK at the
+parse boundary (§3).
+
+### Keys and proofs
+
+The terms, used in this sense in the output and its documentation:
+
+- **Embedded key** — a key a credential carries about its own proof, such as a JWS
+  header's `jwk`. It is self-asserted. A holder's key, in `cnf`, is not one: it describes
+  the holder.
+- **Issuer key** — the key the issuer identifier gives. A `did:key` encodes it; other DID
+  methods and URL issuers need resolution, which REQUIREMENTS §8's network opt-in governs.
+- **Caller-supplied key** — key material the caller passes in, through the API, a CLI
+  argument or a configuration file (milestone 2).
+- **Proof key** — a key the runner passes to a suite in `ProofInput` (§3), which carries no
+  provenance: the suite does not know which kind of key it has.
+- **Deciding proof key** — the proof key whose proof decides the outcome and the exit code.
+- **Correct**, **incorrect**, **not attempted** — a proof's result with one proof key.
+  Correct when the suite's cryptographic check holds for that key (for a JWS, the
+  signature over the signing input, RFC 7515 §5.2), incorrect when it does not, and not
+  attempted when the check was not made, with findings that say why. vcrd says *valid*
+  only of time periods.
+- **Refused** — a key that key resolution will not let decide the outcome: because of a
+  property of the key (weak, not a signing key, or a type vcrd does not support), or
+  because it is an embedded key alone and the caller has not opted in.
+
+The rules, which together make the table below:
+
+1. When a caller-supplied key and an issuer key are both present, they must be the same
+   key, whatever the issuer key's source; otherwise vcrd does not succeed, unless the
+   caller opts in to letting its key override the issuer key (milestone 2). A
+   caller-supplied key is thus a pin when the credential names an issuer key, and the key
+   itself when it names none. RFC 8725 §3.8 has an application reject a JWT whose keys do
+   not belong to its issuer.
+2. The deciding proof key is the caller-supplied key or the issuer key. The embedded key
+   decides only when neither is present, and then only with the caller's opt-in.
+3. vcrd may succeed only when the deciding proof is correct.
+
+A refused caller-supplied key or a refused issuer key prevents success; the findings say
+why. A refused embedded key is reported and otherwise treated as not present. A proof not
+attempted for a reason specific to its key counts, for success, as incorrect. One not
+attempted for a reason independent of the key, such as an `alg` vcrd does not implement
+or a signature of the wrong length, means no proof is attempted with any key, and vcrd
+does not succeed. Two different keys that both give correct proofs are a degenerate case,
+detected and rejected (milestone 2; milestone 1, with one algorithm and `verify_strict`,
+cannot produce it). The rules are necessary, not sufficient: an inspect error, an expired
+`exp` or an unimplemented `crit` still prevents success. An issuer key vcrd cannot obtain,
+such as one for a DID method it does not resolve, is not present; what a caller-supplied
+key may then do is an open question of milestone 2 (DEVELOPMENT-PLAN.md).
+
+Every combination of at most one key of each kind (a key set is milestone 2's question).
+E, I and C say whether an embedded, issuer and caller-supplied key is present (1) or not
+(0). E=I, E=C and I=C say whether two present keys are the same key. E?, I? and C? say
+whether the proof with that key is correct. S? says whether vcrd may succeed (Y), must not
+(N), or may only with the caller's opt-in to an embedded key alone (P). Equality is
+transitive, so no row has exactly two of the three equal.
+
+| EIC | E=I | E=C | I=C | E? | I? | C? | S? | Situation |
+|---|---|---|---|---|---|---|---|---|
+| 000 | — | — | — | — | — | — | N | no keys available |
+| 001 | — | — | — | — | — | Y | Y | caller-supplied proof key correct |
+| 001 | — | — | — | — | — | N | N | caller-supplied proof key incorrect |
+| 010 | — | — | — | — | Y | — | Y | issuer proof key correct |
+| 010 | — | — | — | — | N | — | N | issuer proof key incorrect |
+| 011 | — | — | Y | — | Y | Y | Y | issuer same as caller-supplied key, proof correct |
+| 011 | — | — | Y | — | N | N | N | issuer same as caller-supplied key, proof incorrect |
+| 011 | — | — | N | — | Y | N | N | caller-supplied key differs from issuer key |
+| 011 | — | — | N | — | N | Y | N | issuer proof key incorrect even though caller-supplied key is correct |
+| 011 | — | — | N | — | N | N | N | both the caller-supplied proof key and the issuer proof key incorrect |
+| 100 | — | — | — | Y | — | — | P | embedded proof key correct, but embedded key alone requires opt-in for success |
+| 100 | — | — | — | N | — | — | N | embedded proof key incorrect |
+| 101 | — | Y | — | Y | — | Y | Y | embedded same as caller-supplied proof key, proof correct |
+| 101 | — | Y | — | N | — | N | N | embedded same as caller-supplied proof key, proof incorrect |
+| 101 | — | N | — | Y | — | N | N | caller-supplied proof key incorrect has precedence over embedded key correct |
+| 101 | — | N | — | N | — | Y | Y | caller-supplied proof key correct has precedence over embedded key incorrect |
+| 101 | — | N | — | N | — | N | N | both the caller-supplied proof key and the embedded proof key incorrect |
+| 110 | Y | — | — | Y | Y | — | Y | embedded same as issuer proof key, proof correct |
+| 110 | Y | — | — | N | N | — | N | embedded same as issuer proof key, proof incorrect |
+| 110 | N | — | — | Y | N | — | N | issuer proof key incorrect has precedence over embedded key correct |
+| 110 | N | — | — | N | Y | — | Y | issuer proof key correct has precedence over embedded key incorrect |
+| 110 | N | — | — | N | N | — | N | both the issuer proof key and the embedded proof key incorrect |
+| 111 | Y | Y | Y | Y | Y | Y | Y | all keys match and proof key correct |
+| 111 | Y | Y | Y | N | N | N | N | all keys match and the proof key incorrect |
+| 111 | Y | N | N | Y | Y | N | N | caller-supplied key differs from issuer key |
+| 111 | Y | N | N | N | N | Y | N | issuer/embedded key incorrect even though caller-supplied key is correct |
+| 111 | Y | N | N | N | N | N | N | both the caller-supplied proof key and the issuer/embedded proof key incorrect |
+| 111 | N | Y | N | Y | N | Y | N | issuer proof key incorrect even though caller-supplied/embedded proof key correct |
+| 111 | N | Y | N | N | Y | N | N | caller-supplied key differs from issuer key |
+| 111 | N | Y | N | N | N | N | N | both the caller-supplied/embedded proof key and the issuer proof key incorrect |
+| 111 | N | N | Y | Y | N | N | N | issuer/caller-supplied proof key incorrect has precedence over embedded key correct |
+| 111 | N | N | Y | N | Y | Y | Y | issuer/caller-supplied proof key correct has precedence over embedded key incorrect |
+| 111 | N | N | Y | N | N | N | N | both the issuer/caller-supplied proof key and the embedded proof key incorrect |
+| 111 | N | N | N | Y | N | N | N | caller-supplied proof key incorrect has precedence over embedded key proof correct |
+| 111 | N | N | N | N | Y | N | N | caller-supplied key differs from issuer key |
+| 111 | N | N | N | N | N | Y | N | issuer proof key incorrect even though caller-supplied proof key correct |
+| 111 | N | N | N | N | N | N | N | three different proof keys, all incorrect |
+
+Milestone 1 produces the ten rows without a caller-supplied key, each from a fixture
+listed in `fixtures/README.md`; `vcrd-cli/tests/key_and_proof_table.rs` reads this table
+and checks vcrd against each of them. Milestone 2 tests every row (DEVELOPMENT-PLAN.md).
 
 ### `did:key`
 
@@ -764,15 +862,18 @@ key, which signed it, but names a `did:key` issuer for a different key:
   "method": "did:key",
   "thumbprint": "0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c",
   "jwk": { "crv": "Ed25519", "kty": "OKP", "x": "mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0" },
-  "credential_key": {
+  "embedded_key": {
     "location": "header.jwk",
     "thumbprint": "_i3gzFWABuHlZnuT9FBtp8CVlJ57CcWpTPwviZ2m1ms",
     "jwk": { "crv": "Ed25519", "kty": "OKP", "x": "dmVW__tsfsOxTi_nA17JMexgwC2vIwXdN2ouKk5wJDs" },
-    "matched": false,
-    "verifies_signature": true
+    "same_as_issuer_key": false,
+    "proof": "correct"
   }
 }
 ```
+
+The top-level members describe the deciding proof key; the proof's `outcome`, beside
+`key_provenance`, is its proof's result, here `incorrect`.
 
 `source` is an open enumeration, so consumers must accept values they do not recognize. Its
 values and their guarantees:
@@ -783,34 +884,37 @@ values and their guarantees:
 | `issuer_identifier` | derived from the issuer identifier the credential names; the credential cannot use a different key while naming this issuer | who controls that identifier |
 | `credential_embedded` | a key the credential carries about itself, used only because the caller opted in | anything — it is bound to nothing |
 
-`credential_key` is present whenever the credential offered a public key vcrd can read:
-`matched` says whether it is the key resolution established, and `verifies_signature`
-whether the signature verifies under it. That second verification is additional
-information — it applies the same algorithm policy and key-type binding, never affects
-the verdict or the exit code, and is absent when it cannot be attempted, as for a key type
-vcrd does not implement. `matched: false` with `verifies_signature: true` is specific
-evidence of key substitution.
+`embedded_key` is present whenever the credential carries a public key vcrd can read
+about its own proof. `same_as_issuer_key` says whether it is the issuer key, and is absent
+when there is no issuer key to compare it with; `proof` is the proof's result with it as
+the proof key. That proof is additional information: it applies the same algorithm policy
+and key-type binding, decides the outcome only as the rules above say, and is
+`not_attempted` when it cannot be made, as for a key type vcrd does not implement. The
+same key gives the same result, so a key the same as the issuer key is not proved again.
 
-A carried key unlike the established one is also a warning, `verify.credential_key_mismatch`,
-attributed to the input: RFC 7515 §4.1.3 makes `jwk` the key that signed. When no key was
-established, the carried key is refused: `verify.embedded_key_refused`, attributed to the
-caller's policy (exit 5), since the opt-in that would allow it is the caller's.
+An embedded key unlike the issuer key is a warning, `verify.embedded_key_mismatch`,
+attributed to the input: RFC 7515 §4.1.3 makes `jwk` the key that signed. An embedded
+proof that is correct while the deciding proof is not, key substitution, is a second
+warning, `verify.embedded_key_proof_correct`: the deciding proof's findings already fail
+verify, and this one says what the embedded key shows. When there is no issuer key, the
+embedded key is refused: `verify.embedded_key_refused`, attributed to the caller's policy
+(exit 5), since the opt-in that would allow it is the caller's.
 
 Inspect reports a `jwk` that is not a public key vcrd can read (`inspect.jwk_invalid`), one
 whose key type it does not know (`inspect.jwk_kty_unsupported`, a warning attributed to
 vcrd, since a later standard may define the type), and one carrying private-key members
 (`inspect.jwk_private_key`). None of these blocks verify. A symmetric key (`kty: oct`) is
-secret, so it is reported and given no `credential_key`: its thumbprint would be an unsalted
+secret, so it is reported and given no `embedded_key`: its thumbprint would be an unsalted
 hash of the secret, and the output is often shared more widely than the input.
 
-| Situation | `source` | `credential_key` |
+| Situation | `source` | `embedded_key` |
 |---|---|---|
 | `did:key` issuer only | `issuer_identifier` | — |
 | caller-supplied key set | `caller_supplied` | — |
-| embedded key equals the `did:key` | `issuer_identifier` | `matched: true` |
-| embedded key differs, and signed | `issuer_identifier` | `matched: false`, `verifies_signature: true`; the mismatch warning |
-| embedded only, caller opted in | `credential_embedded` | `matched: true` |
-| embedded only, no opt-in | absent | `matched: false`; the refusal is its own finding, `verify.embedded_key_refused` |
+| embedded key equals the `did:key` | `issuer_identifier` | `same_as_issuer_key: true`, `proof` the same as `outcome` |
+| embedded key differs, and signed | `issuer_identifier` | `same_as_issuer_key: false`, `proof: correct`; the mismatch and proof-correct warnings |
+| embedded only, caller opted in | `credential_embedded` | no `same_as_issuer_key` |
+| embedded only, no opt-in | absent | no `same_as_issuer_key`; the refusal is its own finding, `verify.embedded_key_refused` |
 
 ### Algorithms
 
@@ -861,9 +965,9 @@ mechanism and its status:
 
 | Threat | Mechanism | Section | Status |
 |---|---|---|---|
-| false "verified" through algorithm confusion | caller allowlist; `none` always rejected; algorithm bound to key type | §8 | designed; tested in the prototype |
-| false "verified" through key substitution | resolution precedence; provenance, including whether the credential's own key verifies | §8 | implemented for `did:key` and an embedded JWK; tested by `fixtures/embedded-jwk.jwt` and `embedded-jwk-only.jwt` |
-| false "verified" through a weak key | per-algorithm criteria at resolution; strict verification | §8 | implemented for EdDSA; tested by `fixtures/weak-key.jwt` and `small-order-r.jwt` |
+| false success through algorithm confusion | caller allowlist; `none` always rejected; algorithm bound to key type | §8 | designed; tested in the prototype |
+| false success through key substitution | the rules of §8's key and proof table; provenance, including the proof with the embedded key and `verify.embedded_key_proof_correct` | §8 | implemented for `did:key` and an embedded JWK; tested by `vcrd-cli/tests/key_and_proof_table.rs` on the fixtures for the table's milestone 1 rows |
+| false success through a weak key | per-algorithm criteria at resolution; strict verification | §8 | implemented for EdDSA; tested by `fixtures/weak-key.jwt` and `small-order-r.jwt` |
 | false assurance from checks not performed | `not_evaluated` in every result | §3, §6 | designed; in the prototype |
 | verification steered to fetch key material from an attacker-chosen location | the blocking rule stops verify on a dangerous inspect failure | §4 | designed; no case implemented |
 | crash or exploit through malformed input | limits before JSON parsing; no panics; no `unsafe` (REQUIREMENTS §6) | §4 | designed; the prototype's limits were misordered |

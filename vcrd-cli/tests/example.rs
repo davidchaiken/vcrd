@@ -27,7 +27,7 @@ fn verify_exits_0_with_one_json_document() {
         "{out}"
     );
     let proof = &out["proofs"][0];
-    assert_eq!(proof["outcome"], "verified");
+    assert_eq!(proof["outcome"], "correct");
     assert_eq!(proof["key_provenance"]["source"], "issuer_identifier");
     assert_eq!(proof["key_provenance"]["method"], "did:key");
     assert_eq!(out["credential"]["validity"], "current");

@@ -1,15 +1,13 @@
- Status        passed
- Exit code     0
- Bytes         921
- Depth         3
- Format        vc-jose
- Profile       vc-jose-cose
- Kind          credential
- Issuer        did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N
- Types         VerifiableCredential, ExampleDegreeCredential
- Validity      current
- Valid from    2026-01-01T00:00:00Z
- Valid until   2031-01-01T00:00:00Z
+ Status                passed
+ Exit code             0
+ Bytes                 921
+ Depth                 3
+ Format                vc-jose
+ Profile               vc-jose-cose
+ Kind                  credential
+ Issuer                did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N
+ Types                 VerifiableCredential, ExampleDegreeCredential
+ Credential validity   current, 2026-01-01T00:00:00Z to 2031-01-01T00:00:00Z
 
 Phases
  Phase   | Outcome | Findings                    | Blocked by
@@ -19,14 +17,13 @@ Phases
  verify  | passed  | verify.algorithm_deprecated |
 
 Proof
- Suite        jws
- Algorithm    EdDSA
- Outcome      verified
- Key source   issuer_identifier
- Method       did:key
- Validity     unbounded
- Thumbprint   0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
- Key JWK      {"crv":"Ed25519","kty":"OKP","x":"mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0"}
+ Suite                jws
+ Algorithm            EdDSA
+ Outcome              correct
+ Validity             unbounded
+ Deciding proof key   issuer key, from did:key
+ Thumbprint           0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
+ Key JWK              {"crv":"Ed25519","kty":"OKP","x":"mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0"}
 
 Header
  Path | Type   | Value                                                    | Visibility
@@ -67,3 +64,5 @@ Not evaluated
 ----------------------+-----------------
  issuer_accreditation | not_implemented
  context_resolution   | not_implemented
+
+ Described in   docs/findings.md, section "Checks not evaluated"

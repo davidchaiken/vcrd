@@ -108,6 +108,23 @@ mod generate {
             ("fixtures/small-order-r.jwt", small_order_r()),
             ("fixtures/embedded-jwk.jwt", embedded_jwk()),
             ("fixtures/embedded-jwk-only.jwt", embedded_jwk_only()),
+            (
+                "fixtures/embedded-jwk-only-tampered.jwt",
+                embedded_jwk_only_tampered(),
+            ),
+            ("fixtures/embedded-jwk-same.jwt", embedded_jwk_same()),
+            (
+                "fixtures/embedded-jwk-same-tampered.jwt",
+                embedded_jwk_same_tampered(),
+            ),
+            (
+                "fixtures/embedded-jwk-issuer-signed.jwt",
+                embedded_jwk_issuer_signed(),
+            ),
+            (
+                "fixtures/embedded-jwk-tampered.jwt",
+                embedded_jwk_tampered(),
+            ),
             ("fixtures/exp-past.jwt", exp_past()),
             ("fixtures/crit-unsupported.jwt", crit_unsupported()),
             ("fixtures/canary.jwt", canary()),
@@ -184,6 +201,17 @@ mod generate {
     /// A compact JWS (RFC 7515 §7.1).
     fn sign(key: &SigningKey, header: &Value, payload: &Value) -> Vec<u8> {
         sign_parts(key, header, payload).join(".").into_bytes()
+    }
+
+    /// As [`sign`], then with a claim changed: the degree's name. The signature is
+    /// over the original payload, so the proof is incorrect under every key.
+    fn sign_then_tamper(key: &SigningKey, header: &Value, payload: &Value) -> Vec<u8> {
+        let [header, _, signature] = sign_parts(key, header, payload);
+        let mut payload = payload.clone();
+        payload["credentialSubject"]["degree"]["name"] = json!("Doctor of Philosophy");
+        [header, b64_json(&payload), signature]
+            .join(".")
+            .into_bytes()
     }
 
     /// The curated example: a self-signed VC-JOSE-COSE credential whose issuer is a
@@ -275,12 +303,8 @@ mod generate {
     /// The example with a claim changed after signing: the degree's name. The
     /// signature is the example's, over the original payload.
     fn tampered_claim() -> Vec<u8> {
-        let (key, header, mut payload) = example_parts();
-        let [header, _, signature] = sign_parts(&key, &header, &payload);
-        payload["credentialSubject"]["degree"]["name"] = json!("Doctor of Philosophy");
-        [header, b64_json(&payload), signature]
-            .join(".")
-            .into_bytes()
+        let (key, header, payload) = example_parts();
+        sign_then_tamper(&key, &header, &payload)
     }
 
     /// The example declaring `alg: none`, as an Unsecured JWS, whose signature is
@@ -345,20 +369,79 @@ mod generate {
     /// ARCHITECTURE §8's example of key substitution: the issuer is the example's
     /// `did:key`, but the header carries another key in `jwk`, and that key signed.
     fn embedded_jwk() -> Vec<u8> {
-        let (_, mut header, payload) = example_parts();
-        let substitute = signing_key("vcrd fixture: a key substituted for the issuer's");
-        header["jwk"] = jwk(&substitute);
+        let (substitute, header, payload) = embedded_jwk_parts();
         sign(&substitute, &header, &payload)
+    }
+
+    /// As `embedded-jwk.jwt`, with a claim changed after signing: the embedded key is
+    /// not the issuer key, and neither gives a correct proof.
+    fn embedded_jwk_tampered() -> Vec<u8> {
+        let (substitute, header, payload) = embedded_jwk_parts();
+        sign_then_tamper(&substitute, &header, &payload)
+    }
+
+    /// The issuer key signed, and the header's `jwk` carries another key: the
+    /// embedded key is not the issuer key, and its proof is incorrect.
+    fn embedded_jwk_issuer_signed() -> Vec<u8> {
+        let (key, mut header, payload) = example_parts();
+        header["jwk"] = jwk(&substitute_key());
+        sign(&key, &header, &payload)
+    }
+
+    /// The issuer key in the header's `jwk`: the embedded key is the issuer key.
+    /// Correctly signed.
+    fn embedded_jwk_same() -> Vec<u8> {
+        let (key, header, payload) = embedded_jwk_same_parts();
+        sign(&key, &header, &payload)
+    }
+
+    /// As `embedded-jwk-same.jwt`, with a claim changed after signing: one key, and
+    /// its proof is incorrect.
+    fn embedded_jwk_same_tampered() -> Vec<u8> {
+        let (key, header, payload) = embedded_jwk_same_parts();
+        sign_then_tamper(&key, &header, &payload)
     }
 
     /// No issuer, and the signer's key in the header's `jwk`: the only key on offer
     /// is one the credential asserts about itself, which vcrd refuses without the
     /// caller's opt-in (REQUIREMENTS §10).
     fn embedded_jwk_only() -> Vec<u8> {
-        let (key, mut header, mut payload) = example_parts();
-        payload.as_object_mut().unwrap().remove("issuer");
-        header["jwk"] = jwk(&key);
+        let (key, header, payload) = embedded_jwk_only_parts();
         sign(&key, &header, &payload)
+    }
+
+    /// As `embedded-jwk-only.jwt`, with a claim changed after signing: the embedded
+    /// key alone, and its proof is incorrect.
+    fn embedded_jwk_only_tampered() -> Vec<u8> {
+        let (key, header, payload) = embedded_jwk_only_parts();
+        sign_then_tamper(&key, &header, &payload)
+    }
+
+    /// A key that is not the issuer's, for the fixtures that embed one.
+    fn substitute_key() -> SigningKey {
+        signing_key("vcrd fixture: a key substituted for the issuer's")
+    }
+
+    /// The example's header and payload with another key in `jwk`, and that key.
+    fn embedded_jwk_parts() -> (SigningKey, Value, Value) {
+        let (_, mut header, payload) = example_parts();
+        let substitute = substitute_key();
+        header["jwk"] = jwk(&substitute);
+        (substitute, header, payload)
+    }
+
+    /// The example's key, header and payload, with that key in `jwk`.
+    fn embedded_jwk_same_parts() -> (SigningKey, Value, Value) {
+        let (key, mut header, payload) = example_parts();
+        header["jwk"] = jwk(&key);
+        (key, header, payload)
+    }
+
+    /// As [`embedded_jwk_same_parts`], without an issuer.
+    fn embedded_jwk_only_parts() -> (SigningKey, Value, Value) {
+        let (key, header, mut payload) = embedded_jwk_same_parts();
+        payload.as_object_mut().unwrap().remove("issuer");
+        (key, header, payload)
     }
 
     /// The example with `exp` at 2026-06-01, before the tests' clock of 2026-10-01,

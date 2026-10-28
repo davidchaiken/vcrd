@@ -1,7 +1,7 @@
- Status     inspect_failed
- Kind       credential
- Types      VerifiableCredential, ExampleDegreeCredential
- Validity   current
+ Status                inspect_failed
+ Kind                  credential
+ Types                 VerifiableCredential, ExampleDegreeCredential
+ Credential validity   current, 2026-01-01T00:00:00Z to 2031-01-01T00:00:00Z
 
 Phases
  Phase   | Outcome | Findings                    | Blocked by
@@ -10,12 +10,11 @@ Phases
  verify  | failed  | verify.embedded_key_refused |
 
 Proof
- Suite                jws
- Algorithm            EdDSA
- Outcome              not_attempted
- Carried key          header.jwk
- Matched              false
- Verifies signature   true
+ Suite          jws
+ Algorithm      EdDSA
+ Outcome        not_attempted
+ Validity       unbounded
+ Embedded key   header.jwk: no issuer key to compare with; proof correct
 
 Claims
  Path                          | Type   | Value    | Visibility
@@ -38,3 +37,5 @@ Not evaluated
 ----------------------+-----------------
  issuer_accreditation | not_implemented
  context_resolution   | not_implemented
+
+ Described in   docs/findings.md, section "Checks not evaluated"

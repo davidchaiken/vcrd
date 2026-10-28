@@ -1,8 +1,8 @@
- Status     passed
- Kind       credential
- Issuer     did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N
- Types      VerifiableCredential, ExampleDegreeCredential
- Validity   current
+ Status                passed
+ Kind                  credential
+ Issuer                did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMjejg6SPTv3N
+ Types                 VerifiableCredential, ExampleDegreeCredential
+ Credential validity   current, 2026-01-01T00:00:00Z to 2031-01-01T00:00:00Z
 
 Phases
  Phase   | Outcome | Findings | Blocked by
@@ -11,11 +11,12 @@ Phases
  verify  | passed  |          |
 
 Proof
- Suite        jws
- Algorithm    EdDSA
- Outcome      verified
- Key source   issuer_identifier
- Method       did:key
+ Suite                jws
+ Algorithm            EdDSA
+ Outcome              correct
+ Validity             unbounded
+ Deciding proof key   issuer key, from did:key
+ Thumbprint           0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
 
 Claims
  Path                          | Type   | Value    | Visibility
@@ -33,3 +34,5 @@ Not evaluated
 ----------------------+-----------------
  issuer_accreditation | not_implemented
  context_resolution   | not_implemented
+
+ Described in   docs/findings.md, section "Checks not evaluated"

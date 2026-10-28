@@ -806,25 +806,30 @@ network-dependent resolution (`did:web` and similar) is available only with the
 **Key material has a precedence, and a verify result states where the key came from.**
 A credential can carry a public key about itself — in a JWT header, for instance — and
 verifying against that key proves only that whoever produced the credential holds the
-matching private key, which an attacker does. So key material is taken, highest first,
-from: key material the caller supplies; the issuer identifier, where the identifier
-itself encodes the key (`did:key`); a key embedded in the credential, *only* when it
-matches key material from one of the first two; and an embedded key on its own only with
-an explicit caller opt-in. Otherwise the embedded key is refused, and the refusal is
-reported rather than treated as "no key material".
+matching private key, which an attacker does. So key material comes from three sources:
+key material the caller supplies; the issuer key, which the issuer identifier gives (offline,
+only where the identifier itself encodes the key, as `did:key` does); and a key embedded in
+the credential. A caller-supplied key and an issuer key, when both are present, must be the
+same key, whatever the issuer key's source, unless the caller opts in to letting its key
+override the issuer key: a caller-supplied key is a pin when the credential names an issuer
+key. The embedded key decides the outcome only when neither of the others is present, and
+then only with an explicit caller opt-in. Otherwise the embedded key is refused, and the
+refusal is reported rather than treated as "no key material". ARCHITECTURE §8 states these
+rules in full, with a table of every combination of keys and proof results.
 
 Key provenance is a required field of the v1 result schema, for the same reason the
 algorithm allowlist and the challenge/domain parameters are: retrofitting it once the
 schema is load-bearing would be disruptive, and consumers built in the meantime could
 not distinguish the two most different outcomes vcrd produces — verified against key
 material the credential did not choose, and verified against a key the credential
-supplied about itself. The result states where the key actually used came from, as an
+supplied about itself. The result states where the deciding proof key came from, as an
 open set of values each with documented guarantees rather than a single trust boolean;
-and, whenever the credential offered a key of its own, which key that was, whether it
-matched the key used, and whether the signature verifies under it. It is reported when
-verification fails as well as when it succeeds: a credential whose own key verifies the
-signature while the issuer's key does not is specific evidence of key substitution.
-Deciding which sources are acceptable remains the caller's judgment (§1).
+and, whenever the credential carries a key about its own proof, which key that was,
+whether it is the issuer key, and whether the proof with it is correct. It is reported
+when verification fails as well as when it succeeds: a credential whose embedded key gives
+a correct proof while the issuer key does not is specific evidence of key substitution,
+and is reported as its own finding. Deciding which sources are acceptable remains the
+caller's judgment (§1).
 
 **Explicitly out of scope for this phase**: issuing and editing credentials (a later
 phase built on the same core), and the risk-based trust-advice layer described in §1
@@ -1189,13 +1194,20 @@ checked for such conflicts when the standard comes into scope (§11).
 - **Attribution** — which party a finding is attributed to: the input, the caller's
   policy, vcrd's own limits, or the environment (§6). Determines exit-code precedence
   (§8).
+- **Caller-supplied key** — key material the caller passes in, through the API, a CLI
+  argument or a configuration file (§10).
 - **CBOR** — Concise Binary Object Representation, the binary serialization mdoc/mDL
   credentials use in place of JSON.
+- **Correct**, **incorrect**, **not attempted** — a proof's result with one *proof key*:
+  the suite's cryptographic check holds for that key, it does not, or it was not made.
+  vcrd says *valid* only of time periods.
 - **COSE** — CBOR Object Signing and Encryption, the CBOR-based analog to JOSE's
   signing/encryption mechanics.
 - **Data Integrity** — the W3C *Verifiable Credential Data Integrity 1.0* mechanism, which
   secures a JSON-LD credential with a `proof` inside it, by a cryptosuite such as
   `eddsa-rdfc-2022`; the embedded counterpart of VC-JOSE-COSE's enveloping JWS.
+- **Deciding proof key** — the *proof key* whose proof decides the outcome and the exit
+  code (§10).
 - **DID** — Decentralized Identifier.
 - **DID URL** — a DID followed by a path, query or fragment, identifying a resource the
   DID's controller names, such as one of its keys (`did:key:z6Mk…#z6Mk…`). A relative DID
@@ -1208,6 +1220,9 @@ checked for such conflicts when the standard comes into scope (§11).
   DIDs.
 - **EIP-712** — Ethereum Improvement Proposal 712, a typed structured-data
   message-signing standard.
+- **Embedded key** — a key a credential carries about its own proof, such as a JWS
+  header's `jwk`: self-asserted, so a proof with it shows only that the signer holds its
+  private key (§10). A holder's key, in `cnf`, is not one.
 - **EUDI** — the EU Digital Identity Wallet program, producer of the `verifier-endpoint`
   reference implementation discussed in §3.
 - **FFI** — Foreign Function Interface, a dependency that crosses a non-Rust language
@@ -1222,6 +1237,8 @@ checked for such conflicts when the standard comes into scope (§11).
 - **Inspect** — the second phase (§4): conformance to the data model and securing format,
   and the validity period, without cryptography or network access. Also the CLI
   operation that runs the parse and inspect phases (§8).
+- **Issuer key** — the key the issuer identifier gives: a `did:key` encodes it, and other
+  identifiers need resolution (§10).
 - **JOSE** — JSON Object Signing and Encryption, the IETF framework covering JWS/JWK/JWT.
 - **JOSE Header Parameter names** — the members of a JWS's header, defined in RFC 7515
   §4.1 unless noted:
@@ -1274,8 +1291,8 @@ checked for such conflicts when the standard comes into scope (§11).
     `credentialSubject.id`.
   - `vc` and `vp` — a credential or a presentation inside a JWT, as VCDM 1.1's JWT
     encoding has it. VC-JOSE-COSE says they MUST NOT be present.
-- **Key provenance** — where the key vcrd verified with came from, and any key the
-  credential offered about itself (§10).
+- **Key provenance** — where the deciding proof key came from, and the embedded key, if
+  any (§10).
 - **KMS** — Key Management Service.
 - **mDL** — mobile driver's license.
 - **mdoc** — the ISO 18013-5 "mobile document" CBOR-encoded credential format that mDLs
@@ -1297,10 +1314,15 @@ checked for such conflicts when the standard comes into scope (§11).
   understands.
 - **Phase** — one of parse, inspect, and verify, run in that order (§4).
 - **PII** — Personally Identifiable Information.
+- **Proof key** — a key vcrd passes to a proof suite to make a proof with; the suite does
+  not know which kind of key it is (§7).
 - **RDF** — Resource Description Framework, the data model JSON-LD credentials are
   canonicalized as.
 - **RDFC-1.0** — RDF Dataset Canonicalization 1.0, the W3C canonicalization spec used by
   JSON-LD Data Integrity proofs.
+- **Refused** — of a key: one vcrd will not let decide the outcome, because of a property
+  of the key (weak, not a signing key, or a type vcrd does not support) or because it is an
+  *embedded key* alone and the caller has not opted in (§10).
 - **SBOM** — Software Bill of Materials.
 - **SD-JWT / SD-JWT VC** — Selective Disclosure JWT / Selective Disclosure JWT
   Verifiable Credential.

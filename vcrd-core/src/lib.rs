@@ -34,12 +34,12 @@ pub use document::{
     ProofMaterial, ProofTime, ProofTimes, Timestamp,
 };
 pub use finding::{
-    Attribution, Base64urlProblem, CarriedKeyRef, ClaimLocation, CritProblem, DateField,
-    DidKeyProblem, Finding, FindingDetail, IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment,
+    Attribution, Base64urlProblem, ClaimLocation, CritProblem, DateField, DidKeyProblem,
+    EmbeddedKeyRef, Finding, FindingDetail, IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment,
     KeyRef, KeySourceKind, LanguageValueProblem, Severity, WeakKeyCriterion,
 };
 pub use json::{DuplicateName, Json, Member, nesting_depth};
-pub use keys::{CredentialKey, Jwk, KeyProvenance, KeySource, PublicJwk, PublicKey};
+pub use keys::{EmbeddedKeyReport, Jwk, KeyProvenance, KeySource, PublicJwk, PublicKey};
 pub use redact::{
     ClaimValue, Designations, Rendered, RenderedJson, RenderedLeaf, Reveal, RevealLocation,
     Revealed, Treatment, ValueKind, render,

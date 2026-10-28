@@ -13,7 +13,9 @@ use tabled::builder::Builder;
 use tabled::settings::object::{Cell as TableCell, Columns};
 use tabled::settings::{Style, Width};
 
-use crate::view::{Envelope, FindingView, LeafView, PhaseView, ProofView, ResultView};
+use crate::view::{
+    EmbeddedKeyView, Envelope, FindingView, LeafView, PhaseView, ProofView, ResultView,
+};
 
 /// The `text` output at this verbosity, 1 to 3.
 pub fn text(envelope: &Envelope, verbosity: u8) -> String {
@@ -29,7 +31,9 @@ pub fn text(envelope: &Envelope, verbosity: u8) -> String {
         let mut builder = Builder::default();
         let table = match &section.body {
             Body::Fields(fields) => {
-                for field in fields {
+                let fields: Vec<&Field> =
+                    fields.iter().filter(|f| f.shown != Shown::Plain).collect();
+                for field in &fields {
                     builder.push_record([field.label.to_owned(), printable(&field.value)]);
                 }
                 let mut table = builder.build();
@@ -73,7 +77,7 @@ pub fn plain(envelope: &Envelope, verbosity: u8) -> String {
     for section in sections(envelope, verbosity) {
         match section.body {
             Body::Fields(fields) => {
-                for field in fields {
+                for field in fields.iter().filter(|f| f.shown != Shown::Text) {
                     let name = join(&section.name, &field.name);
                     let _ = writeln!(out, "{}: {}", printable(&name), printable(&field.value));
                 }
@@ -126,6 +130,32 @@ struct Field {
     value: String,
     /// Wrapped at word boundaries in `text`; see [`PROSE_WIDTH`].
     prose: bool,
+    shown: Shown,
+}
+
+/// Which formats print a field. `text` gives a few values as a phrase, such as where a
+/// key came from, that `plain` gives as the values the phrase is made of, one per line.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Shown {
+    Both,
+    Text,
+    Plain,
+}
+
+impl Field {
+    fn text_only(self) -> Field {
+        Field {
+            shown: Shown::Text,
+            ..self
+        }
+    }
+
+    fn plain_only(self) -> Field {
+        Field {
+            shown: Shown::Plain,
+            ..self
+        }
+    }
 }
 
 struct Column {
@@ -201,6 +231,7 @@ fn field(name: &str, label: &'static str, value: impl Into<String>) -> Field {
         label,
         value: value.into(),
         prose: false,
+        shown: Shown::Both,
     }
 }
 
@@ -318,6 +349,20 @@ fn sections(envelope: &Envelope, verbosity: u8) -> Vec<Section> {
                 named_by_first: true,
             },
         });
+        // Under the table: what each check is, and what a result does not establish
+        // without it. `plain` names the checks, which its readers look up there.
+        sections.push(Section {
+            name: String::new(),
+            title: None,
+            body: Body::Fields(vec![
+                field(
+                    "not_evaluated",
+                    "Described in",
+                    r#"docs/findings.md, section "Checks not evaluated""#,
+                )
+                .text_only(),
+            ]),
+        });
     }
     // Always empty until presentations (DEVELOPMENT-PLAN.md, milestone 4); counted
     // here so that nothing is dropped silently before then.
@@ -406,23 +451,35 @@ fn summary(envelope: &Envelope, full: bool) -> Vec<Field> {
                 credential.types.join(", "),
             ));
         }
+        // Named for the credential: a proof has a validity of its own.
         if let Some(validity) = credential.validity {
-            fields.push(field("credential.validity", "Validity", validity));
+            let period = period(
+                validity,
+                credential.valid_from.as_deref(),
+                credential.valid_until.as_deref(),
+            );
+            fields.push(field("credential.validity", "Credential validity", period).text_only());
+            fields.push(field("credential.validity", "Validity", validity).plain_only());
         }
-        if full {
-            if let Some(from) = &credential.valid_from {
-                fields.push(field("credential.valid_from", "Valid from", from.clone()));
-            }
-            if let Some(until) = &credential.valid_until {
-                fields.push(field(
-                    "credential.valid_until",
-                    "Valid until",
-                    until.clone(),
-                ));
-            }
+        if let Some(from) = &credential.valid_from {
+            fields.push(field("credential.valid_from", "Valid from", from.clone()).plain_only());
+        }
+        if let Some(until) = &credential.valid_until {
+            fields.push(field("credential.valid_until", "Valid until", until.clone()).plain_only());
         }
     }
     fields
+}
+
+/// A validity and the bounds it was judged by, such as `current, 2026-01-01T00:00:00Z
+/// to 2031-01-01T00:00:00Z`.
+fn period(validity: &str, from: Option<&str>, until: Option<&str>) -> String {
+    match (from, until) {
+        (Some(from), Some(until)) => format!("{validity}, {from} to {until}"),
+        (Some(from), None) => format!("{validity}, from {from}"),
+        (None, Some(until)) => format!("{validity}, until {until}"),
+        (None, None) => validity.to_owned(),
+    }
 }
 
 /// Level 1 leaves out parse, whose failure the other phases' `blocked_by` reports,
@@ -515,67 +572,106 @@ fn proof_section(index: usize, proof: &ProofView, full: bool) -> Section {
         ),
         field("outcome", "Outcome", proof.outcome),
     ];
+    // The signature's own times, beside the outcome: a signature can verify and have
+    // expired.
+    if let Some(validity) = proof.validity {
+        fields.push(field("validity", "Validity", validity));
+    }
     let provenance = &proof.key_provenance;
     if let Some(source) = provenance.source {
-        fields.push(field("key_provenance.source", "Key source", source));
+        let phrase = key_source(source, provenance.method);
+        fields.push(field("key_provenance", "Deciding proof key", phrase).text_only());
+        fields.push(field("key_provenance.source", "Key source", source).plain_only());
     }
     if let Some(method) = provenance.method {
-        fields.push(field("key_provenance.method", "Method", method));
+        let method = field("key_provenance.method", "Method", method);
+        // `text` says it in the key's phrase, when there is one.
+        fields.push(if provenance.source.is_some() {
+            method.plain_only()
+        } else {
+            method
+        });
     }
-    if full {
-        if let Some(validity) = proof.validity {
-            fields.push(field("validity", "Validity", validity));
-        }
-        if let Some(thumbprint) = &provenance.thumbprint {
-            fields.push(field(
-                "key_provenance.thumbprint",
-                "Thumbprint",
-                thumbprint.clone(),
-            ));
-        }
-        if let Some(jwk) = &provenance.jwk {
-            fields.push(field("key_provenance.jwk", "Key JWK", jwk.to_string()));
-        }
-    }
-    // The key the credential carries, and whether the signature verifies under it,
-    // at every level: without them a refused key reads as if nothing was tried.
-    if let Some(key) = &provenance.credential_key {
-        let carried = "key_provenance.credential_key";
+    // Which key, at every level: the source alone does not name it.
+    if let Some(thumbprint) = &provenance.thumbprint {
         fields.push(field(
-            &format!("{carried}.location"),
-            "Carried key",
-            key.location.clone(),
+            "key_provenance.thumbprint",
+            "Thumbprint",
+            thumbprint.clone(),
         ));
+    }
+    if full && let Some(jwk) = &provenance.jwk {
+        fields.push(field("key_provenance.jwk", "Key JWK", jwk.to_string()));
+    }
+    // The embedded key, whether it is the issuer key and its proof's result, at every
+    // level: without them a refused key reads as if nothing was tried.
+    if let Some(key) = &provenance.embedded_key {
+        let embedded = "key_provenance.embedded_key";
+        fields.push(field(embedded, "Embedded key", embedded_key(key)).text_only());
+        fields.push(
+            field(
+                &format!("{embedded}.location"),
+                "Embedded key",
+                key.location.clone(),
+            )
+            .plain_only(),
+        );
         if full {
             fields.push(field(
-                &format!("{carried}.thumbprint"),
-                "Carried thumbprint",
+                &format!("{embedded}.thumbprint"),
+                "Embedded key thumbprint",
                 key.thumbprint.clone(),
             ));
             fields.push(field(
-                &format!("{carried}.jwk"),
-                "Carried key JWK",
+                &format!("{embedded}.jwk"),
+                "Embedded key JWK",
                 key.jwk.to_string(),
             ));
         }
-        fields.push(field(
-            &format!("{carried}.matched"),
-            "Matched",
-            key.matched.to_string(),
-        ));
-        if let Some(verifies) = key.verifies_signature {
-            fields.push(field(
-                &format!("{carried}.verifies_signature"),
-                "Verifies signature",
-                verifies.to_string(),
-            ));
+        if let Some(same) = key.same_as_issuer_key {
+            fields.push(
+                field(
+                    &format!("{embedded}.same_as_issuer_key"),
+                    "Same as issuer key",
+                    same.to_string(),
+                )
+                .plain_only(),
+            );
         }
+        fields.push(field(&format!("{embedded}.proof"), "Proof", key.proof).plain_only());
     }
     Section {
         name,
         title: Some("Proof"),
         body: Body::Fields(fields),
     }
+}
+
+/// Which kind of key the deciding proof key is, in ARCHITECTURE §8's terms, such as
+/// `issuer key, from did:key`.
+fn key_source(source: &str, method: Option<&str>) -> String {
+    let kind = match source {
+        "issuer_identifier" => "issuer key",
+        "caller_supplied" => "caller-supplied key",
+        "credential_embedded" => "embedded key",
+        other => other,
+    };
+    match method {
+        Some(method) => format!("{kind}, from {method}"),
+        None => kind.to_owned(),
+    }
+}
+
+/// The embedded key in a phrase: where it is, whether it is the issuer key, and its
+/// proof's result, such as `header.jwk: a different key; proof correct`.
+fn embedded_key(key: &EmbeddedKeyView) -> String {
+    let comparison = match key.same_as_issuer_key {
+        Some(true) => "the same key",
+        Some(false) => "a different key",
+        None => "no issuer key to compare with",
+    };
+    let proof = key.proof.replace('_', " ");
+    format!("{}: {comparison}; proof {proof}", key.location)
 }
 
 /// Values: the claims, the metadata or the header. The Visibility column says

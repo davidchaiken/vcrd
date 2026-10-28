@@ -18,3 +18,5 @@ Not evaluated
  Check                | Reason
 ----------------------+-----------------
  issuer_accreditation | not_implemented
+
+ Described in   docs/findings.md, section "Checks not evaluated"

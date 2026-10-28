@@ -199,6 +199,8 @@ pub struct ProofResult {
     /// The algorithm the input declares, which is checked and never obeyed
     /// (ARCHITECTURE §8).
     pub algorithm: Option<String>,
+    /// The proof's result with the deciding proof key (ARCHITECTURE §8), the key
+    /// `key_provenance` names; not attempted when there is none.
     pub outcome: ProofOutcome,
     pub key_provenance: KeyProvenance,
     /// Where the clock falls relative to the proof's own times, such as a JWT's `nbf`
@@ -207,20 +209,23 @@ pub struct ProofResult {
     pub validity: Validity,
 }
 
-/// Not `#[non_exhaustive]`, for the reason given on [`FormatDetail`].
-#[derive(Clone, Debug)]
+/// A proof's result with one proof key (ARCHITECTURE §8): correct when the suite's
+/// cryptographic check holds for that key, incorrect when it does not, and not attempted
+/// when the check was not made, with findings that say why. Not `#[non_exhaustive]`,
+/// for the reason given on [`FormatDetail`].
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProofOutcome {
     /// `disclosed` exists so that selective disclosure is not designed out
     /// (ARCHITECTURE §3).
-    Verified {
+    Correct {
         disclosed: Option<Disclosure>,
     },
-    Failed,
+    Incorrect,
     NotAttempted,
 }
 
 /// Which claims a selective-disclosure proof revealed.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Disclosure {
     pub disclosed: Vec<String>,
     pub withheld: usize,

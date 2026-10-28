@@ -11,12 +11,15 @@ review runs in rounds, one or two standards at a time, and this record grows wit
 | 3 | [VC-JOSE-COSE], the Recommendation of 2026-10-13, which is later than the text milestone 1 was built from (read 2026-09-19) | below; gaps 11–14 fixed |
 | 4 | [VCDM 2.0] (the Verifiable Credentials Data Model) | below; gaps 15–17 and 19 fixed, gap 18 recorded as [ARCHITECTURE] §10 [Q7] |
 | 5 | the terminology check ([REQUIREMENTS] §15); slices 3–5's red-then-green records | below |
+| 6 | level 1 of `text` and `plain`, which [DEVELOPMENT-PLAN.md], milestone 1, left to revisit | below |
+| 7 | keys and proofs: the terms, the rules of [REQUIREMENTS] §10 and [ARCHITECTURE] §8, and how a result reports them | below |
 
 Each round also completes the entries of [docs/findings.md](../findings.md) whose
 standard it reads.
 
 **Where checked.** Branch `milestone-1`: round 1 from `94ff6d0`, round 2 from `46a2ca7`,
-round 3 from `30d1f91`, round 4 from `dda3a15`.
+round 3 from `30d1f91`, round 4 from `dda3a15`, round 6 from `fc34d1d`, round 7 from
+`fc34d1d` with round 6's changes.
 Toolchain 1.99.1 (clippy 0.1.99). Locally on macOS 27.0.1, arm64. Line numbers are those
 after each round's changes, except in [Gaps found](#gaps-found), which describes the
 commit the round started from.
@@ -27,7 +30,8 @@ rfc-editor.org, as plain text; [did:key] v0.9, a W3C Credentials Community Group
 whose page shows no status, date or dated copy; and the [multicodec table]. Fetched on
 2026-10-23 from w3.org: [VC-JOSE-COSE], whose status line reads "W3C Recommendation 13
 October 2026", §1.1 to §5.4; and [VCDM 2.0], whose status line reads "W3C
-Recommendation, 15 May 2025", §1.3, §2, §4.3–4.12, §6.1, §7.1, §7.2 and §11.1. They came
+Recommendation, 15 May 2025", §1.3, §2, §4.3–4.12, §6.1, §7.1, §7.2 and §11.1. Fetched on
+2026-10-26 from rfc-editor.org, for round 7: [RFC 8725] §3.8. They came
 through a fetch tool's extraction, not a direct reading. Each row abridges one sentence,
 or one procedural step, and keeps its keyword. For [RFC 8032], round 2 also read the
 source of the crates vcrd verifies with, `ed25519-dalek` 3.0.0 and `curve25519-dalek`
@@ -269,6 +273,49 @@ closed it.
   `LeafClass::Claim => true`, and passed once it was restored. The exit-code test would
   have failed on the draft, in which `--verbosity 0 --unsafe` exited 1.
 
+## Level 1 of `text` and `plain`
+
+[DEVELOPMENT-PLAN.md], milestone 1, left open how level 1 presents `not_evaluated`, key
+provenance, and the credential's types and validity. Read against the level-1 output of
+each case in `vcrd-cli/tests/expected/`:
+
+| Found | Change |
+|---|---|
+| `not_evaluated` named each check by its identifier alone, with no pointer to what the identifier means. | Below the table, `text` names the document and section that describe the checks: `Described in   docs/findings.md, section "Checks not evaluated"`. That section, new, describes each check and reason, and what a result does not establish without the check. `plain` keeps the identifiers alone. The section stays last, after the findings. Two drafts were reverted: one moved the section after the phases, since it qualifies the status; the other gave each check a phrase, in a Meaning column, in place of the reference. |
+| Four names no result produces: the check `replay_binding`, and the reasons `requires_network`, `out_of_scope` and `phase_not_reached` (`grep -rn "NotEvaluatedReason::\|Check::" vcrd-core/src`). | Kept, since [REQUIREMENTS] §15's *Not evaluated* names all five reasons. docs/findings.md says each is not produced yet, and what would produce it. |
+| The Proof section said how the key was found, not which key: the thumbprint came at level 2. | The thumbprint at level 1. `text` gives the source and method as one phrase, such as `derived from the issuer identifier, by did:key`. |
+| A carried key's `Matched false` beside `Verifies signature true` read as a pass, as for `embedded-jwk-only.jwt`, whose outcome is `not_attempted`. `matched` says whether it is the key used (`vcrd-core/src/keys.rs:204-205`), which is `false` when no key was used. | In `text`, one sentence: `header.jwk: not the key used. The signature verifies under it, which shows only that the signer holds its private key.` `plain` keeps the values. |
+| For `exp-past.jwt`, the summary's `Validity current` beside `verify.proof_expired`. The summary's is the credential's ([VCDM 2.0] §4.9); the proof's own, from the JWT's `exp` and `nbf` ([RFC 7519] §4.1.4, §4.1.5), came at level 2. Level 1 also left out the bounds. | The summary's is labeled Credential validity, with its bounds; the proof's Validity comes at level 1. `plain` adds `credential.valid_from`, `credential.valid_until` and `proofs[N].validity` to level 1. |
+| The types. | Unchanged. `context_resolution` is listed for every VC-JOSE-COSE credential, and its entry in docs/findings.md says the names are not resolved. |
+
+Decided 2026-10-24, and recorded in [DEVELOPMENT-PLAN.md], milestone 1. Checks R28–R32
+below failed first. After the change, `vcrd-cli/tests/output.rs`
+`output_matches_the_expected_files` reported `example-verify-text-1 differs`; the
+expected files were regenerated, and their differences are the changes above.
+
+## Keys and proofs
+
+Round 6's sentence for a carried key raised what a result says about its keys. Read
+against the output of `fixtures/embedded-jwk.jwt` and `embedded-jwk-only.jwt`,
+[REQUIREMENTS] §10, [ARCHITECTURE] §8, [RFC 7515] §4.1.3 and [RFC 8725] §3.8:
+
+| Found | Change |
+|---|---|
+| "The key used", "carried key" and `matched` named nothing defined. `matched: false` meant both "a different key" and "no issuer key to compare with" (`vcrd-core/src/keys.rs:204-205`), and nothing named the key whose proof decides the outcome. | The terms of [ARCHITECTURE] §8, "Keys and proofs": embedded key, issuer key, caller-supplied key, proof key, deciding proof key and refused; a proof's result is correct, incorrect or not attempted. [REQUIREMENTS] §15 defines each. `credential_key` is `embedded_key`, with `same_as_issuer_key`, absent when there is no issuer key, and `proof`. |
+| [ARCHITECTURE] §8 called `matched: false` with `verifies_signature: true` specific evidence of key substitution, but `embedded-jwk-only.jwt`, with no issuer key, has the same pair. | Key substitution is its own finding, `verify.embedded_key_proof_correct`: the embedded proof correct and the deciding proof not. `verify.credential_key_mismatch` is `verify.embedded_key_mismatch`. 78 codes. |
+| [REQUIREMENTS] §10 put a caller-supplied key above the issuer key without condition, so a credential naming a `did:key` issuer could succeed under another key the caller supplied. [RFC 8725] §3.8 has an application reject a JWT whose keys do not belong to its issuer, and [ARCHITECTURE] §8 says a credential "cannot use a different key while naming this issuer". | A caller-supplied key and an issuer key must be the same key, whatever the issuer key's source, unless the caller opts in to an override. [ARCHITECTURE] §8's key and proof table gives every combination, 37 rows, written with the maintainer. Milestone 2 implements caller-supplied keys. |
+| The outcome values `verified` and `failed` read as the phase `verify` and as a failing exit code. | `correct`, `incorrect` and `not_attempted`, in `ProofOutcome` and in the result. |
+| Of the table's ten rows without a caller-supplied key, five had a fixture. | Five fixtures: `embedded-jwk-same.jwt`, `embedded-jwk-same-tampered.jwt`, `embedded-jwk-issuer-signed.jwt`, `embedded-jwk-tampered.jwt` and `embedded-jwk-only-tampered.jwt`. `vcrd-cli/tests/key_and_proof_table.rs` reads the table and checks vcrd against the ten. |
+| An embedded key the same as the issuer key was proved a second time. | Its proof is the deciding proof's: the same key gives the same result. |
+
+In `text`, level 1 says `Deciding proof key   issuer key, from did:key` and, for example,
+`Embedded key   header.jwk: a different key; proof correct`, in place of round 6's
+sentence. Decided 2026-10-27, and recorded in [DEVELOPMENT-PLAN.md], milestones 1 and 2.
+Milestone 2 takes the output of every key with its proof, the override opt-in, what a
+caller-supplied key may do when vcrd cannot obtain the issuer key, the case of two
+different keys that both give correct proofs, and a test of all 37 rows. Checks R33–R41
+below failed first; the expected files were then regenerated.
+
 ## The checks shown to fail
 
 [REQUIREMENTS] §11 holds that a check which has never failed has not shown that it detects
@@ -306,6 +353,22 @@ and then passed.
 | R25 | `vcrd-core/tests/inspect.rs` `checks_names_and_descriptions` | Before gap 17's fix | `left: []`, `right: [("name", WrongType), ("description[0]", ValueMissing), ("description[1]", OtherMember { name: "@lang" })]` |
 | R26 | `vcrd-core/tests/inspect.rs` `lists_status_and_schema_as_not_evaluated`, its expectation changed to gap 19's | Before gap 19's fix | `left: [(IssuerAccreditation, OutOfScope), …]`, `right: [(IssuerAccreditation, NotImplemented), …]` |
 | R27 | `vcrd-core/tests/finding_reference.rs` | Gaps 15–17's codes added before their entries | `add to docs/findings.md: ["inspect.id_missing", "inspect.language_value_invalid", "parse.data_integrity_unsupported", "parse.not_secured"]; remove from it: []` |
+
+| R28 | `vcrd-cli/tests/output.rs` `level_1_lists_the_checks_not_evaluated_and_where_they_are_described` | Three times, its expectation changed with each draft: before round 6's change, expecting the section right after Phases; then, expecting it last, against the draft that placed it after Phases; then, expecting the reference, against the draft with the Meaning column | The section after Phases was Proof; then the last section was Findings; then `left: Some("context_resolution \| not_implemented \| what the @context documents define the terms to mean")`, `right: Some("Described in docs/findings.md, section \"Checks not evaluated\"")` |
+| R29 | `vcrd-cli/tests/output.rs` `level_1_names_the_key_and_both_validity_periods` | Before round 6's change | `"Credential validity current, 2026-01-01T00:00:00Z to 2031-01-01T00:00:00Z" not in …` |
+| R30 | `vcrd-cli/tests/output.rs` `level_1_describes_a_carried_key_in_a_sentence` | Before round 6's change | Failed at its first check: no Carried key sentence |
+| R31 | `vcrd-cli/tests/not_evaluated_reference.rs` | No entries in docs/findings.md yet | `add to docs/findings.md, as a check: ["audience", "context_resolution", "holder_binding", "issuer_accreditation", "replay_binding", "revocation_status", "schema_conformance"]; remove from it: []` |
+| R32 | The same | The anchor `not_evaluated.reason.out_of_scope` renamed `not_evaluated.reason.out_of_scop` | `add to docs/findings.md, as a reason: ["out_of_scope"]; remove from it: ["out_of_scop"]` |
+
+| R33 | `vcrd-cli/tests/key_and_proof_table.rs` `vcrd_agrees_with_every_row_milestone_1_can_produce`, new | Before round 7's change | Failed at the row `010 — — Y`, the curated example: `left: String("verified")`, `right: "correct"` |
+| R34 | The same | After the change, the row `110 N N Y` given S? N in [ARCHITECTURE] §8 | `row 110 N N Y (…), fixtures/embedded-jwk-issuer-signed.jwt`, at the exit-code check: `left: true`, `right: false`. With the table restored, it passed |
+| R35 | `vcrd-cli/tests/verify.rs` `key_substitution_is_reported` | Before the change | Failed in its `finding` helper (`verify.rs:32`), at the first new code, `verify.embedded_key_mismatch` |
+| R36 | `vcrd-cli/tests/verify.rs` `a_key_the_credential_asserts_alone_is_refused` | Before the change | `left: Null`, `right: "correct"`: no `embedded_key.proof` |
+| R37 | Eight tests of a proof's outcome: in `vcrd-cli/tests/verify.rs`, `a_claim_changed_after_signing_fails_the_signature`, `a_small_order_r_is_named`, `the_fully_specified_name_ed25519_verifies`, `the_deprecated_name_eddsa_is_reported_for_information`, `an_expired_signature_fails_verify` and `a_critical_extension_vcrd_does_not_implement_fails_verify`; `vcrd-cli/tests/example.rs` `verify_exits_0_with_one_json_document`; `vcrd-cli/tests/inspect.rs` `kid_missing_exits_3_and_verify_passes` | Before the change | `left: String("verified")`, `right: "correct"`, or `left: String("failed")`, `right: "incorrect"` |
+| R38 | `vcrd-cli/tests/output.rs` `level_1_names_the_key_and_both_validity_periods` | Before the change | Failed at its phrase check (`output.rs:286`), whose new phrase is `Deciding proof key issuer key, from did:key` |
+| R39 | `vcrd-cli/tests/output.rs` `level_1_describes_the_embedded_key_in_a_phrase`, which replaces R30's test | Before the change | Failed at its first check (`output.rs:333`): no `Embedded key header.jwk: no issuer key to compare with; proof correct` |
+| R40 | `vcrd-core/tests/finding_reference.rs` | The two codes added to `FindingDetail::code` before their entries | Failed at its completeness check (`finding_reference.rs:43`) |
+| R41 | `vcrd-cli/tests/debugging.rs` | The five fixtures generated before `.vscode/launch.json` listed them | Failed at its check of the inputs offered (`debugging.rs:40`) |
 
 The tests of gaps 7 to 17 were written against the new variants, added first with no
 behavior, so each failed on what vcrd did rather than for want of a type.
@@ -552,6 +615,7 @@ json`: the JSON credentials as written, the others built as in round 3.
 [RFC 7519]: https://www.rfc-editor.org/rfc/rfc7519
 [RFC 8032]: https://www.rfc-editor.org/rfc/rfc8032
 [RFC 8037]: https://www.rfc-editor.org/rfc/rfc8037
+[RFC 8725]: https://www.rfc-editor.org/rfc/rfc8725
 [RFC 9864]: https://www.rfc-editor.org/rfc/rfc9864
 [VC-JOSE-COSE]: https://www.w3.org/TR/2026/REC-vc-jose-cose-20261013/
 [VCDM 2.0]: https://www.w3.org/TR/2025/REC-vc-data-model-2.0-20250515/

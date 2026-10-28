@@ -53,7 +53,7 @@ fn verifies_when_current() {
     let [proof] = verified.proofs.as_slice() else {
         panic!("one proof")
     };
-    assert!(matches!(proof.outcome, ProofOutcome::Verified { .. }));
+    assert!(matches!(proof.outcome, ProofOutcome::Correct { .. }));
     assert_eq!(proof.algorithm.as_deref(), Some("EdDSA"));
     assert_eq!(
         proof.key_provenance.source,

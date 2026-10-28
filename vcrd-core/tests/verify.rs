@@ -132,7 +132,7 @@ fn a_not_before_after_the_clock_fails_verify() {
     let (proof, findings) = proof_of(&report);
     assert_eq!(findings, [NOT_YET_VALID]);
     assert_eq!(proof.validity, Validity::NotYetValid);
-    assert!(matches!(proof.outcome, ProofOutcome::Verified { .. }));
+    assert!(matches!(proof.outcome, ProofOutcome::Correct { .. }));
 
     let report = verified(&signed(|_, p| p["nbf"] = json!(NOW)));
     let (proof, findings) = proof_of(&report);
@@ -243,17 +243,19 @@ fn a_time_that_is_not_a_number_leaves_the_proof_validity_unknown() {
     assert_eq!(proof.validity, Validity::Unknown);
 }
 
-/// ARCHITECTURE §8: an embedded key equal to the `did:key` is `matched: true`.
+/// ARCHITECTURE §8: an embedded key equal to the `did:key` is the same key as the
+/// issuer key, and its proof the deciding proof's.
 #[test]
-fn an_embedded_key_equal_to_the_issuers_matches_and_verifies() {
+fn an_embedded_key_equal_to_the_issuers_is_the_same_key_and_correct() {
     let report = verified(&signed(|h, _| h["jwk"] = issuer_jwk()));
     let (proof, findings) = proof_of(&report);
     assert_eq!(findings, []);
-    let key = proof.key_provenance.credential_key.as_ref().unwrap();
+    let key = proof.key_provenance.embedded_key.as_ref().unwrap();
     assert_eq!(
-        (key.location.as_str(), key.matched, key.verifies_signature),
-        ("header.jwk", true, Some(true))
+        (key.location.as_str(), key.same_as_issuer_key),
+        ("header.jwk", Some(true))
     );
+    assert!(matches!(key.proof, ProofOutcome::Correct { .. }));
     assert_eq!(
         Some(&key.thumbprint),
         proof.key_provenance.thumbprint.as_ref()
@@ -282,14 +284,8 @@ fn a_jwk_with_private_members_is_an_inspect_error() {
         matches!(detail, vcrd_core::FindingDetail::JwkPrivateKey { members } if members == &["d"]),
         "{detail:?}"
     );
-    assert!(
-        proof
-            .key_provenance
-            .credential_key
-            .as_ref()
-            .unwrap()
-            .matched
-    );
+    let key = proof.key_provenance.embedded_key.as_ref().unwrap();
+    assert_eq!(key.same_as_issuer_key, Some(true));
 }
 
 /// A `jwk` vcrd cannot read is reported, and verify goes ahead with the `did:key`.
@@ -301,8 +297,8 @@ fn a_malformed_jwk_does_not_stop_verify() {
         findings,
         [("inspect.jwk_invalid", Attribution::Input, Severity::Error)]
     );
-    assert!(matches!(proof.outcome, ProofOutcome::Verified { .. }));
-    assert_eq!(proof.key_provenance.credential_key, None);
+    assert!(matches!(proof.outcome, ProofOutcome::Correct { .. }));
+    assert_eq!(proof.key_provenance.embedded_key, None);
 }
 
 /// A key type vcrd does not know may be one a later standard defines, so it is
@@ -341,5 +337,5 @@ fn a_registered_name_in_crit_is_not_an_extension() {
         findings,
         [("inspect.crit_invalid", Attribution::Input, Severity::Error)]
     );
-    assert!(matches!(proof.outcome, ProofOutcome::Verified { .. }));
+    assert!(matches!(proof.outcome, ProofOutcome::Correct { .. }));
 }

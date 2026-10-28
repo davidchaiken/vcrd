@@ -412,13 +412,21 @@ pub enum FindingDetail {
     /// uses only on the caller's opt-in (REQUIREMENTS §10). Attributed to caller
     /// policy.
     EmbeddedKeyRefused { location: &'static str },
-    /// The key the credential carries about itself is not the key derived from its
-    /// issuer, though RFC 7515 §4.1.3 makes `jwk` the key that signed. A warning:
-    /// it never changes which key is used (ARCHITECTURE §8).
-    CredentialKeyMismatch {
-        /// The key the credential carries.
-        carried_key: CarriedKeyRef,
-        /// The key resolution established, from the issuer.
+    /// The embedded key is not the issuer key, though RFC 7515 §4.1.3 makes `jwk` the
+    /// key that signed. A warning: it never changes the deciding proof key
+    /// (ARCHITECTURE §8).
+    EmbeddedKeyMismatch {
+        embedded_key: EmbeddedKeyRef,
+        /// The issuer key.
+        key: KeyRef,
+    },
+    /// The proof with the embedded key is correct and the deciding proof is not: the
+    /// signer holds the embedded key's private key, which is not the deciding proof
+    /// key's (ARCHITECTURE §8). A warning: the deciding proof's findings already fail
+    /// verify.
+    EmbeddedKeyProofCorrect {
+        embedded_key: EmbeddedKeyRef,
+        /// The deciding proof key.
         key: KeyRef,
     },
 }
@@ -511,7 +519,8 @@ impl FindingDetail {
             FindingDetail::DidKeyNotForSigning { .. } => "verify.did_key_not_for_signing",
             FindingDetail::WeakKey { .. } => "verify.weak_key",
             FindingDetail::EmbeddedKeyRefused { .. } => "verify.embedded_key_refused",
-            FindingDetail::CredentialKeyMismatch { .. } => "verify.credential_key_mismatch",
+            FindingDetail::EmbeddedKeyMismatch { .. } => "verify.embedded_key_mismatch",
+            FindingDetail::EmbeddedKeyProofCorrect { .. } => "verify.embedded_key_proof_correct",
         }
     }
 }
@@ -581,9 +590,9 @@ pub struct KeyRef {
     pub thumbprint: String,
 }
 
-/// A key the credential carries about itself, as a finding names it.
+/// The embedded key, as a finding names it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CarriedKeyRef {
+pub struct EmbeddedKeyRef {
     /// Where it was, e.g. `header.jwk`.
     pub location: &'static str,
     pub thumbprint: String,

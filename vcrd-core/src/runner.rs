@@ -3,9 +3,11 @@
 
 use crate::context::Context;
 use crate::document::{DeclaredAlgorithm, ProofDescriptor, ProofMaterial, ProofTime, ProofTimes};
-use crate::finding::{Attribution, Finding, FindingDetail, KeySourceKind, Severity};
+use crate::finding::{
+    Attribution, EmbeddedKeyRef, Finding, FindingDetail, KeyRef, KeySourceKind, Severity,
+};
 use crate::json::{self, Json};
-use crate::keys::{self, PublicKey};
+use crate::keys::{self, PublicKey, Resolution};
 use crate::registry::{CredentialFormat, Detection, ProofInput, Registry};
 use crate::report::{
     BlockReason, Blocked, Check, InputSummary, InspectOutput, Missing, NotEvaluated,
@@ -215,19 +217,12 @@ fn verify_proofs(
                 let input = proof_input(descriptor, resolution.key.as_ref());
                 let (outcome, suite_findings) = suite.verify(&input, ctx);
                 findings.extend(suite_findings);
-                // Additional information, under the same rules: it never changes the
-                // verdict or the exit code (ARCHITECTURE §8).
-                if let (Some(credential_key), Some(key)) = (
-                    resolution.provenance.credential_key.as_mut(),
-                    resolution.credential_key.as_ref(),
-                ) {
-                    let (outcome, _) = suite.verify(&proof_input(descriptor, Some(key)), ctx);
-                    credential_key.verifies_signature = match outcome {
-                        ProofOutcome::Verified { .. } => Some(true),
-                        ProofOutcome::Failed => Some(false),
-                        ProofOutcome::NotAttempted => None,
-                    };
-                }
+                findings.extend(embedded_proof(
+                    descriptor,
+                    &mut resolution,
+                    &outcome,
+                    |key| suite.verify(&proof_input(descriptor, Some(key)), ctx).0,
+                ));
                 outcome
             }
         };
@@ -245,6 +240,47 @@ fn verify_proofs(
         });
     }
     PhaseOutcome::from_findings(VerifyOutput { proofs }, findings)
+}
+
+/// The proof with the embedded key as the proof key, for information: it decides the
+/// outcome only as ARCHITECTURE §8's rules say, and the deciding proof's findings are the
+/// ones reported. The same key gives the same result, so a key the same as the issuer
+/// key is not proved again. An embedded proof that is correct while the deciding proof
+/// is not is its own finding.
+fn embedded_proof(
+    descriptor: &ProofDescriptor,
+    resolution: &mut Resolution,
+    outcome: &ProofOutcome,
+    prove: impl FnOnce(&PublicKey) -> ProofOutcome,
+) -> Option<Finding> {
+    let provenance = &mut resolution.provenance;
+    let embedded = provenance.embedded_key.as_mut()?;
+    embedded.proof = match (embedded.same_as_issuer_key, &resolution.embedded_key) {
+        (Some(true), _) => outcome.clone(),
+        (_, Some(key)) => prove(key),
+        (_, None) => ProofOutcome::NotAttempted,
+    };
+    let (source, thumbprint) = provenance.source.zip(provenance.thumbprint.clone())?;
+    let correct = |o: &ProofOutcome| matches!(o, ProofOutcome::Correct { .. });
+    if !correct(&embedded.proof) || correct(outcome) {
+        return None;
+    }
+    Some(Finding::new(
+        Phase::Verify,
+        Attribution::Input,
+        Severity::Warning,
+        FindingDetail::EmbeddedKeyProofCorrect {
+            embedded_key: EmbeddedKeyRef {
+                location: descriptor.key_hints.embedded.as_ref()?.location,
+                thumbprint: embedded.thumbprint.clone(),
+            },
+            key: KeyRef {
+                source,
+                method: provenance.method,
+                thumbprint,
+            },
+        },
+    ))
 }
 
 fn proof_input<'a>(descriptor: &'a ProofDescriptor, key: Option<&'a PublicKey>) -> ProofInput<'a> {
