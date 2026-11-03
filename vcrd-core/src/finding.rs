@@ -98,6 +98,13 @@ pub enum FindingDetail {
     /// A JSON object that is not a JWS in JSON serialization: it lacks `payload`, or
     /// both `signature` and `signatures`.
     JsonNotJws,
+    /// A JSON credential or presentation, an object with `@context` and `type`, that
+    /// carries an embedded `proof`, as Data Integrity secures one (VCDM 2.0 §4.12). No
+    /// format reads it until milestone 5 (DEVELOPMENT-PLAN.md). Attributed to vcrd.
+    DataIntegrityUnsupported,
+    /// A JSON credential or presentation with no `proof`: nothing secures it, which
+    /// VCDM 2.0 §1.3 requires of a conforming document.
+    NotSecured,
     /// A segment is not strict base64url (RFC 7515 §2, §5.2); `problem` says how.
     Base64urlInvalid {
         segment: JwsSegment,
@@ -124,6 +131,17 @@ pub enum FindingDetail {
     },
     /// `crit` (Critical) breaks one of RFC 7515 §4.1.11's rules for its value.
     CritInvalid { problem: CritProblem },
+    /// A Header Parameter RFC 7515 §4.1 defines has a value of the wrong JSON type, such
+    /// as a `kid` that is a number. It is reported as this, not as absent. `jwk` and
+    /// `crit` have findings of their own.
+    HeaderMemberType {
+        member: &'static str,
+        /// `string`, or `array_of_strings` for `x5c`.
+        expected: &'static str,
+        /// The value's JSON type: `null`, `bool`, `number`, `string`, `array` or
+        /// `object`.
+        found: &'static str,
+    },
     /// The header's `jwk` is not a public key in a form RFC 7517, RFC 7518 §6 and
     /// RFC 8037 §2 define; `problem` says how. It does not block verify, which takes
     /// the issuer's key from elsewhere.
@@ -179,6 +197,17 @@ pub enum FindingDetail {
         path: String,
         violations: Vec<String>,
     },
+    /// An object VCDM 2.0 requires an `id` of has none: a `credentialSchema` (§4.11). An
+    /// `id` that is present and not a URL is [`FindingDetail::UrlInvalid`] instead.
+    IdMissing { path: String },
+    /// A `name` or `description` that is neither a string nor a language value object,
+    /// nor an array of them (VCDM 2.0 §4.6, §11.1). A warning: the properties are
+    /// optional (§1.3), and the Recommendation's own Example 40 gives `name` another
+    /// form.
+    LanguageValueInvalid {
+        path: String,
+        problem: LanguageValueProblem,
+    },
     /// A validity bound is not an XML Schema 1.1 `dateTimeStamp` (VCDM 2.0 §4.9).
     /// `valid_rfc3339` says whether RFC 3339 would accept it, so that such values can
     /// be noticed where they occur (ARCHITECTURE §4).
@@ -196,26 +225,39 @@ pub enum FindingDetail {
     },
 
     // Inspect: VC-JOSE-COSE.
-    /// `typ` (Type) is absent or not `vc+jwt`, which VC-JOSE-COSE §3.1.1 says it
-    /// SHOULD be. A warning.
-    TypUnexpected { found: Option<String> },
-    /// `cty` (Content Type) is present and not `vc`, which VC-JOSE-COSE §3.1.1 says it
-    /// SHOULD be. A warning.
-    CtyUnexpected { found: String },
+    /// `typ` (Type) is absent or not `expected`, which VC-JOSE-COSE says it SHOULD be:
+    /// `vc+jwt` for a credential (§3.1.1), `vp+jwt` for a presentation (§3.1.2). A
+    /// warning.
+    TypUnexpected {
+        found: Option<String>,
+        expected: &'static str,
+    },
+    /// `cty` (Content Type) is present and not `expected`, which VC-JOSE-COSE says it
+    /// SHOULD be: `vc` for a credential (§3.1.1), `vp` for a presentation (§3.1.2). A
+    /// warning.
+    CtyUnexpected {
+        found: String,
+        expected: &'static str,
+    },
     /// The payload follows VCDM 1.1's JWT encoding: the credential inside a `vc` claim,
     /// or a presentation inside `vp`, with no VCDM 2.0 `@context`. vcrd does not read
     /// it yet (ARCHITECTURE §10 [F2]). Attributed to vcrd; it blocks verify, since the
     /// encoding names the issuer in `iss`, which vcrd does not resolve.
     VcdmV1JwtEncoding { claim: &'static str },
+    /// The payload is a verifiable presentation: its `type` has `VerifiablePresentation`
+    /// and not `VerifiableCredential`. vcrd reads presentations from milestone 4
+    /// (DEVELOPMENT-PLAN.md), so it does not check this one as a credential. Attributed
+    /// to vcrd; it blocks verify, since a presentation names no issuer.
+    PresentationUnsupported,
     /// A `vc` or `vp` claim beside a VCDM 2.0 payload, which VC-JOSE-COSE §3.1.3 says
     /// MUST NOT be present.
     JwtClaimForbidden { claim: &'static str },
     /// `iss` (Issuer) does not match `issuer`, or `issuer.id` (VC-JOSE-COSE §4.1.2, a
-    /// MUST). Both are metadata, so both are carried. `iss` is `None` when it is not a
-    /// string.
+    /// MUST). Both are metadata, so both are carried. An `iss` that is not a string is
+    /// [`FindingDetail::JwtClaimType`] instead.
     IssMismatch {
-        location: IssLocation,
-        iss: Option<String>,
+        location: ClaimLocation,
+        iss: String,
         issuer: String,
     },
     /// A JWT claim and the credential property for the same thing are both present
@@ -226,6 +268,19 @@ pub enum FindingDetail {
         claim: &'static str,
         property: &'static str,
     },
+    /// A registered JWT claim whose value has another JSON type than RFC 7519 gives it:
+    /// a string for `iss`, `sub` and `jti` (§4.1.1, §4.1.2, §4.1.7), a string or an array
+    /// of strings for `aud` (§4.1.3). It is not compared with the credential.
+    JwtClaimType {
+        location: ClaimLocation,
+        claim: &'static str,
+        expected: &'static str,
+        found: &'static str,
+    },
+    /// A claim replicated as a header parameter differs from the claim, which RFC 7519
+    /// §5.3 says a recipient SHOULD check and VC-JOSE-COSE §3.1.3 applies to
+    /// credentials. A warning. The values may be claims, so they are not carried.
+    ReplicatedClaimMismatch { claim: String },
     /// No `kid` (Key ID) where VC-JOSE-COSE requires one: the issuer is a DID (§4.1.1),
     /// or `iss` is absent and the issuer is a URL (§4.2).
     KidMissing,
@@ -265,12 +320,23 @@ pub enum FindingDetail {
     SuiteUnavailable { suite: SuiteId },
     /// The JWS header has no `alg` (Algorithm) member (RFC 7515 §4.1.1).
     AlgorithmMissing,
+    /// `alg` is present and not a string, so it names no algorithm (RFC 7515 §4.1.1).
+    /// `found` is its JSON type.
+    AlgorithmInvalid { found: &'static str },
     /// `alg` is `none`, which is always rejected (ARCHITECTURE §8).
     AlgorithmNone,
     /// vcrd does not implement the declared algorithm (REQUIREMENTS §10).
     AlgorithmUnsupported {
         declared: String,
         supported: Vec<&'static str>,
+    },
+    /// The declared algorithm's name is deprecated: new deployments should use its
+    /// replacement (RFC 9864 §4.4). RFC 9864 sets no rule for a verifier, so this is
+    /// information. `replacement` is the name that replaces it for the key used, and
+    /// is absent when no key was resolved.
+    AlgorithmDeprecated {
+        declared: &'static str,
+        replacement: Option<&'static str>,
     },
     /// The signature has the wrong length for its algorithm.
     SignatureLength {
@@ -283,6 +349,10 @@ pub enum FindingDetail {
     /// The R of an Ed25519 signature has small order. A verifier that checks only
     /// [s]B = R + [k]A can accept such a signature; vcrd rejects it (ARCHITECTURE §8).
     SignatureSmallOrder { algorithm: &'static str },
+    /// The S of an Ed25519 signature is not less than the group order L, which RFC 8032
+    /// §5.1.7 makes invalid. Checked by vcrd rather than left to `ed25519-dalek`, which
+    /// accepts it when its `legacy_compatibility` feature is on (ARCHITECTURE §8).
+    SignatureScalarOutOfRange { algorithm: &'static str },
     /// `crit` lists extensions the suite does not implement, so the JWS is invalid
     /// (RFC 7515 §4.1.11). The signature is still checked, and its outcome reported,
     /// for the information. Attributed to vcrd.
@@ -329,6 +399,9 @@ pub enum FindingDetail {
         codec: u64,
         name: Option<&'static str>,
     },
+    /// The `did:key` holds a key-agreement key, which no verifier may use for a
+    /// signature (RFC 8037 §3.2).
+    DidKeyNotForSigning { codec: u64, name: &'static str },
     /// The key cannot bind a signature to a message (REQUIREMENTS §10). `criterion`
     /// says which of the algorithm's weak-key criteria it meets (ARCHITECTURE §8).
     WeakKey {
@@ -339,13 +412,21 @@ pub enum FindingDetail {
     /// uses only on the caller's opt-in (REQUIREMENTS §10). Attributed to caller
     /// policy.
     EmbeddedKeyRefused { location: &'static str },
-    /// The key the credential carries about itself is not the key derived from its
-    /// issuer, though RFC 7515 §4.1.3 makes `jwk` the key that signed. A warning:
-    /// it never changes which key is used (ARCHITECTURE §8).
-    CredentialKeyMismatch {
-        /// The key the credential carries.
-        carried_key: CarriedKeyRef,
-        /// The key resolution established, from the issuer.
+    /// The embedded key is not the issuer key, though RFC 7515 §4.1.3 makes `jwk` the
+    /// key that signed. A warning: it never changes the deciding proof key
+    /// (ARCHITECTURE §8).
+    EmbeddedKeyMismatch {
+        embedded_key: EmbeddedKeyRef,
+        /// The issuer key.
+        key: KeyRef,
+    },
+    /// The proof with the embedded key is correct and the deciding proof is not: the
+    /// signer holds the embedded key's private key, which is not the deciding proof
+    /// key's (ARCHITECTURE §8). A warning: the deciding proof's findings already fail
+    /// verify.
+    EmbeddedKeyProofCorrect {
+        embedded_key: EmbeddedKeyRef,
+        /// The deciding proof key.
         key: KeyRef,
     },
 }
@@ -362,11 +443,14 @@ impl FindingDetail {
             FindingDetail::NotCompactJws { .. } => "parse.not_compact_jws",
             FindingDetail::JwsJsonSerialization { .. } => "parse.jws_json_serialization",
             FindingDetail::JsonNotJws => "parse.json_not_jws",
+            FindingDetail::DataIntegrityUnsupported => "parse.data_integrity_unsupported",
+            FindingDetail::NotSecured => "parse.not_secured",
             FindingDetail::Base64urlInvalid { .. } => "parse.base64url_invalid",
             FindingDetail::JsonInvalid { .. } => "parse.json_invalid",
             FindingDetail::JsonNotObject { .. } => "parse.json_not_object",
             FindingDetail::DuplicateName { .. } => "inspect.duplicate_name",
             FindingDetail::CritInvalid { .. } => "inspect.crit_invalid",
+            FindingDetail::HeaderMemberType { .. } => "inspect.header_member_type",
             FindingDetail::JwkInvalid { .. } => "inspect.jwk_invalid",
             FindingDetail::JwkKtyUnsupported { .. } => "inspect.jwk_kty_unsupported",
             FindingDetail::JwkPrivateKey { .. } => "inspect.jwk_private_key",
@@ -388,6 +472,8 @@ impl FindingDetail {
                 "inspect.credential_subject_no_claims"
             }
             FindingDetail::UrlInvalid { .. } => "inspect.url_invalid",
+            FindingDetail::IdMissing { .. } => "inspect.id_missing",
+            FindingDetail::LanguageValueInvalid { .. } => "inspect.language_value_invalid",
             FindingDetail::UrlNonconforming { .. } => "inspect.url_nonconforming",
             FindingDetail::DateTimeInvalid { .. } => "inspect.date_time_invalid",
             FindingDetail::DateTimeUnrepresentable { .. } => "inspect.date_time_unrepresentable",
@@ -397,9 +483,12 @@ impl FindingDetail {
             FindingDetail::TypUnexpected { .. } => "inspect.typ_unexpected",
             FindingDetail::CtyUnexpected { .. } => "inspect.cty_unexpected",
             FindingDetail::VcdmV1JwtEncoding { .. } => "inspect.vcdm_1_1_jwt_encoding",
+            FindingDetail::PresentationUnsupported => "inspect.presentation_unsupported",
             FindingDetail::JwtClaimForbidden { .. } => "inspect.jwt_claim_forbidden",
             FindingDetail::IssMismatch { .. } => "inspect.iss_mismatch",
             FindingDetail::JwtClaimConflict { .. } => "inspect.jwt_claim_conflict",
+            FindingDetail::JwtClaimType { .. } => "inspect.jwt_claim_type",
+            FindingDetail::ReplicatedClaimMismatch { .. } => "inspect.replicated_claim_mismatch",
             FindingDetail::KidMissing => "inspect.kid_missing",
             FindingDetail::KidNotAbsolute { .. } => "inspect.kid_not_absolute",
             FindingDetail::KidForeign { .. } => "inspect.kid_foreign",
@@ -409,11 +498,16 @@ impl FindingDetail {
             FindingDetail::NoProof => "verify.no_proof",
             FindingDetail::SuiteUnavailable { .. } => "verify.suite_unavailable",
             FindingDetail::AlgorithmMissing => "verify.algorithm_missing",
+            FindingDetail::AlgorithmInvalid { .. } => "verify.algorithm_invalid",
             FindingDetail::AlgorithmNone => "verify.algorithm_none",
             FindingDetail::AlgorithmUnsupported { .. } => "verify.algorithm_unsupported",
+            FindingDetail::AlgorithmDeprecated { .. } => "verify.algorithm_deprecated",
             FindingDetail::SignatureLength { .. } => "verify.signature_length",
             FindingDetail::SignatureInvalid { .. } => "verify.signature_invalid",
             FindingDetail::SignatureSmallOrder { .. } => "verify.signature_small_order",
+            FindingDetail::SignatureScalarOutOfRange { .. } => {
+                "verify.signature_scalar_out_of_range"
+            }
             FindingDetail::CritUnsupported { .. } => "verify.crit_unsupported",
             FindingDetail::ProofExpired { .. } => "verify.proof_expired",
             FindingDetail::ProofNotYetValid { .. } => "verify.proof_not_yet_valid",
@@ -422,9 +516,11 @@ impl FindingDetail {
             FindingDetail::IssuerMethodUnsupported { .. } => "verify.issuer_method_unsupported",
             FindingDetail::DidKeyUndecodable { .. } => "verify.did_key_undecodable",
             FindingDetail::DidKeyCodecUnsupported { .. } => "verify.did_key_codec_unsupported",
+            FindingDetail::DidKeyNotForSigning { .. } => "verify.did_key_not_for_signing",
             FindingDetail::WeakKey { .. } => "verify.weak_key",
             FindingDetail::EmbeddedKeyRefused { .. } => "verify.embedded_key_refused",
-            FindingDetail::CredentialKeyMismatch { .. } => "verify.credential_key_mismatch",
+            FindingDetail::EmbeddedKeyMismatch { .. } => "verify.embedded_key_mismatch",
+            FindingDetail::EmbeddedKeyProofCorrect { .. } => "verify.embedded_key_proof_correct",
         }
     }
 }
@@ -494,9 +590,9 @@ pub struct KeyRef {
     pub thumbprint: String,
 }
 
-/// A key the credential carries about itself, as a finding names it.
+/// The embedded key, as a finding names it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CarriedKeyRef {
+pub struct EmbeddedKeyRef {
     /// Where it was, e.g. `header.jwk`.
     pub location: &'static str,
     pub thumbprint: String,
@@ -543,10 +639,21 @@ pub enum IssuerProblem {
     NotUrl { error: String },
 }
 
-/// Where an `iss` was found. VC-JOSE-COSE §4.1.2 reads it from the JWT claims or the
-/// JOSE header.
+/// Why a value is not a language value object (VCDM 2.0 §11.1).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LanguageValueProblem {
+    /// Neither a string nor an object.
+    WrongType,
+    /// An object without a string `@value`.
+    ValueMissing,
+    /// An object with a member other than `@value`, `@language` and `@direction`.
+    OtherMember { name: String },
+}
+
+/// Where a JWT claim was found: in the claims, or in the JOSE header, where RFC 7519
+/// §5.3 lets a claim be replicated and VC-JOSE-COSE §4.1.2 reads `iss`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IssLocation {
+pub enum ClaimLocation {
     Header,
     Payload,
 }
@@ -573,4 +680,11 @@ pub enum DidKeyProblem {
     KeyLength { expected: usize, found: usize },
     /// The key bytes are not a point on the curve.
     PointInvalid,
+    /// The key bytes encode a point, but not as RFC 8032 §5.1.3 requires: y at or above
+    /// p, or x = 0 with the sign bit set. Another encoding of the same point would give
+    /// another `did:key` and another thumbprint.
+    PointNotCanonical,
+    /// A component precedes the multibase value, as a version would in did:key v0.9's
+    /// Create algorithm, whose syntax has none.
+    VersionPresent,
 }

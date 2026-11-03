@@ -7,11 +7,11 @@ use sha2::{Digest, Sha256};
 
 use crate::document::{EmbeddedKey, KeyHints};
 use crate::finding::{
-    Attribution, CarriedKeyRef, DidKeyProblem, Finding, FindingDetail, JwkProblem, KeyRef,
+    Attribution, DidKeyProblem, EmbeddedKeyRef, Finding, FindingDetail, JwkProblem, KeyRef,
     KeySourceKind, Severity, WeakKeyCriterion,
 };
 use crate::json::Json;
-use crate::report::Phase;
+use crate::report::{Phase, ProofOutcome};
 
 /// A resolved public key.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -140,23 +140,36 @@ impl Jwk {
 fn ed25519_jwk(x: &str) -> Option<PublicKey> {
     let bytes = URL_SAFE_NO_PAD.decode(x).ok()?;
     let bytes: &[u8; 32] = bytes.as_slice().try_into().ok()?;
-    VerifyingKey::from_bytes(bytes).ok().map(PublicKey::Ed25519)
+    ed25519_key(bytes).ok().map(PublicKey::Ed25519)
 }
 
-/// Where the key used came from, and any key the credential offered about itself
-/// (ARCHITECTURE §8). Reported whether verification succeeds or fails.
+/// An Ed25519 public key, decoded as RFC 8032 §5.1.3 decodes one. `curve25519-dalek`
+/// also decodes y at or above p, and x = 0 with the sign bit set, so the point is
+/// encoded again and compared with the bytes.
+fn ed25519_key(bytes: &[u8; 32]) -> Result<VerifyingKey, DidKeyProblem> {
+    let key = VerifyingKey::from_bytes(bytes).map_err(|_| DidKeyProblem::PointInvalid)?;
+    if key.to_edwards().compress().as_bytes() != bytes {
+        return Err(DidKeyProblem::PointNotCanonical);
+    }
+    Ok(key)
+}
+
+/// Where the deciding proof key came from, and the embedded key, if any (ARCHITECTURE
+/// §8). Reported whether verification succeeds or fails.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KeyProvenance {
-    /// Absent when no key was used.
+    /// Present also when the key is refused, as a weak key is, so that the finding's
+    /// key can be told apart; absent when no key could decide the outcome.
     pub source: Option<KeySource>,
     /// How the key was derived from its source, e.g. `did:key`.
     pub method: Option<&'static str>,
-    /// The key used, as an RFC 7638 thumbprint.
+    /// The deciding proof key, as an RFC 7638 thumbprint.
     pub thumbprint: Option<String>,
-    /// The key used, as a JWK: what the thumbprint is of.
+    /// The deciding proof key, as a JWK: what the thumbprint is of.
     pub jwk: Option<PublicJwk>,
-    /// Present whenever the credential offered a key of its own.
-    pub credential_key: Option<CredentialKey>,
+    /// Present whenever the credential carries a key about its own proof that vcrd
+    /// can read.
+    pub embedded_key: Option<EmbeddedKeyReport>,
 }
 
 /// An open set: consumers must accept values they do not recognize (ARCHITECTURE §8).
@@ -182,18 +195,20 @@ impl KeySource {
     }
 }
 
-/// A key the credential offered about itself.
+/// The embedded key: a key the credential carries about its own proof (ARCHITECTURE §8).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CredentialKey {
+pub struct EmbeddedKeyReport {
     /// Where it was, e.g. `header.jwk`.
     pub location: String,
     pub thumbprint: String,
     /// Its public members, as the credential carries them.
     pub jwk: PublicJwk,
-    /// Whether it is the key used.
-    pub matched: bool,
-    /// Whether the signature verifies under it; absent when that cannot be tried.
-    pub verifies_signature: Option<bool>,
+    /// Whether it is the issuer key; absent when there is no issuer key to compare it
+    /// with.
+    pub same_as_issuer_key: Option<bool>,
+    /// The proof's result with it as the proof key, under the same algorithm policy and
+    /// key-type binding as the deciding proof.
+    pub proof: ProofOutcome,
 }
 
 #[derive(Default)]
@@ -201,9 +216,9 @@ pub(crate) struct Resolution {
     pub key: Option<PublicKey>,
     pub provenance: KeyProvenance,
     pub findings: Vec<Finding>,
-    /// The key the credential carries about itself, when vcrd can use it, for the
-    /// runner to fill in `credential_key.verifies_signature`.
-    pub credential_key: Option<PublicKey>,
+    /// The embedded key, when vcrd can use it as a proof key, for the runner's proof
+    /// with it.
+    pub embedded_key: Option<PublicKey>,
 }
 
 impl Resolution {
@@ -238,16 +253,19 @@ pub(crate) fn resolve(hints: &KeyHints) -> Resolution {
     resolution
 }
 
-/// Records the carried key in the provenance (ARCHITECTURE §8): matched when its
-/// thumbprint is that of the key derived from the issuer, refused when no key was
-/// derived, and a warning when the two differ.
+/// Records the embedded key in the provenance (ARCHITECTURE §8): the same key as the
+/// issuer key when their thumbprints are equal, refused when there is no issuer key,
+/// and a warning when the two differ. The runner adds its proof's result.
 fn compare_embedded(embedded: &EmbeddedKey, resolution: &mut Resolution) {
     let thumbprint = &embedded.jwk.thumbprint;
     let provenance = &resolution.provenance;
-    let derived = provenance.source.zip(provenance.thumbprint.clone());
-    let matched = derived.as_ref().map(|(_, t)| t) == Some(thumbprint);
+    let issuer = provenance
+        .source
+        .filter(|s| *s == KeySource::IssuerIdentifier)
+        .zip(provenance.thumbprint.clone());
+    let same_as_issuer_key = issuer.as_ref().map(|(_, t)| t == thumbprint);
     let method = provenance.method;
-    match derived {
+    match issuer {
         // Refused, and reported as such rather than as "no key material"
         // (REQUIREMENTS §10). The opt-in that would allow it is the caller's.
         None => resolution.findings.push(Finding::error(
@@ -257,32 +275,34 @@ fn compare_embedded(embedded: &EmbeddedKey, resolution: &mut Resolution) {
                 location: embedded.location,
             },
         )),
-        Some((source, key)) if !matched => resolution.findings.push(Finding::new(
-            Phase::Verify,
-            Attribution::Input,
-            Severity::Warning,
-            FindingDetail::CredentialKeyMismatch {
-                carried_key: CarriedKeyRef {
-                    location: embedded.location,
-                    thumbprint: thumbprint.clone(),
+        Some((source, key)) if same_as_issuer_key == Some(false) => {
+            resolution.findings.push(Finding::new(
+                Phase::Verify,
+                Attribution::Input,
+                Severity::Warning,
+                FindingDetail::EmbeddedKeyMismatch {
+                    embedded_key: EmbeddedKeyRef {
+                        location: embedded.location,
+                        thumbprint: thumbprint.clone(),
+                    },
+                    key: KeyRef {
+                        source,
+                        method,
+                        thumbprint: key,
+                    },
                 },
-                key: KeyRef {
-                    source,
-                    method,
-                    thumbprint: key,
-                },
-            },
-        )),
+            ));
+        }
         Some(_) => {}
     }
-    resolution.provenance.credential_key = Some(CredentialKey {
+    resolution.provenance.embedded_key = Some(EmbeddedKeyReport {
         location: embedded.location.to_owned(),
         thumbprint: thumbprint.clone(),
         jwk: embedded.jwk.public.clone(),
-        matched,
-        verifies_signature: None,
+        same_as_issuer_key,
+        proof: ProofOutcome::NotAttempted,
     });
-    resolution.credential_key = embedded.jwk.key.clone();
+    resolution.embedded_key = embedded.jwk.key.clone();
 }
 
 /// The key the issuer identifier encodes, when it is a `did:key`.
@@ -307,6 +327,11 @@ fn from_issuer(issuer: &str) -> Resolution {
             Attribution::Vcrd,
             FindingDetail::DidKeyCodecUnsupported { codec, name },
         )),
+        Ok(DidKey::NotForSigning { codec, name }) => Resolution::failed(Finding::error(
+            Phase::Verify,
+            Attribution::Input,
+            FindingDetail::DidKeyNotForSigning { codec, name },
+        )),
         Ok(DidKey::Usable(key, weak)) => {
             let jwk = key.jwk();
             let thumbprint = jwk.thumbprint();
@@ -315,7 +340,7 @@ fn from_issuer(issuer: &str) -> Resolution {
                 method: Some("did:key"),
                 thumbprint: Some(thumbprint.clone()),
                 jwk: Some(jwk),
-                credential_key: None,
+                embedded_key: None,
             };
             if weak {
                 // Checked at resolution, not left to the verifier (ARCHITECTURE §8).
@@ -365,6 +390,8 @@ enum DidKey {
         codec: u64,
         name: Option<&'static str>,
     },
+    /// A key-agreement key, which no verifier may use for a signature.
+    NotForSigning { codec: u64, name: &'static str },
 }
 
 /// The multicodec key types ARCHITECTURE §8 lists that vcrd cannot yet use.
@@ -374,7 +401,11 @@ const NAMED_CODECS: &[(u64, &str)] = &[
     (0x1202, "p521-pub"),
     (0xe7, "secp256k1-pub"),
     (0x1205, "rsa-pub"),
+    (0x1203, "ed448-pub"),
 ];
+
+/// The multicodec key types for key agreement, which RFC 8037 §3.2 forbids for signing.
+const KEY_AGREEMENT_CODECS: &[(u64, &str)] = &[(0xec, "x25519-pub"), (0x1204, "x448-pub")];
 
 const ED25519_PUB: u64 = 0xed;
 
@@ -382,6 +413,11 @@ const ED25519_PUB: u64 = 0xed;
 /// (prefix `z`), then an unsigned-varint multicodec prefix naming the key type
 /// (ARCHITECTURE §8).
 fn decode_did_key(identifier: &str) -> Result<DidKey, DidKeyProblem> {
+    // did:key v0.9's Create algorithm reads the component before the multibase value
+    // as a version; its syntax has none.
+    if identifier.contains(':') {
+        return Err(DidKeyProblem::VersionPresent);
+    }
     let encoded = identifier
         .strip_prefix('z')
         .ok_or(DidKeyProblem::NotBase58btc)?;
@@ -390,6 +426,9 @@ fn decode_did_key(identifier: &str) -> Result<DidKey, DidKeyProblem> {
         .map_err(|_| DidKeyProblem::Base58Invalid)?;
     let (codec, key) =
         unsigned_varint::decode::u64(&bytes).map_err(|_| DidKeyProblem::CodecInvalid)?;
+    if let Some(&(codec, name)) = KEY_AGREEMENT_CODECS.iter().find(|(c, _)| *c == codec) {
+        return Ok(DidKey::NotForSigning { codec, name });
+    }
     if codec != ED25519_PUB {
         let name = NAMED_CODECS
             .iter()
@@ -401,7 +440,7 @@ fn decode_did_key(identifier: &str) -> Result<DidKey, DidKeyProblem> {
         expected: 32,
         found: key.len(),
     })?;
-    let key = VerifyingKey::from_bytes(key).map_err(|_| DidKeyProblem::PointInvalid)?;
+    let key = ed25519_key(key)?;
     Ok(DidKey::Usable(PublicKey::Ed25519(key), key.is_weak()))
 }
 
@@ -475,6 +514,144 @@ mod tests {
         ));
     }
 
+    /// Each way the did:key v0.9 decoding can fail is named: the multibase prefix
+    /// (Create, step 3), the base58btc and the multicodec header (Decode Public Key),
+    /// the key's length and its encoding (Signature Method Creation, steps 3 and 4).
+    #[test]
+    fn names_what_is_wrong_with_a_did_key() {
+        let key = rfc8037_key();
+        // y = 2, which no point on the curve has.
+        let mut not_a_point = [0; 32];
+        not_a_point[0] = 2;
+        assert_eq!(undecodable("did:key:u7QE"), DidKeyProblem::NotBase58btc);
+        assert_eq!(undecodable("did:key:z0OIl"), DidKeyProblem::Base58Invalid);
+        assert_eq!(
+            undecodable(&did_key(&[0x80], &[])),
+            DidKeyProblem::CodecInvalid
+        );
+        assert_eq!(
+            undecodable(&did_key(&[0xed, 0x01], &key[..31])),
+            DidKeyProblem::KeyLength {
+                expected: 32,
+                found: 31
+            }
+        );
+        assert_eq!(
+            undecodable(&did_key(&[0xed, 0x01], &not_a_point)),
+            DidKeyProblem::PointInvalid
+        );
+    }
+
+    /// RFC 8032 §5.1.3: decoding fails for y at or above p (step 1), and for x = 0 with
+    /// the sign bit set (step 4). `curve25519-dalek` decodes both. y = p + 3 is the
+    /// point whose y is 3, which is not weak.
+    #[test]
+    fn rejects_a_key_not_encoded_as_rfc8032_requires() {
+        assert_eq!(
+            undecodable(&did_key(&[0xed, 0x01], &y_above_p(3))),
+            DidKeyProblem::PointNotCanonical
+        );
+        let mut y_is_3 = [0; 32];
+        y_is_3[0] = 3;
+        let resolution = resolve_issuer(&did_key(&[0xed, 0x01], &y_is_3));
+        assert!(resolution.findings.is_empty(), "{:?}", resolution.findings);
+        // The identity point, whose x is 0, with the sign bit set.
+        let mut identity = [0; 32];
+        identity[0] = 1;
+        identity[31] = 0x80;
+        assert_eq!(
+            undecodable(&did_key(&[0xed, 0x01], &identity)),
+            DidKeyProblem::PointNotCanonical
+        );
+        let x = URL_SAFE_NO_PAD.encode(y_above_p(3));
+        assert_eq!(
+            jwk(&format!(
+                r#"{{"kty": "OKP", "crv": "Ed25519", "x": "{x}"}}"#
+            )),
+            Err(JwkProblem::KeyInvalid)
+        );
+    }
+
+    /// RFC 8037 §3.2: X25519 and X448 keys MUST NOT be used for signing, so a `did:key`
+    /// holding one is the input's error, not a key type vcrd lacks. An Ed448 key is one
+    /// vcrd lacks, and is named.
+    #[test]
+    fn a_key_agreement_key_is_not_for_signing() {
+        for (prefix, length, expected_codec, expected_name) in [
+            (&[0xec, 0x01][..], 32, 0xec, "x25519-pub"),
+            (&[0x84, 0x24][..], 56, 0x1204, "x448-pub"),
+        ] {
+            let finding = one_finding(&did_key(prefix, &vec![9; length]));
+            assert_eq!(finding.attribution, Attribution::Input, "{finding:?}");
+            assert!(
+                matches!(
+                    finding.detail,
+                    FindingDetail::DidKeyNotForSigning { codec, name }
+                        if codec == expected_codec && name == expected_name
+                ),
+                "{finding:?}"
+            );
+        }
+        let finding = one_finding(&did_key(&[0x83, 0x24], &[9; 57]));
+        assert_eq!(finding.attribution, Attribution::Vcrd);
+        assert!(
+            matches!(
+                finding.detail,
+                FindingDetail::DidKeyCodecUnsupported {
+                    codec: 0x1203,
+                    name: Some("ed448-pub")
+                }
+            ),
+            "{finding:?}"
+        );
+    }
+
+    /// did:key v0.9's Create algorithm reads a version before the multibase value; its
+    /// syntax has none. The version is named, rather than taken for the value.
+    #[test]
+    fn names_a_version_before_the_multibase_value() {
+        let issuer = did_key(&[0xed, 0x01], &rfc8037_key());
+        let versioned = issuer.replacen("did:key:", "did:key:1:", 1);
+        assert_eq!(undecodable(&versioned), DidKeyProblem::VersionPresent);
+    }
+
+    fn resolve_issuer(issuer: &str) -> Resolution {
+        resolve(&KeyHints {
+            issuer: Some(issuer.to_owned()),
+            kid: None,
+            embedded: None,
+        })
+    }
+
+    /// The one finding resolving this issuer reports.
+    fn one_finding(issuer: &str) -> Finding {
+        let resolution = resolve_issuer(issuer);
+        let [finding] = resolution.findings.as_slice() else {
+            panic!("{issuer}: {:?}", resolution.findings)
+        };
+        finding.clone()
+    }
+
+    /// Why this issuer's `did:key` does not decode, a problem of the input's.
+    fn undecodable(issuer: &str) -> DidKeyProblem {
+        match one_finding(issuer) {
+            Finding {
+                detail: FindingDetail::DidKeyUndecodable { problem },
+                attribution: Attribution::Input,
+                ..
+            } => problem,
+            other => panic!("{issuer}: {other:?}"),
+        }
+    }
+
+    /// y = p + `excess`, at or above p = 2^255 - 19, with the sign bit clear.
+    fn y_above_p(excess: u8) -> [u8; 32] {
+        let mut bytes = [0xff; 32];
+        bytes[0] = 0xed + excess;
+        bytes[31] = 0x7f;
+        bytes
+    }
+
     fn jwk(text: &str) -> Result<Jwk, JwkProblem> {
         Jwk::parse(&Json::parse(text.as_bytes()).unwrap())
     }
@@ -546,13 +723,13 @@ mod tests {
     }
 
     #[test]
-    fn an_embedded_key_equal_to_the_did_key_matches() {
+    fn an_embedded_key_equal_to_the_did_key_is_the_same_key() {
         let issuer = did_key(&[0xed, 0x01], &rfc8037_key());
         let resolution = with_embedded(Some(issuer), RFC8037_X);
         assert!(resolution.findings.is_empty(), "{:?}", resolution.findings);
-        let credential_key = resolution.provenance.credential_key.unwrap();
-        assert!(credential_key.matched);
-        assert_eq!(credential_key.location, "header.jwk");
+        let embedded = resolution.provenance.embedded_key.unwrap();
+        assert_eq!(embedded.same_as_issuer_key, Some(true));
+        assert_eq!(embedded.location, "header.jwk");
         assert!(resolution.key.is_some());
     }
 
@@ -565,9 +742,10 @@ mod tests {
         let [finding] = resolution.findings.as_slice() else {
             panic!("one finding: {:?}", resolution.findings)
         };
-        assert_eq!(finding.code, "verify.credential_key_mismatch");
+        assert_eq!(finding.code, "verify.embedded_key_mismatch");
         assert_eq!(finding.severity, Severity::Warning);
-        assert!(!resolution.provenance.credential_key.unwrap().matched);
+        let embedded = resolution.provenance.embedded_key.unwrap();
+        assert_eq!(embedded.same_as_issuer_key, Some(false));
         assert!(resolution.key.is_some(), "the issuer's key is still used");
     }
 
@@ -581,7 +759,7 @@ mod tests {
         assert_eq!(finding.attribution, Attribution::Policy);
         assert_eq!(resolution.provenance.source, None);
         assert!(resolution.key.is_none());
-        assert!(resolution.credential_key.is_some());
+        assert!(resolution.embedded_key.is_some());
     }
 
     #[test]

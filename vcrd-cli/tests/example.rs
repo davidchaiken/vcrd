@@ -27,18 +27,26 @@ fn verify_exits_0_with_one_json_document() {
         "{out}"
     );
     let proof = &out["proofs"][0];
-    assert_eq!(proof["outcome"], "verified");
+    assert_eq!(proof["outcome"], "correct");
     assert_eq!(proof["key_provenance"]["source"], "issuer_identifier");
     assert_eq!(proof["key_provenance"]["method"], "did:key");
     assert_eq!(out["credential"]["validity"], "current");
     assert_eq!(
         out["not_evaluated"],
         json!([
-            {"what": "issuer_accreditation", "why": "out_of_scope"},
+            {"what": "issuer_accreditation", "why": "not_implemented"},
             {"what": "context_resolution", "why": "not_implemented"},
         ])
     );
-    assert_eq!(out["findings"], json!([]));
+    // The example declares `EdDSA`, as most credentials in use do, and RFC 9864
+    // deprecates the name (tests/verify.rs).
+    let codes: Vec<&str> = out["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["code"].as_str().unwrap())
+        .collect();
+    assert_eq!(codes, ["verify.algorithm_deprecated"]);
 }
 
 /// Claim values are masked by default; names, structure and metadata are shown

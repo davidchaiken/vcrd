@@ -23,5 +23,6 @@ target
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-# VSCode
-.vscode
+# VSCode, except the launch configurations the debugging guide uses
+.vscode/*
+!.vscode/launch.json

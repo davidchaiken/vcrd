@@ -2,8 +2,8 @@
 //! failed parse still reports (ARCHITECTURE §3, §4).
 
 use vcrd_core::{
-    Attribution, FindingDetail, FormatDetail, JwsJsonSyntax, JwsSegment, Limits, PhaseOutcome,
-    Registry, Report, Severity, inspect,
+    Attribution, DeclaredAlgorithm, FindingDetail, FormatDetail, JwsJsonSyntax, JwsSegment, Limits,
+    PhaseOutcome, Registry, Report, Severity, inspect,
 };
 
 use support::{at, b64, example, with_payload};
@@ -206,8 +206,8 @@ fn reports_every_bad_segment_and_keeps_the_good_ones() {
         panic!("{report:?}")
     };
     assert_eq!(
-        detail.header.as_ref().unwrap().alg.as_deref(),
-        Some("EdDSA")
+        detail.header.as_ref().unwrap().alg,
+        Some(DeclaredAlgorithm::Name("EdDSA".to_owned()))
     );
     assert!(detail.payload.is_none());
 
@@ -270,8 +270,47 @@ fn json_that_merely_mentions_payload_and_signature_is_not_a_jws() {
     );
 }
 
+/// VCDM 2.0 §1.3 and §4.12: a JSON credential secured by an embedded proof, as Data
+/// Integrity secures one, is in a format vcrd reads from milestone 5; one with no proof
+/// is secured by nothing. Neither is "no format matched".
+#[test]
+fn a_json_credential_is_named_by_whether_it_has_a_proof() {
+    let mut credential = serde_json::json!({
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["VerifiableCredential"],
+        "issuer": "did:example:issuer",
+        "credentialSubject": {"name": "a name"},
+    });
+    let report = at(Limits::default(), credential.to_string().as_bytes());
+    assert_eq!(
+        parse_findings(&report),
+        [("parse.not_secured", Attribution::Input, Severity::Error)]
+    );
+    credential["proof"] =
+        serde_json::json!({"type": "DataIntegrityProof", "cryptosuite": "eddsa-rdfc-2022"});
+    let report = at(Limits::default(), credential.to_string().as_bytes());
+    assert_eq!(
+        parse_findings(&report),
+        [(
+            "parse.data_integrity_unsupported",
+            Attribution::Vcrd,
+            Severity::Error
+        )]
+    );
+    // A JSON object that is not a credential is still matched by no format.
+    let report = at(Limits::default(), br#"{"id": "https://example.com/a.b"}"#);
+    assert_eq!(
+        parse_findings(&report),
+        [(
+            "parse.no_format_matched",
+            Attribution::Input,
+            Severity::Error
+        )]
+    );
+}
+
 /// Minified JSON has no spaces, and its URLs have dots, but a compact JWS never
-/// starts with `{`: a JSON credential is not mistaken for one.
+/// starts with `{`: a JSON credential is not mistaken for one, and is named as one.
 #[test]
 fn minified_json_is_not_taken_for_a_compact_jws() {
     let report = at(
@@ -280,11 +319,7 @@ fn minified_json_is_not_taken_for_a_compact_jws() {
     );
     assert_eq!(
         parse_findings(&report),
-        [(
-            "parse.no_format_matched",
-            Attribution::Input,
-            Severity::Error
-        )]
+        [("parse.not_secured", Attribution::Input, Severity::Error)]
     );
 }
 

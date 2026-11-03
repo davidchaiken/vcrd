@@ -4,9 +4,9 @@
 
 use serde_json::{Value, json};
 use vcrd_core::{
-    Attribution, BlockReason, Blocked, Check, CritProblem, FindingDetail, IssLocation,
-    KeySourceKind, Missing, NotEvaluated, NotEvaluatedReason, Phase, PhaseOutcome, Severity,
-    Validity,
+    Attribution, BlockReason, Blocked, Check, ClaimLocation, CritProblem, FindingDetail,
+    KeySourceKind, LanguageValueProblem, Missing, NotEvaluated, NotEvaluatedReason, Phase,
+    PhaseOutcome, Severity, Validity,
 };
 
 use support::{
@@ -238,7 +238,7 @@ fn the_example_conforms() {
         [
             NotEvaluated {
                 what: Check::IssuerAccreditation,
-                why: NotEvaluatedReason::OutOfScope,
+                why: NotEvaluatedReason::NotImplemented,
             },
             NotEvaluated {
                 what: Check::ContextResolution,
@@ -546,6 +546,37 @@ fn checks_typ_and_cty() {
     assert_eq!(codes(&report), Vec::<&str>::new());
 }
 
+/// RFC 7515 §4.1.6: `x5c` is an array of strings, so an array holding anything else
+/// is the wrong type too. A well-typed `x5c` is not reported: vcrd takes no key from it.
+#[test]
+fn checks_that_x5c_is_an_array_of_strings() {
+    let types = |x5c: Value| {
+        let report = inspect_token(&with_header(|h| h["x5c"] = x5c));
+        report
+            .inspect
+            .findings()
+            .iter()
+            .map(|f| match &f.detail {
+                FindingDetail::HeaderMemberType {
+                    member,
+                    expected,
+                    found,
+                } => (*member, *expected, *found),
+                other => panic!("{other:?}"),
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(types(json!(["MIIB"])), []);
+    assert_eq!(
+        types(json!(["MIIB", 1])),
+        [("x5c", "array_of_strings", "array")]
+    );
+    assert_eq!(
+        types(json!("MIIB")),
+        [("x5c", "array_of_strings", "string")]
+    );
+}
+
 /// RFC 7515 §4.1.11's rules for the value of `crit`.
 #[test]
 fn checks_the_form_of_crit() {
@@ -691,7 +722,7 @@ fn iss_must_match_the_issuer() {
     let report = inspect_token(&with_member("iss", Some(json!("did:example:other"))));
     let detail = &report.inspect.findings()[0].detail;
     assert!(
-        matches!(detail, FindingDetail::IssMismatch { location: IssLocation::Payload, iss: Some(iss), issuer: i }
+        matches!(detail, FindingDetail::IssMismatch { location: ClaimLocation::Payload, iss, issuer: i }
             if iss == "did:example:other" && *i == issuer),
         "{detail:?}"
     );
@@ -702,7 +733,7 @@ fn iss_must_match_the_issuer() {
     assert!(matches!(
         report.inspect.findings()[0].detail,
         FindingDetail::IssMismatch {
-            location: IssLocation::Header,
+            location: ClaimLocation::Header,
             ..
         }
     ));
@@ -745,6 +776,167 @@ fn jti_and_sub_should_not_conflict() {
         ]);
     }));
     assert_eq!(codes(&report), Vec::<&str>::new());
+}
+
+/// RFC 7519 §4.1.1–4.1.3 and §4.1.7: `iss`, `sub` and `jti` are strings, and `aud` a
+/// string or an array of strings. A claim of another type is reported as that, and is
+/// not compared with the credential.
+#[test]
+fn registered_claims_have_their_types() {
+    let types = |report: &vcrd_core::Report| {
+        report
+            .inspect
+            .findings()
+            .iter()
+            .map(|f| match &f.detail {
+                FindingDetail::JwtClaimType {
+                    location,
+                    claim,
+                    expected,
+                    found,
+                } => (*location, *claim, *expected, *found),
+                other => panic!("{other:?}"),
+            })
+            .collect::<Vec<_>>()
+    };
+    let report = inspect_token(&with_payload(|p| {
+        p["iss"] = json!(1);
+        p["sub"] = json!(1);
+        p["jti"] = json!(1);
+        p["aud"] = json!([1]);
+    }));
+    let payload = ClaimLocation::Payload;
+    assert_eq!(
+        types(&report),
+        [
+            (payload, "iss", "string", "number"),
+            (payload, "sub", "string", "number"),
+            (payload, "jti", "string", "number"),
+            (payload, "aud", "string_or_array_of_strings", "array"),
+        ]
+    );
+    let report = inspect_token(&with_header(|h| h["iss"] = json!(true)));
+    assert_eq!(
+        types(&report),
+        [(ClaimLocation::Header, "iss", "string", "bool")]
+    );
+    for aud in [
+        json!("https://verifier.example"),
+        json!(["https://verifier.example"]),
+    ] {
+        let report = inspect_token(&with_member("aud", Some(aud)));
+        assert_eq!(codes(&report), Vec::<&str>::new());
+    }
+}
+
+/// RFC 7519 §5.3, which VC-JOSE-COSE §3.1.3 applies to credentials: a claim replicated
+/// as a header parameter SHOULD be identical to the claim. The values stay out of the
+/// finding.
+#[test]
+fn a_claim_replicated_in_the_header_matches_the_claim() {
+    let replicated = |header_sub: Value| {
+        let (mut header, mut payload) = example_parts();
+        payload["sub"] = payload["credentialSubject"]["id"].clone();
+        header["sub"] = header_sub;
+        // Only in the header: nothing to compare.
+        header["exp"] = json!(1);
+        inspect_token(&token(&header, &payload))
+    };
+    let (_, payload) = example_parts();
+    let report = replicated(payload["credentialSubject"]["id"].clone());
+    assert_eq!(codes(&report), Vec::<&str>::new());
+
+    let report = replicated(json!("did:example:canary-header-sub"));
+    assert_eq!(
+        inspected(&report),
+        [(
+            "inspect.replicated_claim_mismatch",
+            Attribution::Input,
+            Severity::Warning
+        )]
+    );
+    assert!(matches!(
+        &report.inspect.findings()[0].detail,
+        FindingDetail::ReplicatedClaimMismatch { claim } if claim == "sub"
+    ));
+    let debug = format!("{report:?}");
+    assert!(!debug.contains("canary"), "{debug}");
+}
+
+/// VC-JOSE-COSE §4.1.3: `cnf` names the key that binds the credential to its holder,
+/// which only a presentation can show is held (DEVELOPMENT-PLAN.md, milestone 4).
+#[test]
+fn cnf_lists_holder_binding_as_not_evaluated() {
+    let holder_binding = (Check::HolderBinding, NotEvaluatedReason::NotImplemented);
+    let cnf = json!({"jkt": "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"});
+    for token in [
+        with_member("cnf", Some(cnf.clone())),
+        with_header(|h| h["cnf"] = cnf.clone()),
+    ] {
+        let report = inspect_token(&token);
+        let not_evaluated: Vec<_> = report
+            .not_evaluated
+            .iter()
+            .map(|n| (n.what, n.why))
+            .collect();
+        assert!(not_evaluated.contains(&holder_binding), "{not_evaluated:?}");
+        assert_eq!(codes(&report), Vec::<&str>::new());
+    }
+    let report = inspect_token(&with_header(|_| {}));
+    assert!(
+        !report
+            .not_evaluated
+            .iter()
+            .any(|n| (n.what, n.why) == holder_binding)
+    );
+}
+
+/// VC-JOSE-COSE §3.1.2: a presentation, which vcrd reads from milestone 4, is named and
+/// attributed to vcrd, not checked as a credential. Its header is checked against
+/// §3.1.2's `vp+jwt` and `vp`, and verify is blocked: a presentation names no issuer.
+#[test]
+fn a_presentation_is_named_and_not_checked_as_a_credential() {
+    let presentation = |typ: &str| {
+        let (mut header, _) = example_parts();
+        header["typ"] = json!(typ);
+        header["cty"] = json!("vp");
+        let payload = json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiablePresentation"],
+            "holder": "did:example:holder",
+        });
+        token(&header, &payload)
+    };
+    let report = verify_token(&presentation("vp+jwt"));
+    assert_eq!(
+        inspected(&report),
+        [(
+            "inspect.presentation_unsupported",
+            Attribution::Vcrd,
+            Severity::Error
+        )]
+    );
+    assert!(
+        matches!(
+            report.verify,
+            PhaseOutcome::NotReached(Blocked {
+                by: Phase::Inspect,
+                ..
+            })
+        ),
+        "{:?}",
+        report.verify
+    );
+
+    let report = inspect_token(&presentation("vc+jwt"));
+    assert!(
+        report.inspect.findings().iter().any(|f| matches!(
+            &f.detail,
+            FindingDetail::TypUnexpected { found: Some(found), expected: "vp+jwt" } if found == "vc+jwt"
+        )),
+        "{:?}",
+        report.inspect.findings()
+    );
 }
 
 /// VC-JOSE-COSE §4.1.1 and §4.2 for a `did:key` issuer.
@@ -825,7 +1017,93 @@ fn checks_kid_for_a_url_issuer() {
     assert_eq!(codes(&report), Vec::<&str>::new());
 }
 
+/// VCDM 2.0 §4.4, §4.10 and §4.11: the `id` of a status, schema, terms-of-use,
+/// evidence or refresh-service object is a URL when present, and a schema's is
+/// required. A missing `id` and one that is not a URL are different findings.
+#[test]
+fn checks_the_ids_of_status_schema_and_related_objects() {
+    let report = inspect_token(&with_payload(|p| {
+        p["credentialStatus"] = json!({"id": "not a url", "type": "BitstringStatusListEntry"});
+        p["credentialSchema"] = json!([
+            {"id": "https://example.org/schema", "type": "JsonSchema"},
+            {"type": "JsonSchema"},
+        ]);
+        p["evidence"] = json!({"id": "https://example.org/evidence/1", "type": "Evidence"});
+    }));
+    let found: Vec<_> = report
+        .inspect
+        .findings()
+        .iter()
+        .map(|f| {
+            assert_eq!(f.severity, Severity::Error, "{f:?}");
+            match &f.detail {
+                FindingDetail::UrlInvalid { path, .. } => (f.code, path.clone()),
+                FindingDetail::IdMissing { path } => (f.code, path.clone()),
+                other => panic!("{other:?}"),
+            }
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("inspect.url_invalid", "credentialStatus.id".to_owned()),
+            ("inspect.id_missing", "credentialSchema[1]".to_owned()),
+        ]
+    );
+}
+
+/// VCDM 2.0 §4.6 and §11.1: `name` and `description` are each a string or a language
+/// value object, or an array of them. Warnings: both are optional (§1.3), and the
+/// Recommendation's Example 40 gives `name` another form.
+#[test]
+fn checks_names_and_descriptions() {
+    for value in [
+        json!("A name"),
+        json!({"@value": "A name", "@language": "en", "@direction": "ltr"}),
+        json!([{"@value": "A name", "@language": "en"}, {"@value": "Un nom", "@language": "fr"}]),
+    ] {
+        let report = inspect_token(&with_member("name", Some(value.clone())));
+        assert_eq!(codes(&report), Vec::<&str>::new(), "{value}");
+    }
+    let report = inspect_token(&with_payload(|p| {
+        p["name"] = json!(1);
+        p["description"] = json!([{"@value": 2}, {"@value": "x", "@lang": "en"}]);
+    }));
+    let found: Vec<_> = report
+        .inspect
+        .findings()
+        .iter()
+        .map(|f| {
+            assert_eq!(f.severity, Severity::Warning, "{f:?}");
+            match &f.detail {
+                FindingDetail::LanguageValueInvalid { path, problem } => {
+                    (path.clone(), problem.clone())
+                }
+                other => panic!("{other:?}"),
+            }
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("name".to_owned(), LanguageValueProblem::WrongType),
+            (
+                "description[0]".to_owned(),
+                LanguageValueProblem::ValueMissing
+            ),
+            (
+                "description[1]".to_owned(),
+                LanguageValueProblem::OtherMember {
+                    name: "@lang".to_owned()
+                }
+            ),
+        ]
+    );
+}
+
 /// Status and schemas are listed as not evaluated when present (REQUIREMENTS §12).
+/// Issuer accreditation needs a trust anchor from the caller (REQUIREMENTS §9), an input
+/// not yet designed (REQUIREMENTS §16 item 14), so it is not implemented.
 #[test]
 fn lists_status_and_schema_as_not_evaluated() {
     let report = inspect_token(&with_payload(|p| {
@@ -840,7 +1118,10 @@ fn lists_status_and_schema_as_not_evaluated() {
     assert_eq!(
         not_evaluated,
         [
-            (Check::IssuerAccreditation, NotEvaluatedReason::OutOfScope),
+            (
+                Check::IssuerAccreditation,
+                NotEvaluatedReason::NotImplemented
+            ),
             (Check::ContextResolution, NotEvaluatedReason::NotImplemented),
             (Check::RevocationStatus, NotEvaluatedReason::NotImplemented),
             (Check::SchemaConformance, NotEvaluatedReason::NotImplemented),

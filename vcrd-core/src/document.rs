@@ -94,12 +94,30 @@ pub enum ClassedJson {
 #[derive(Clone, Debug)]
 pub struct ProofDescriptor {
     pub suite: SuiteId,
-    /// The algorithm the input declares.
-    pub algorithm: Option<String>,
+    /// The algorithm the input declares; `None` when it declares none.
+    pub algorithm: Option<DeclaredAlgorithm>,
     pub key_hints: KeyHints,
     pub material: ProofMaterial,
     /// The proof's own times, which the runner compares with the clock.
     pub times: ProofTimes,
+}
+
+/// What a proof declares as its algorithm (RFC 7515 §4.1.1).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DeclaredAlgorithm {
+    /// A name, such as `EdDSA`.
+    Name(String),
+    /// A value that is not a name; `found` is its JSON type.
+    NotAName { found: &'static str },
+}
+
+impl DeclaredAlgorithm {
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            DeclaredAlgorithm::Name(name) => Some(name),
+            DeclaredAlgorithm::NotAName { .. } => None,
+        }
+    }
 }
 
 /// Where key material may be found.

@@ -139,7 +139,7 @@ fn iss_mismatch_exits_3_and_shows_both_values() {
 fn kid_missing_exits_3_and_verify_passes() {
     let out = verify_fixture("kid-missing.jwt", "inspect.kid_missing", "input", 3);
     assert_eq!(out["phases"]["verify"]["outcome"], "passed");
-    assert_eq!(out["proofs"][0]["outcome"], "verified");
+    assert_eq!(out["proofs"][0]["outcome"], "correct");
 }
 
 /// Named and attributed to vcrd, which does not read it yet (ARCHITECTURE §10 [F2]).

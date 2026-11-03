@@ -10,9 +10,8 @@
 #      the build, and so does an `unsafe` block.
 #   3. In test code, the lints clippy.toml exempts pass, and the others still
 #      fail. A helper function beside the test functions in tests/*.rs is held to
-#      the non-test rules (clippy 0.1.98) unless it is inside a #[cfg(test)]
-#      module, which is where this repository's test helpers go
-#      (docs/reviews/milestone-0.md, gap 1).
+#      the non-test rules unless it is inside a #[cfg(test)] module, which is
+#      where this repository's test helpers go (docs/reviews/milestone-0.md, gap 1).
 #   4. Each crate root carries #![forbid(unsafe_code)] and Cargo.toml forbids
 #      unsafe_code. Case 2 passes while either one remains, so it cannot see one
 #      of them removed.

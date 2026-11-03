@@ -35,7 +35,7 @@ refer to ARCHITECTURE §10. Milestone sizes are unequal: milestones 1 and 5 are 
 | 0 Skeleton | buildable workspace, CI, repository hardening | [P3] [P4] |
 | 1 Thin slice | `vcrd inspect`/`verify` on a VC-JOSE-COSE credential, Ed25519, `did:key` | [S3] [S4] [S5] [S6] [S7] [G1] |
 | 2 Keys and algorithms | five algorithms, caller keys, embedded-key precedence, allowlist, full provenance, Linux debugging | [S1] [S2] [C1] [C2] [C3] [Q4] [G2] |
-| 3 CLI contract | config file, env, designations, `formats`/`suites`, man pages, fuzz, coverage, limits corpus | [Q2] [T2] [T5] [T6] |
+| 3 CLI contract | config file, env, designations, `formats`/`suites`, man pages, fuzz, coverage, limits corpus, a VCDM 2.0 §7.1 result | [Q2] [Q7] [T2] [T5] [T6] |
 | 4 Presentations | `vp+jwt` with enveloped credentials, challenge/domain; JWS JSON serialization | [F1] |
 | 5 Data Integrity | `eddsa-rdfc-2022`, `eddsa-jcs-2022`, pinned contexts, canonicalization budget, VCDM 1.1's JWT encoding | [Q1] [T1] [F2] |
 | 6 Release 0.1.0 | community files, semver-checks, differential harness, distribution | [P1] [P2] [P5] [P6] [T4] [T7] [D1] [D2] |
@@ -129,6 +129,29 @@ every other `alg` exercise the by-name rejection path from day one.
     JWK Thumbprint recommendation is a warning, for issuers whose URL is not a DID.
   - `not_evaluated` lists context resolution for every VC-JOSE-COSE credential, and
     status and schema when present, each as `not_implemented`.
+  - Decided 2026-10-22, in the milestone review (docs/reviews/milestone-1.md, round 1):
+    a registered header member whose value has the wrong JSON type is
+    `inspect.header_member_type`, not reported as absent, and an `alg` that is not a
+    string is `verify.algorithm_invalid`. An `aud` adds `audience` to `not_evaluated`,
+    as `no_parameters_supplied`, until milestone 4 gives vcrd an expected audience.
+    Naming nested JWTs and JWEs is ARCHITECTURE §10 [F3], with no milestone yet.
+  - Decided 2026-10-23, in the milestone review (round 3, VC-JOSE-COSE): a registered
+    claim of the wrong JSON type (`iss`, `sub`, `jti`, `aud`, and a header `iss`) is
+    `inspect.jwt_claim_type`, and is not compared; a claim replicated in the header that
+    differs from the payload's is `inspect.replicated_claim_mismatch`, a warning
+    (RFC 7519 §5.3); `cnf` adds `holder_binding` to `not_evaluated`, `not_implemented`;
+    and a presentation, by its `type`, is `inspect.presentation_unsupported`, attributed
+    to vcrd, with `credential.kind: presentation`, its header checked against `vp+jwt`
+    and `vp`, and verify blocked.
+  - Decided 2026-10-24, in the milestone review (round 4, VCDM 2.0): a JSON credential
+    or presentation that no format reads is `parse.data_integrity_unsupported`,
+    attributed to vcrd, when it carries a `proof`, and `parse.not_secured`, attributed to
+    the input, when it does not; the `id` of status, schema, terms-of-use, evidence and
+    refresh-service objects is checked as a URL, and a schema without one is
+    `inspect.id_missing`; `name` and `description` that are not strings or language value
+    objects are `inspect.language_value_invalid`, a warning; `issuer_accreditation` is
+    `not_implemented` until the trust anchor input of REQUIREMENTS §16 item 14 exists;
+    and a result conforming to VCDM 2.0 §7.1 is ARCHITECTURE §10 [Q7], in milestone 3.
 - *Verify.* EdDSA/Ed25519 via `verify_strict`, `is_weak` at resolution (ARCHITECTURE §8);
   `none` rejected; every other `alg` unsupported by name (attribution vcrd, exit 6). Key
   resolution from the credential's `issuer` (the VCDM-normative identifier; `iss` is a
@@ -145,11 +168,21 @@ every other `alg` exercise the by-name rejection path from day one.
   - A small-order R is named, `verify.signature_small_order`, by checking R with
     `curve25519-dalek` before `verify_strict`, which rejects it without saying why.
   - A credential that carries a key is not blocked for want of an issuer: verify runs
-    and refuses the key, attributed to caller policy (exit 5). A carried key unlike
-    the issuer's is a warning. Inspect reports a `jwk` it cannot read, one with
+    and refuses the key, attributed to caller policy (exit 5). An embedded key unlike
+    the issuer key is a warning. Inspect reports a `jwk` it cannot read, one with
     private-key members, and an unknown key type (a warning attributed to vcrd).
   - A critical extension the suite does not implement fails verify, attributed to vcrd.
     The signature is still checked, and its outcome reported (decided 2026-10-07).
+  - Decided 2026-10-23, in the milestone review (docs/reviews/milestone-1.md, round 2):
+    `alg: "Ed25519"`, RFC 9864's fully specified name, is verified as `EdDSA` with an
+    Ed25519 key is. `EdDSA`, which RFC 9864 deprecates, is `verify.algorithm_deprecated`,
+    `info`, attributed to the input, and always in JSON. At level 1, `text` and `plain`
+    leave out every `info` finding and count them; level 2 lists them. An Ed25519 key
+    not encoded as RFC 8032 §5.1.3 requires is `did_key_undecodable`,
+    `point_not_canonical` (in an embedded `jwk`, `inspect.jwk_invalid`); a component before
+    the multibase value is `version_present`. An S not less than the group order is
+    `verify.signature_scalar_out_of_range`, checked by vcrd. An X25519 or X448 `did:key`
+    is `verify.did_key_not_for_signing`, attributed to the input; `ed448-pub` is named.
 - *Features.* A Cargo feature for the first proof suite, EdDSA over JWS, beside
   `vc-jose` (ARCHITECTURE §2: one feature per format and per proof suite).
   `vcrd-cli` forwards it, and `scripts/feature-matrix.sh` builds it (REQUIREMENTS §13).
@@ -172,21 +205,38 @@ every other `alg` exercise the by-name rejection path from day one.
     `plain` is one `name: value` line per item, a finding on one line with its detail as
     `name=value` pairs (kept on trial). No color.
   - `--verbosity` never changes JSON; 0 prints nothing in any format. For `text` and
-    `plain`: level 1 shows the status, the credential's kind, issuer, types and validity,
-    the inspect and verify phases with `blocked_by`, each proof's outcome and key
-    source, the claims, the findings and `not_evaluated`; level 2 everything except
-    `credential.metadata`, the header included; level 3 everything. How level 1 presents
-    `not_evaluated`, key provenance, and the types and validity is to be revisited.
+    `plain`: level 1 shows the status, the credential's kind, issuer, types, and validity
+    with its bounds, the inspect and verify phases with `blocked_by`, each proof's
+    outcome, own validity, key source and the key's thumbprint, the claims, the findings
+    (from 2026-10-23, the `info` ones counted, not listed) and, last, `not_evaluated`;
+    level 2 everything except `credential.metadata`, the header included;
+    level 3 everything. Decided 2026-10-24, in the milestone review
+    (docs/reviews/milestone-1.md): `text` gives the credential's validity, the key's
+    source and the embedded key as phrases, where `plain` keeps the values; below the
+    checks not evaluated, it names docs/findings.md's section "Checks not evaluated",
+    which describes each check and reason.
+  - Decided 2026-10-27, in the milestone review (docs/reviews/milestone-1.md, round 7):
+    the terms of ARCHITECTURE §8's "Keys and proofs" (embedded key, issuer key,
+    caller-supplied key, proof key, deciding proof key, refused), and its key and proof
+    table, with a test of the ten rows milestone 1 produces. A proof's result is
+    `correct`, `incorrect` or `not_attempted`. `key_provenance.embedded_key` replaces
+    `credential_key`, with `same_as_issuer_key` (absent when there is no issuer key) and
+    `proof`; `verify.embedded_key_mismatch` replaces `verify.credential_key_mismatch`,
+    and `verify.embedded_key_proof_correct` names key substitution. At level 1, `text`
+    says `Deciding proof key   issuer key, from did:key` and, for example,
+    `Embedded key   header.jwk: a different key; proof correct`. A caller-supplied key
+    must be the same key as the issuer key (REQUIREMENTS §10, amended); milestone 2
+    implements it.
   - Every value carries its visibility, `non_sensitive`, `masked` or `revealed`: in JSON
     on each value, in a Visibility column in `text` and `plain` (decided 2026-10-21,
     after review, in place of an Unmasked column and JSON's `treatment`). JSON keeps
     `reveals`, each entry naming the key its path is relative to and its visibility,
     `revealed`; milestone 3's hashed designation adds `hashed`.
   - Each key is shown with its JWK beside its thumbprint (`key_provenance.jwk`,
-    `credential_key.jwk`), and key findings say where each key came from: `key` with
-    its source, method and thumbprint, `carried_key` with its location and thumbprint;
-    `verify.weak_key` adds the `criterion` it fails. A carried key, and whether the
-    signature verifies under it, is shown at level 1 (decided 2026-10-21, after review).
+    `embedded_key.jwk`), and key findings say where each key came from: `key` with
+    its source, method and thumbprint, `embedded_key` with its location and thumbprint;
+    `verify.weak_key` adds the `criterion` it fails. The embedded key, and its proof's
+    result, is shown at level 1 (decided 2026-10-21, after review).
   - `--unsafe` has three levels: 0 masks claims and secrets, 1 (`--unsafe`) shows claims,
     2 also shows cryptographic secrets, such as a header `jwk`'s private members.
     Caller errors and the warning are the only stderr output; milestone 3 adds
@@ -294,11 +344,22 @@ RFC 7519 §4.1, §7.2; RFC 8037 §2–3; RFC 8032 as the crate implements it. Kn
 **Scope.** ES256, ES512, RS256, HS256 as prototyped (finding 5); a recorded decision on
 ES384, ES256K and the PS and RS384/RS512 families ([C3]), implementing what is decided. A
 caller-supplied JWK set (flag name is implementation-time), matched by `kid` else the sole
-key. The full precedence of REQUIREMENTS §10 with RFC 7638 thumbprint matching, the
-embedded-key opt-in, and the `credential_key` block with `matched` and `verifies_signature`
-(ARCHITECTURE §8). A `kid` that is a `did:key` URL, in a credential whose issuer gives no
-key, as a key the credential carries about itself: refused without the opt-in and
-reported as an embedded `jwk` is, with `credential_key.location: header.kid`, so that
+key. The rules of ARCHITECTURE §8's key and proof table, with RFC 7638 thumbprint
+matching: a caller-supplied key must be the same key as the issuer key when both are
+present, whatever the issuer key's source (decided 2026-10-27), and the embedded key
+decides alone only with the caller's opt-in. A second opt-in lets a caller-supplied key
+override the issuer key. The rules in one function, tested with every row of the table.
+For each distinct key, the kinds of key it is and its proof's result (correct, incorrect
+or not attempted), and which is the deciding proof key, in place of milestone 1's
+separate reports of the issuer key and the embedded key. Open question, to decide with
+the override opt-in: a caller-supplied key when vcrd cannot obtain the issuer key (a DID
+method it does not resolve, or `did:web` without network access). The table counts that
+issuer key as not present, so the caller-supplied key decides, but a key set matched by
+`kid` binds no key to an issuer: a key of issuer B could give a correct proof for a
+credential naming issuer A (RFC 8725 §3.8). A `kid` that is a `did:key` URL, in a
+credential whose issuer gives no key, as a key the credential carries about itself:
+refused without the opt-in and reported as an embedded `jwk` is, with location
+`header.kid`, so that
 such a credential is not blocked for want of key material (milestone 1's review of
 slice 5, N12: nothing binds such a key to an issuer). The algorithm allowlist as a `Context` input and a CLI flag; policy
 rejection (exit 5) distinct from unsupported (exit 6), both reported when both apply.
@@ -311,12 +372,15 @@ generation. [G2] the debugging guide run on Linux, at a time the maintainer choo
 within the milestone, so that it is ready before a Linux-only failure needs it.
 
 **Delivers.** `vcrd verify` for five algorithms, with caller keys, the embedded-key opt-in
-and the allowlist; provenance for every row of ARCHITECTURE §8's situation table.
+and the allowlist; the keys and their proofs' results for every row of ARCHITECTURE §8's
+key and proof table.
 
 **Exit criteria.** Fixtures: algorithm confusion (HS256 with the issuer's public-key bytes
 as secret, reported as key-type mismatch, not as unsupported); `none`; unsupported
 (ES256K); policy-rejected; unsupported and policy-rejected at once (exit 6, two findings);
-key substitution (`matched: false`, `verifies_signature: true`, exit 4); embedded-only
+key substitution (embedded proof key correct, issuer proof key incorrect, exit 4); a
+caller-supplied key unlike a `did:key` issuer key, with its proof correct, not successful
+without the override opt-in and successful with it; embedded-only
 refused, and accepted with the opt-in (exit 0, `source: credential_embedded`); RSA 1024
 and HS256 128-bit keys (weak-key findings); a P-384 `did:key` (named, exit 6); ES512
 happy path, the EUDI evidence point of REQUIREMENTS §10.
@@ -341,6 +405,13 @@ with the precedence flag > env > config > default resolved per path for designat
 (REQUIREMENTS §8). Per-path show/hash/mask designations with the `reveals` list; an initial
 hash construction chosen and labeled provisional (REQUIREMENTS §16 item 18 stays open).
 `vcrd formats` and `vcrd suites`. Man pages and completions from `clap`. [Q2] decided.
+The input's source in the result (decided 2026-10-22): `input.source`, `file` or `stdin`,
+and `input.path` as given on the command line, never made absolute; in JSON always, and in
+`text` and `plain` at levels 1–3 just after the status.
+[Q7] decided and built for credentials (decided 2026-10-24, in milestone 1's review): a
+result that conforms exactly to VCDM 2.0 §7.1's, with VCDM 2.0 §7.2's problem types,
+through `--format json`, a format of its own, or a conforming part of the envelope;
+milestone 4 extends it to presentations.
 Stderr diagnostics per verbosity level. [T2] `cargo-fuzz` targets for the JWS parser and
 the depth prescan, seeded from fixtures, in a workspace-excluded `fuzz/` on a nightly job.
 [T5] coverage with the ratchet policy text ready for `CONTRIBUTING.md`. [T6] structural
@@ -357,7 +428,7 @@ flags; the same result whether a setting came from a flag, the environment or th
 extended to designations and hashing; fuzz targets run for a fixed budget in CI without a
 panic; limit defaults documented with the measuring command and the corpus.
 
-**Closes.** [Q2], [T2], [T5], [T6].
+**Closes.** [Q2], [Q7], [T2], [T5], [T6].
 
 **Milestone review.** No new standard. Review the CLI against REQUIREMENTS §8 and §9
 sentence by sentence, each requirement a black-box test. Re-run milestones 1 and 2's review

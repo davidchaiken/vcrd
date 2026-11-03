@@ -2,9 +2,12 @@
 //! dispatches proofs to suites, and lists what was not evaluated.
 
 use crate::context::Context;
-use crate::document::{ProofDescriptor, ProofMaterial, ProofTime, ProofTimes};
-use crate::finding::{Attribution, Finding, FindingDetail, KeySourceKind, Severity};
-use crate::keys::{self, PublicKey};
+use crate::document::{DeclaredAlgorithm, ProofDescriptor, ProofMaterial, ProofTime, ProofTimes};
+use crate::finding::{
+    Attribution, EmbeddedKeyRef, Finding, FindingDetail, KeyRef, KeySourceKind, Severity,
+};
+use crate::json::{self, Json};
+use crate::keys::{self, PublicKey, Resolution};
 use crate::registry::{CredentialFormat, Detection, ProofInput, Registry};
 use crate::report::{
     BlockReason, Blocked, Check, InputSummary, InspectOutput, Missing, NotEvaluated,
@@ -35,19 +38,24 @@ pub(crate) fn run(bytes: &[u8], ctx: &Context, registry: &Registry, last: Phase)
             )],
         },
         None => {
-            // An empty registry is vcrd's limit; a non-empty one that matched
-            // nothing is the input's (ARCHITECTURE §2).
-            let registered: Vec<_> = registry.formats().map(|f| f.id()).collect();
-            let attribution = if registered.is_empty() {
-                Attribution::Vcrd
-            } else {
-                Attribution::Input
+            let finding = match unread_credential(bytes, ctx) {
+                Some((attribution, detail)) => Finding::error(Phase::Parse, attribution, detail),
+                None => {
+                    // An empty registry is vcrd's limit; a non-empty one that matched
+                    // nothing is the input's (ARCHITECTURE §2).
+                    let registered: Vec<_> = registry.formats().map(|f| f.id()).collect();
+                    let attribution = if registered.is_empty() {
+                        Attribution::Vcrd
+                    } else {
+                        Attribution::Input
+                    };
+                    Finding::error(
+                        Phase::Parse,
+                        attribution,
+                        FindingDetail::NoFormatMatched { registered },
+                    )
+                }
             };
-            let finding = Finding::error(
-                Phase::Parse,
-                attribution,
-                FindingDetail::NoFormatMatched { registered },
-            );
             PhaseOutcome::Failed {
                 output: ParseOutput::default(),
                 findings: vec![finding],
@@ -89,10 +97,13 @@ pub(crate) fn run(bytes: &[u8], ctx: &Context, registry: &Registry, last: Phase)
         }
     };
 
-    // Trust evaluation is not a phase (REQUIREMENTS §4).
+    // Trust evaluation is not a phase (REQUIREMENTS §4). Issuer accreditation is checked
+    // against a trust anchor the caller supplies (REQUIREMENTS §9), an input not yet
+    // designed (REQUIREMENTS §16 item 14); once it is, a caller who supplies none makes
+    // this `NoParametersSupplied`.
     let mut not_evaluated = vec![NotEvaluated {
         what: Check::IssuerAccreditation,
-        why: NotEvaluatedReason::OutOfScope,
+        why: NotEvaluatedReason::NotImplemented,
     }];
     if let Some(inspected) = inspect.output() {
         not_evaluated.extend_from_slice(&inspected.not_evaluated);
@@ -135,6 +146,24 @@ fn blocked_by_inspect(
                 consulted: vec![KeySourceKind::IssuerIdentifier],
             },
         },
+    })
+}
+
+/// A JSON credential or presentation that no registered format reads: an object with
+/// `@context` and `type` (VCDM 2.0 §4.3, §4.5). With an embedded `proof`, as Data
+/// Integrity secures one (§4.12), vcrd cannot read it until milestone 5; with none,
+/// nothing secures it (§1.3). Parsed only within the depth limit, as a format parses
+/// (ARCHITECTURE §4).
+fn unread_credential(bytes: &[u8], ctx: &Context) -> Option<(Attribution, FindingDetail)> {
+    if json::nesting_depth(bytes) > ctx.limits().max_depth {
+        return None;
+    }
+    let json = Json::parse(bytes).ok()?;
+    json.get("@context")?;
+    json.get("type")?;
+    Some(match json.get("proof") {
+        Some(_) => (Attribution::Vcrd, FindingDetail::DataIntegrityUnsupported),
+        None => (Attribution::Input, FindingDetail::NotSecured),
     })
 }
 
@@ -188,32 +217,70 @@ fn verify_proofs(
                 let input = proof_input(descriptor, resolution.key.as_ref());
                 let (outcome, suite_findings) = suite.verify(&input, ctx);
                 findings.extend(suite_findings);
-                // Additional information, under the same rules: it never changes the
-                // verdict or the exit code (ARCHITECTURE §8).
-                if let (Some(credential_key), Some(key)) = (
-                    resolution.provenance.credential_key.as_mut(),
-                    resolution.credential_key.as_ref(),
-                ) {
-                    let (outcome, _) = suite.verify(&proof_input(descriptor, Some(key)), ctx);
-                    credential_key.verifies_signature = match outcome {
-                        ProofOutcome::Verified { .. } => Some(true),
-                        ProofOutcome::Failed => Some(false),
-                        ProofOutcome::NotAttempted => None,
-                    };
-                }
+                findings.extend(embedded_proof(
+                    descriptor,
+                    &mut resolution,
+                    &outcome,
+                    |key| suite.verify(&proof_input(descriptor, Some(key)), ctx).0,
+                ));
                 outcome
             }
         };
         let validity = proof_validity(&descriptor.times, ctx, &mut findings);
         proofs.push(ProofResult {
             suite: descriptor.suite,
-            algorithm: descriptor.algorithm.clone(),
+            algorithm: descriptor
+                .algorithm
+                .as_ref()
+                .and_then(DeclaredAlgorithm::name)
+                .map(str::to_owned),
             outcome,
             key_provenance: resolution.provenance,
             validity,
         });
     }
     PhaseOutcome::from_findings(VerifyOutput { proofs }, findings)
+}
+
+/// The proof with the embedded key as the proof key, for information: it decides the
+/// outcome only as ARCHITECTURE §8's rules say, and the deciding proof's findings are the
+/// ones reported. The same key gives the same result, so a key the same as the issuer
+/// key is not proved again. An embedded proof that is correct while the deciding proof
+/// is not is its own finding.
+fn embedded_proof(
+    descriptor: &ProofDescriptor,
+    resolution: &mut Resolution,
+    outcome: &ProofOutcome,
+    prove: impl FnOnce(&PublicKey) -> ProofOutcome,
+) -> Option<Finding> {
+    let provenance = &mut resolution.provenance;
+    let embedded = provenance.embedded_key.as_mut()?;
+    embedded.proof = match (embedded.same_as_issuer_key, &resolution.embedded_key) {
+        (Some(true), _) => outcome.clone(),
+        (_, Some(key)) => prove(key),
+        (_, None) => ProofOutcome::NotAttempted,
+    };
+    let (source, thumbprint) = provenance.source.zip(provenance.thumbprint.clone())?;
+    let correct = |o: &ProofOutcome| matches!(o, ProofOutcome::Correct { .. });
+    if !correct(&embedded.proof) || correct(outcome) {
+        return None;
+    }
+    Some(Finding::new(
+        Phase::Verify,
+        Attribution::Input,
+        Severity::Warning,
+        FindingDetail::EmbeddedKeyProofCorrect {
+            embedded_key: EmbeddedKeyRef {
+                location: descriptor.key_hints.embedded.as_ref()?.location,
+                thumbprint: embedded.thumbprint.clone(),
+            },
+            key: KeyRef {
+                source,
+                method: provenance.method,
+                thumbprint,
+            },
+        },
+    ))
 }
 
 fn proof_input<'a>(descriptor: &'a ProofDescriptor, key: Option<&'a PublicKey>) -> ProofInput<'a> {
@@ -223,7 +290,7 @@ fn proof_input<'a>(descriptor: &'a ProofDescriptor, key: Option<&'a PublicKey>) 
             signature,
             critical,
         } => ProofInput::Jws {
-            algorithm: descriptor.algorithm.as_deref(),
+            algorithm: descriptor.algorithm.as_ref(),
             signing_input,
             signature,
             critical,

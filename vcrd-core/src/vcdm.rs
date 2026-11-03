@@ -14,7 +14,9 @@ use time::{Date, Month, OffsetDateTime, Time, UtcOffset};
 
 use crate::context::Context;
 use crate::document::{DateTimeProblem, Document, Timestamp};
-use crate::finding::{Attribution, DateField, Finding, FindingDetail, IssuerProblem, Severity};
+use crate::finding::{
+    Attribution, DateField, Finding, FindingDetail, IssuerProblem, LanguageValueProblem, Severity,
+};
 use crate::json::{Json, Step, path_string};
 use crate::report::{Check, NotEvaluated, NotEvaluatedReason, Phase, Validity};
 
@@ -49,6 +51,8 @@ pub(crate) fn inspect(
 ) -> Inspected {
     contexts(payload.get("@context"), findings);
     types(payload, findings);
+    related_identifiers(payload, findings);
+    names(payload, findings);
     let no_issuer_identifier = issuer(payload.get("issuer"), findings);
     if let Some(id) = payload.get("id") {
         identifier(String::from("id"), id, findings);
@@ -162,6 +166,68 @@ fn types(payload: &Json, findings: &mut Vec<Finding>) {
             }
         }
     }
+}
+
+/// VCDM 2.0 §4.4: the `id` of each object the §4.5 table names is a URL when present
+/// (§4.10 for status), and a schema has one (§4.11).
+fn related_identifiers(payload: &Json, findings: &mut Vec<Finding>) {
+    for name in TYPED_PROPERTIES {
+        let Some(json) = payload.get(name) else {
+            continue;
+        };
+        for (path, item) in items(name, json) {
+            match item.get("id") {
+                Some(id) => identifier(format!("{path}.id"), id, findings),
+                None if *name == "credentialSchema" && matches!(item, Json::Object(_)) => {
+                    findings.push(error(FindingDetail::IdMissing { path }));
+                }
+                None => {}
+            }
+        }
+    }
+}
+
+/// VCDM 2.0 §4.6: `name` and `description` are each a string or a language value
+/// object (§11.1), or an array of them. Warnings, since §1.3 lets a verifier ignore
+/// them, and the Recommendation's Example 40 gives `name` another form.
+fn names(payload: &Json, findings: &mut Vec<Finding>) {
+    for name in ["name", "description"] {
+        let Some(json) = payload.get(name) else {
+            continue;
+        };
+        for (path, item) in items(name, json) {
+            if let Some(problem) = language_value_problem(item) {
+                findings.push(warning(FindingDetail::LanguageValueInvalid {
+                    path,
+                    problem,
+                }));
+            }
+        }
+    }
+}
+
+/// VCDM 2.0 §11.1: a language value object has a string `@value`, and no member other
+/// than `@value`, `@language` and `@direction`.
+fn language_value_problem(value: &Json) -> Option<LanguageValueProblem> {
+    let Some(members) = value.members() else {
+        return value
+            .as_str()
+            .is_none()
+            .then_some(LanguageValueProblem::WrongType);
+    };
+    if let Some(other) = members
+        .iter()
+        .find(|m| !["@value", "@language", "@direction"].contains(&m.name.as_str()))
+    {
+        return Some(LanguageValueProblem::OtherMember {
+            name: other.name.clone(),
+        });
+    }
+    value
+        .get("@value")
+        .and_then(Json::as_str)
+        .is_none()
+        .then_some(LanguageValueProblem::ValueMissing)
 }
 
 /// VCDM 2.0 §4.7: a URL, or an object whose `id` is a URL. Returns whether a finding

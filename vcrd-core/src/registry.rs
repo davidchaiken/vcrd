@@ -1,6 +1,7 @@
 //! The extension points: formats and proof suites (ARCHITECTURE §5).
 
 use crate::context::Context;
+use crate::document::DeclaredAlgorithm;
 use crate::finding::Finding;
 use crate::keys::PublicKey;
 use crate::report::{InspectOutput, ParseOutput, PhaseOutcome, ProofOutcome};
@@ -50,7 +51,7 @@ pub trait ProofSuite {
 #[derive(Debug)]
 pub enum ProofInput<'a> {
     Jws {
-        algorithm: Option<&'a str>,
+        algorithm: Option<&'a DeclaredAlgorithm>,
         signing_input: &'a [u8],
         signature: &'a [u8],
         /// The extensions the JWS marks critical (RFC 7515 §4.1.11).

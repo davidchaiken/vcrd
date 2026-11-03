@@ -64,6 +64,17 @@ impl Json {
         }
     }
 
+    /// The value's JSON type, as findings name it: `null`, `bool`, `number`, `string`,
+    /// `array` or `object`.
+    #[cfg_attr(not(feature = "vc-jose"), allow(dead_code))]
+    pub(crate) fn type_name(&self) -> &'static str {
+        match self {
+            Json::Scalar(value) => value.kind().as_str(),
+            Json::Array(_) => "array",
+            Json::Object(_) => "object",
+        }
+    }
+
     /// A number scalar's JSON text and value, for checks inside core. Not public,
     /// for the reason given on [`Json::as_str`].
     #[cfg_attr(not(feature = "vc-jose"), allow(dead_code))]

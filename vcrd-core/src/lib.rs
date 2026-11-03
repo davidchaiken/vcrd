@@ -29,17 +29,17 @@ mod vcdm;
 pub use context::SystemClock;
 pub use context::{Clock, Context, ContextBuilder, FixedClock, Limits};
 pub use document::{
-    ClassedJson, ContainedInput, ContextEntry, DateTimeProblem, Document, DocumentKind,
-    EmbeddedKey, KeyHints, Leaf, LeafClass, NumericDate, ProofDescriptor, ProofMaterial, ProofTime,
-    ProofTimes, Timestamp,
+    ClassedJson, ContainedInput, ContextEntry, DateTimeProblem, DeclaredAlgorithm, Document,
+    DocumentKind, EmbeddedKey, KeyHints, Leaf, LeafClass, NumericDate, ProofDescriptor,
+    ProofMaterial, ProofTime, ProofTimes, Timestamp,
 };
 pub use finding::{
-    Attribution, Base64urlProblem, CarriedKeyRef, CritProblem, DateField, DidKeyProblem, Finding,
-    FindingDetail, IssLocation, IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment, KeyRef,
-    KeySourceKind, Severity, WeakKeyCriterion,
+    Attribution, Base64urlProblem, ClaimLocation, CritProblem, DateField, DidKeyProblem,
+    EmbeddedKeyRef, Finding, FindingDetail, IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment,
+    KeyRef, KeySourceKind, LanguageValueProblem, Severity, WeakKeyCriterion,
 };
 pub use json::{DuplicateName, Json, Member, nesting_depth};
-pub use keys::{CredentialKey, Jwk, KeyProvenance, KeySource, PublicJwk, PublicKey};
+pub use keys::{EmbeddedKeyReport, Jwk, KeyProvenance, KeySource, PublicJwk, PublicKey};
 pub use redact::{
     ClaimValue, Designations, Rendered, RenderedJson, RenderedLeaf, Reveal, RevealLocation,
     Revealed, Treatment, ValueKind, render,

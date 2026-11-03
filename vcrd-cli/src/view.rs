@@ -9,12 +9,12 @@ use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use vcrd_core::{
-    Attribution, Base64urlProblem, BlockReason, Check, Context, CritProblem, DateField,
-    DidKeyProblem, Document, DocumentKind, Finding, FindingDetail, IssLocation, IssuerProblem,
-    JwkProblem, JwsJsonSyntax, JwsSegment, KeyRef, KeySourceKind, LeafClass, Missing,
-    NotEvaluatedReason, Phase, PhaseOutcome, ProofOutcome, PublicJwk, Rendered, RenderedJson,
-    Report, RevealLocation, Revealed, Severity, Treatment, Validity, ValueKind, WeakKeyCriterion,
-    render,
+    Attribution, Base64urlProblem, BlockReason, Check, ClaimLocation, Context, CritProblem,
+    DateField, DeclaredAlgorithm, DidKeyProblem, Document, DocumentKind, EmbeddedKeyRef, Finding,
+    FindingDetail, IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment, KeyRef, KeySourceKind,
+    LanguageValueProblem, LeafClass, Missing, NotEvaluatedReason, Phase, PhaseOutcome,
+    ProofOutcome, PublicJwk, Rendered, RenderedJson, Report, RevealLocation, Revealed, Severity,
+    Treatment, Validity, ValueKind, WeakKeyCriterion, render,
 };
 
 /// `0` until the schema is declared stable (REQUIREMENTS §9).
@@ -157,25 +157,27 @@ pub struct ProvenanceView {
     pub source: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub method: Option<&'static str>,
-    /// The key used, as an RFC 7638 thumbprint.
+    /// The deciding proof key, as an RFC 7638 thumbprint.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thumbprint: Option<String>,
-    /// The key used, as a JWK: the members the thumbprint covers.
+    /// The deciding proof key, as a JWK: the members the thumbprint covers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jwk: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub credential_key: Option<CredentialKeyView>,
+    pub embedded_key: Option<EmbeddedKeyView>,
 }
 
 #[derive(Debug, Serialize)]
-pub struct CredentialKeyView {
+pub struct EmbeddedKeyView {
     pub location: String,
     pub thumbprint: String,
-    /// The carried key's public members, which its thumbprint covers.
+    /// The embedded key's public members, which its thumbprint covers.
     pub jwk: Value,
-    pub matched: bool,
+    /// Absent when there is no issuer key to compare it with.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub verifies_signature: Option<bool>,
+    pub same_as_issuer_key: Option<bool>,
+    /// The proof's result with it as the proof key.
+    pub proof: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -422,25 +424,23 @@ fn proofs(report: &Report) -> Vec<ProofView> {
             .map(|p| ProofView {
                 suite: p.suite.0,
                 algorithm: p.algorithm.clone(),
-                outcome: match p.outcome {
-                    ProofOutcome::Verified { .. } => "verified",
-                    ProofOutcome::Failed => "failed",
-                    ProofOutcome::NotAttempted => "not_attempted",
-                },
+                outcome: proof_outcome(&p.outcome),
                 key_provenance: ProvenanceView {
                     source: p.key_provenance.source.map(|s| s.as_str()),
                     method: p.key_provenance.method,
                     thumbprint: p.key_provenance.thumbprint.clone(),
                     jwk: p.key_provenance.jwk.as_ref().map(jwk),
-                    credential_key: p.key_provenance.credential_key.as_ref().map(|k| {
-                        CredentialKeyView {
+                    embedded_key: p
+                        .key_provenance
+                        .embedded_key
+                        .as_ref()
+                        .map(|k| EmbeddedKeyView {
                             location: k.location.clone(),
                             thumbprint: k.thumbprint.clone(),
                             jwk: jwk(&k.jwk),
-                            matched: k.matched,
-                            verifies_signature: k.verifies_signature,
-                        }
-                    }),
+                            same_as_issuer_key: k.same_as_issuer_key,
+                            proof: proof_outcome(&k.proof),
+                        }),
                 },
                 validity: Some(validity_name(p.validity)),
             })
@@ -452,19 +452,32 @@ fn proofs(report: &Report) -> Vec<ProofView> {
             .iter()
             .map(|p| ProofView {
                 suite: p.suite.0,
-                algorithm: p.algorithm.clone(),
+                algorithm: p
+                    .algorithm
+                    .as_ref()
+                    .and_then(DeclaredAlgorithm::name)
+                    .map(str::to_owned),
                 outcome: "not_attempted",
                 key_provenance: ProvenanceView {
                     source: None,
                     method: None,
                     thumbprint: None,
                     jwk: None,
-                    credential_key: None,
+                    embedded_key: None,
                 },
                 validity: None,
             })
             .collect()
     })
+}
+
+/// A proof's result with one proof key (ARCHITECTURE §8).
+fn proof_outcome(outcome: &ProofOutcome) -> &'static str {
+    match outcome {
+        ProofOutcome::Correct { .. } => "correct",
+        ProofOutcome::Incorrect => "incorrect",
+        ProofOutcome::NotAttempted => "not_attempted",
+    }
 }
 
 fn finding(f: &Finding, size: Option<u64>) -> FindingView {
@@ -522,6 +535,8 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
             },
         }),
         FindingDetail::JsonNotJws => json!({"type": "json_not_jws"}),
+        FindingDetail::DataIntegrityUnsupported => json!({"type": "data_integrity_unsupported"}),
+        FindingDetail::NotSecured => json!({"type": "not_secured"}),
         FindingDetail::NoFormatMatched { registered } => json!({
             "type": "no_format_matched",
             "registered": registered.iter().map(|f| f.0).collect::<Vec<_>>(),
@@ -565,6 +580,16 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
         FindingDetail::CritInvalid { problem } => {
             json!({"type": "crit_invalid", "problem": crit_problem(problem)})
         }
+        FindingDetail::HeaderMemberType {
+            member,
+            expected,
+            found,
+        } => json!({
+            "type": "header_member_type",
+            "member": member,
+            "expected": expected,
+            "found": found,
+        }),
         FindingDetail::JwkInvalid { problem } => {
             json!({"type": "jwk_invalid", "problem": jwk_problem(problem)})
         }
@@ -618,6 +643,16 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
             "path": path,
             "violations": violations,
         }),
+        FindingDetail::IdMissing { path } => json!({"type": "id_missing", "path": path}),
+        FindingDetail::LanguageValueInvalid { path, problem } => json!({
+            "type": "language_value_invalid",
+            "path": path,
+            "problem": match problem {
+                LanguageValueProblem::WrongType => json!("wrong_type"),
+                LanguageValueProblem::ValueMissing => json!("value_missing"),
+                LanguageValueProblem::OtherMember { name } => json!({"other_member": name}),
+            },
+        }),
         FindingDetail::DateTimeInvalid {
             field,
             valid_rfc3339,
@@ -637,15 +672,16 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
             "valid_from": rfc3339(*valid_from),
             "valid_until": rfc3339(*valid_until),
         }),
-        FindingDetail::TypUnexpected { found } => {
-            json!({"type": "typ_unexpected", "found": found, "expected": "vc+jwt"})
+        FindingDetail::TypUnexpected { found, expected } => {
+            json!({"type": "typ_unexpected", "found": found, "expected": expected})
         }
-        FindingDetail::CtyUnexpected { found } => {
-            json!({"type": "cty_unexpected", "found": found, "expected": "vc"})
+        FindingDetail::CtyUnexpected { found, expected } => {
+            json!({"type": "cty_unexpected", "found": found, "expected": expected})
         }
         FindingDetail::VcdmV1JwtEncoding { claim } => {
             json!({"type": "vcdm_1_1_jwt_encoding", "claim": claim})
         }
+        FindingDetail::PresentationUnsupported => json!({"type": "presentation_unsupported"}),
         FindingDetail::JwtClaimForbidden { claim } => {
             json!({"type": "jwt_claim_forbidden", "claim": claim})
         }
@@ -655,15 +691,27 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
             issuer,
         } => json!({
             "type": "iss_mismatch",
-            "location": match location {
-                IssLocation::Header => "header",
-                IssLocation::Payload => "payload",
-            },
+            "location": claim_location(*location),
             "iss": iss,
             "issuer": issuer,
         }),
         FindingDetail::JwtClaimConflict { claim, property } => {
             json!({"type": "jwt_claim_conflict", "claim": claim, "property": property})
+        }
+        FindingDetail::JwtClaimType {
+            location,
+            claim,
+            expected,
+            found,
+        } => json!({
+            "type": "jwt_claim_type",
+            "location": claim_location(*location),
+            "claim": claim,
+            "expected": expected,
+            "found": found,
+        }),
+        FindingDetail::ReplicatedClaimMismatch { claim } => {
+            json!({"type": "replicated_claim_mismatch", "claim": claim})
         }
         FindingDetail::KidMissing => json!({"type": "kid_missing"}),
         FindingDetail::KidNotAbsolute { kid } => {
@@ -707,7 +755,18 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
             json!({"type": "suite_unavailable", "suite": suite.0})
         }
         FindingDetail::AlgorithmMissing => json!({"type": "algorithm_missing"}),
+        FindingDetail::AlgorithmInvalid { found } => {
+            json!({"type": "algorithm_invalid", "found": found})
+        }
         FindingDetail::AlgorithmNone => json!({"type": "algorithm_none"}),
+        FindingDetail::AlgorithmDeprecated {
+            declared,
+            replacement,
+        } => json!({
+            "type": "algorithm_deprecated",
+            "declared": declared,
+            "replacement": replacement,
+        }),
         FindingDetail::AlgorithmUnsupported {
             declared,
             supported,
@@ -731,6 +790,9 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
         }
         FindingDetail::SignatureSmallOrder { algorithm } => {
             json!({"type": "signature_small_order", "algorithm": algorithm})
+        }
+        FindingDetail::SignatureScalarOutOfRange { algorithm } => {
+            json!({"type": "signature_scalar_out_of_range", "algorithm": algorithm})
         }
         FindingDetail::CritUnsupported {
             extensions,
@@ -797,6 +859,11 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
             "codec": format!("0x{codec:x}"),
             "name": name,
         }),
+        FindingDetail::DidKeyNotForSigning { codec, name } => json!({
+            "type": "did_key_not_for_signing",
+            "codec": format!("0x{codec:x}"),
+            "name": name,
+        }),
         FindingDetail::WeakKey { key, criterion } => json!({
             "type": "weak_key",
             "key": key_ref(key),
@@ -807,15 +874,22 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
         FindingDetail::EmbeddedKeyRefused { location } => {
             json!({"type": "embedded_key_refused", "location": location})
         }
-        FindingDetail::CredentialKeyMismatch { carried_key, key } => json!({
-            "type": "credential_key_mismatch",
-            "carried_key": {
-                "location": carried_key.location,
-                "thumbprint": carried_key.thumbprint,
-            },
+        FindingDetail::EmbeddedKeyMismatch { embedded_key, key } => json!({
+            "type": "embedded_key_mismatch",
+            "embedded_key": embedded_key_ref(embedded_key),
+            "key": key_ref(key),
+        }),
+        FindingDetail::EmbeddedKeyProofCorrect { embedded_key, key } => json!({
+            "type": "embedded_key_proof_correct",
+            "embedded_key": embedded_key_ref(embedded_key),
             "key": key_ref(key),
         }),
     }
+}
+
+/// The embedded key as a finding names it: where it was, and its thumbprint.
+fn embedded_key_ref(key: &EmbeddedKeyRef) -> Value {
+    json!({"location": key.location, "thumbprint": key.thumbprint})
 }
 
 /// A key as a finding names it: where it came from, as `key_provenance` says, and its
@@ -901,6 +975,13 @@ fn key_source_kind(kind: KeySourceKind) -> &'static str {
     }
 }
 
+fn claim_location(location: ClaimLocation) -> &'static str {
+    match location {
+        ClaimLocation::Header => "header",
+        ClaimLocation::Payload => "payload",
+    }
+}
+
 fn did_key_problem(problem: DidKeyProblem) -> Value {
     match problem {
         DidKeyProblem::NotBase58btc => json!("not_base58btc"),
@@ -910,6 +991,8 @@ fn did_key_problem(problem: DidKeyProblem) -> Value {
             json!({"key_length": {"expected": expected, "found": found}})
         }
         DidKeyProblem::PointInvalid => json!("point_invalid"),
+        DidKeyProblem::PointNotCanonical => json!("point_not_canonical"),
+        DidKeyProblem::VersionPresent => json!("version_present"),
     }
 }
 
@@ -917,6 +1000,7 @@ fn check(check: Check) -> &'static str {
     match check {
         Check::RevocationStatus => "revocation_status",
         Check::ContextResolution => "context_resolution",
+        Check::Audience => "audience",
         Check::HolderBinding => "holder_binding",
         Check::ReplayBinding => "replay_binding",
         Check::IssuerAccreditation => "issuer_accreditation",
