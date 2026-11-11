@@ -11,7 +11,7 @@ with Visual Studio Code (VS Code) and the CodeLLDB extension. Linux is ARCHITECT
 | Component | Version | Shown by |
 |---|---|---|
 | macOS | 27.0.1, arm64 | `sw_vers` and `uname -m` |
-| VS Code | | Code > About Visual Studio Code |
+| VS Code | Version: 1.145.2 | Code > About Visual Studio Code |
 | CodeLLDB | 1.12.3 | the Extensions view |
 | CodeLLDB's lldb | 22.1.8 | `version` in the Debug Console: `lldb version 22.1.8-codelldb` |
 | Rust | 1.99.1, the toolchain `rust-toolchain.toml` pins | `rustc --version` in the repository |
