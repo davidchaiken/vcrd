@@ -13,13 +13,14 @@ review runs in rounds, one or two standards at a time, and this record grows wit
 | 5 | the terminology check ([REQUIREMENTS] §15); slices 3–5's red-then-green records | below |
 | 6 | level 1 of `text` and `plain`, which [DEVELOPMENT-PLAN.md], milestone 1, left to revisit | below |
 | 7 | keys and proofs: the terms, the rules of [REQUIREMENTS] §10 and [ARCHITECTURE] §8, and how a result reports them | below |
+| 8 | the debugging guide, [docs/debugging.md](../debugging.md), run end to end ([REQUIREMENTS] §6; [ARCHITECTURE] §10 [G1]) | below; [G1] closed |
 
 Each round also completes the entries of [docs/findings.md](../findings.md) whose
 standard it reads.
 
 **Where checked.** Branch `milestone-1`: round 1 from `94ff6d0`, round 2 from `46a2ca7`,
 round 3 from `30d1f91`, round 4 from `dda3a15`, round 6 from `fc34d1d`, round 7 from
-`fc34d1d` with round 6's changes.
+`fc34d1d` with round 6's changes, round 8 from `a24c60d`.
 Toolchain 1.99.1 (clippy 0.1.99). Locally on macOS 27.0.1, arm64. Line numbers are those
 after each round's changes, except in [Gaps found](#gaps-found), which describes the
 commit the round started from.
@@ -316,6 +317,32 @@ caller-supplied key may do when vcrd cannot obtain the issuer key, the case of t
 different keys that both give correct proofs, and a test of all 37 rows. Checks R33–R41
 below failed first; the expected files were then regenerated.
 
+## The debugging guide
+
+[REQUIREMENTS] §6 counts a debugger procedure as documented only once it has been run
+end to end. The maintainer ran [docs/debugging.md](../debugging.md) on 2026-11-11, on
+macOS 27.0.1 (arm64) in VS Code, with CodeLLDB 1.12.3 and its lldb 22.1.8, and Rust
+1.99.1, on the code of `a24c60d`. The commit that adds the guide, `6f1278e`, leaves
+vcrd's source as it was: `git diff --stat a24c60d 6f1278e -- vcrd-core vcrd-cli/src`
+prints nothing. A debugger bug in Rust 1.98.1's lldb formatters was fixed by moving the
+toolchain pin to 1.99.1.
+
+| Found | Change |
+|---|---|
+| `frame variable -D 1 *report` printed the whole report on one line: each value's summary includes those of everything it holds. | The first session prints one phase at a time, `print report->parse` and so on, and quotes the output for `verify`. |
+| A breakpoint left on a blank line of `vcrd-core/src/lib.rs` moved to line 60 of `utf8parse`'s `src/lib.rs`, a dependency of `clap`, with a line in the Debug Console that said so. | A caution under "Setting breakpoints", quoting that line. |
+| The table of where to break named neither an input that reaches each function nor how to see what the row was about. | An input and a "Look at" for each row, and the table of inputs merged in, in four tables by phase. |
+| A breakpoint in `classify` broke in the closures within it, and Step Out did not reach the value classified. | The row breaks in `flatten`, whose `leaves` gain each value with its class. |
+| After Step Out of `compare_embedded`, the comparison to make was not named. | `resolution.provenance.thumbprint` beside `embedded->jwk.thumbprint`. |
+| The Debug Console's `Console is in 'commands' mode` line, lldb's version, and its warning that it has no plugin for Rust. | Each quoted in the guide, the version with the command that prints it. |
+
+The helper scripts in `scripts/debugging/` were checked against vcrd's own output: the
+example's issuer gives the JWK and thumbprint of its `key_provenance`, and the embedded
+key of `fixtures/embedded-jwk.jwt` the thumbprint of its `embedded_key`. The key of
+[RFC 8037] Appendix A.3 gives `kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k`, the value
+`vcrd-core/src/keys.rs` tests against. They were run with OpenSSL 3.6.3 and with
+LibreSSL 3.3.6. Checks R42–R45 below failed first.
+
 ## The checks shown to fail
 
 [REQUIREMENTS] §11 holds that a check which has never failed has not shown that it detects
@@ -369,6 +396,11 @@ and then passed.
 | R39 | `vcrd-cli/tests/output.rs` `level_1_describes_the_embedded_key_in_a_phrase`, which replaces R30's test | Before the change | Failed at its first check (`output.rs:333`): no `Embedded key header.jwk: no issuer key to compare with; proof correct` |
 | R40 | `vcrd-core/tests/finding_reference.rs` | The two codes added to `FindingDetail::code` before their entries | Failed at its completeness check (`finding_reference.rs:43`) |
 | R41 | `vcrd-cli/tests/debugging.rs` | The five fixtures generated before `.vscode/launch.json` listed them | Failed at its check of the inputs offered (`debugging.rs:40`) |
+
+| R42 | `vcrd-cli/tests/debugging.rs` `the_guide_breaks_in_functions_that_exist`, new | `eddsa` renamed `ed25519` in the guide's table of where to break | `docs/debugging.md: no function ed25519 in vcrd-core/src/suites/jws.rs` |
+| R43 | The same, after the table became four | `embedded_proof` renamed `embedded_proofs` in the last table; then `decode_did_key` given the file `vcrd-core/src/runner.rs` | `no function embedded_proofs in vcrd-core/src/runner.rs`; then `no function decode_did_key in vcrd-core/src/runner.rs` |
+| R44 | `vcrd-cli/tests/debugging.rs` `the_guide_names_paths_that_exist`, new | `fixtures/issuer-missing.jwt` named `fixtures/issuer-absent.jwt` in the guide | `docs/debugging.md names paths that do not exist: ["fixtures/issuer-absent.jwt"]` |
+| R45 | `vcrd-cli/tests/debugging.rs` `the_guide_quotes_every_helper_script`, new | `scripts/debugging/b64url-encode.sh` changed, `tr -d '=\n'` to `tr -d '='`, and its quotation not | `docs/debugging.md does not quote scripts/debugging/b64url-encode.sh as it is` |
 
 The tests of gaps 7 to 17 were written against the new variants, added first with no
 behavior, so each failed on what vcrd did rather than for want of a type.

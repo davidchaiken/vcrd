@@ -369,7 +369,11 @@ bits (RFC 7518 §3.2 **[verified]**), the EC identity point, Ed25519 `is_weak`. 
 `did:key` decoding for `p256-pub` and `p521-pub`; `p384-pub`, `secp256k1-pub` and
 `rsa-pub` named only. [C1] the audit-status table; [C2] the elliptic-curve crate
 generation. [G2] the debugging guide run on Linux, at a time the maintainer chooses
-within the milestone, so that it is ready before a Linux-only failure needs it.
+within the milestone, so that it is ready before a Linux-only failure needs it. When
+Rust 1.101 is stable (scheduled for 2026-12-24), the toolchain pin moved to it and the
+guide run again on macOS, including a Step Out of `keys::resolve` and of
+`runner::embedded_proof` with CodeLLDB's Variables view open: at 1.99.1 both made
+CodeLLDB's memory grow without bound, and 1.101 brings rust-lang/rust#165113.
 
 **Delivers.** `vcrd verify` for five algorithms, with caller keys, the embedded-key opt-in
 and the allowlist; the keys and their proofs' results for every row of ARCHITECTURE §8's

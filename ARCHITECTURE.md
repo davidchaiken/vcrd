@@ -1125,10 +1125,12 @@ change.
 
 ### [G] Guides
 
-- **[G1] Write a debugging guide.** REQUIREMENTS §6 requires a documented debugger
-  configuration known to work. The prototype's `DEBUGGING.md` is the starting point.
+- ~~**[G1] Write a debugging guide.** REQUIREMENTS §6 requires a documented debugger
+  configuration known to work.~~ Resolved in milestone 1, slice 6: `docs/debugging.md`,
+  run end to end on macOS on 2026-11-11 (docs/reviews/milestone-1.md, "The debugging
+  guide").
 - **[G2] Run the debugging guide on Linux**, before a Linux-only failure needs it. [G1]
-  runs it on macOS only. Includes choosing the Linux environment, a virtual machine or
+  ran it on macOS only. Includes choosing the Linux environment, a virtual machine or
   a container on the maintainer's machine; when the work happens is the maintainer's
   decision (DEVELOPMENT-PLAN.md, milestone 2).
 

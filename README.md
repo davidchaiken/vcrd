@@ -23,6 +23,9 @@ it gives the same answer on any date; without it, vcrd uses the system clock, an
 [`fixtures/`](fixtures/README.md) holds the negative test inputs, each exercising one
 condition vcrd must report.
 
+[`docs/debugging.md`](docs/debugging.md) describes how to step through vcrd in a
+debugger, and how to check its results with other tools.
+
 ## License
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option.
