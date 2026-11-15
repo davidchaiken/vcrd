@@ -635,14 +635,14 @@ services of REQUIREMENTS §11 later. [D1], [D2]. The threat model promoted to
 `docs/threat-model.md` (REQUIREMENTS §12). README quickstart pointing at `examples/`.
 `cargo-dist` binaries, crates.io through Trusted Publishing, `Cargo.lock` tagged.
 `schema_version` stays 0 at 0.1.0 and is declared 1 in a later 0.x once external
-consumers have used it (REQUIREMENTS §9).
+consumers have used it (REQUIREMENTS §9). [D3] documentation clean-up.
 
 **Delivers.** Installable `vcrd-cli` and prebuilt binaries; `vcrd-core` on docs.rs.
 
 **Exit criteria.** The release pipeline runs from a tag; a semver-checks baseline exists;
 the changelog is generated; every §10 item is closed or carried with its tag.
 
-**Closes.** [P1], [P2], [P5], [P6], [T4], [T7], [D1], [D2].
+**Closes.** [P1], [P2], [P5], [P6], [T4], [T7], [D1], [D2], [D3].
 
 **Milestone review.** Re-run every prior milestone's review list against the release
 candidate, since REQUIREMENTS §11's practice is cumulative, and run the terminology check

@@ -1009,6 +1009,14 @@ valid.
   and in §2. Where the implementation changed a dependency without changing vcrd's
   functionality, remove it from REQUIREMENTS, and either record it here if the change is
   significant or leave a comment in the code.
+- **[D3] Documentation clean-up before release. Applies to permanent markdown documents
+  and comments in code, but not to documents that record the development process in
+  `docs/reviews`. In addition to removing references to the prototype [D1], remove
+  references to milestones. Work to be done in the future should refer to subsequent
+  releases, not milestones. Remove writing quirks common to LLM generation such as
+  overusing "name" as a verb (the human user will suggest alternatives for different
+  contexts) and the emphasis on justification of actions taken instead of introspection
+  into improvements (or just letting reasoning speak for itself).
 
 ### [S] Standards-review gaps carried from the prototype
 
