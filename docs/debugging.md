@@ -11,7 +11,7 @@ with Visual Studio Code (VS Code) and the CodeLLDB extension. Linux is ARCHITECT
 | Component | Version | Shown by |
 |---|---|---|
 | macOS | 27.0.1, arm64 | `sw_vers` and `uname -m` |
-| VS Code | Version: 1.145.2 | Code > About Visual Studio Code |
+| VS Code | 1.145.2 | `code --version` |
 | CodeLLDB | 1.12.3 | the Extensions view |
 | CodeLLDB's lldb | 22.1.8 | `version` in the Debug Console: `lldb version 22.1.8-codelldb` |
 | Rust | 1.99.1, the toolchain `rust-toolchain.toml` pins | `rustc --version` in the repository |
@@ -145,8 +145,9 @@ and `verify`, and what to look at there, in the Variables view or with `print`:
 | To see | Input | Break in | Look at | File |
 |---|---|---|---|---|
 | The `did:key` decoded | `examples/ed25519.jwt` | `decode_did_key` | At the breakpoint: `identifier`. Step Out: the value returned | `vcrd-core/src/keys.rs` |
-| Which key decides, and where it came from | `fixtures/embedded-jwk.jwt` | `resolve` | At the breakpoint: `*hints`. Step Over to its last line: `resolution` | `vcrd-core/src/keys.rs` |
+| The keys, and where each came from | `fixtures/embedded-jwk.jwt` | `resolve` | At the breakpoint: `*hints`. Step Over to its last line: `resolution`, whose `keys` holds each distinct key with its kinds | `vcrd-core/src/keys.rs` |
 | The embedded key compared with the issuer key | `fixtures/embedded-jwk.jwt` | `compare_embedded` | Step Out, into `resolve`: `resolution.provenance.thumbprint`, beside `embedded->jwk.thumbprint` | `vcrd-core/src/keys.rs` |
+| Which key decides, and which conditions for success are unmet (ARCHITECTURE §8, "Keys and proofs") | `fixtures/embedded-jwk-only.jwt` | `decide` | Step Over to its last line: `deciding` and `unmet` | `vcrd-core/src/keys.rs` |
 
 ### Proofs
 

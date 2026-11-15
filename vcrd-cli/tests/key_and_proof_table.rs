@@ -103,7 +103,7 @@ fn vcrd_agrees_with_every_row_milestone_1_can_produce() {
             assert!(provenance.get("source").is_none(), "{context}");
             assert_eq!(proof["outcome"], "not_attempted", "{context}");
         }
-        // Milestone 1 has no opt-in, so P does not succeed either.
+        // Milestone 1 has no opt-in, so E does not succeed either.
         assert_eq!(output.status.code() == Some(0), success == "Y", "{context}");
 
         // The findings that say what the keys and proofs show (docs/findings.md).

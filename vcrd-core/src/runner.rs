@@ -7,7 +7,9 @@ use crate::finding::{
     Attribution, EmbeddedKeyRef, Finding, FindingDetail, KeyRef, KeySourceKind, Severity,
 };
 use crate::json::{self, Json};
-use crate::keys::{self, PublicKey, Resolution};
+use crate::keys::{
+    self, Condition, Decision, KeyAndProof, KeyPolicy, KeySource, ProofKey, PublicKey, Resolution,
+};
 use crate::registry::{CredentialFormat, Detection, ProofInput, Registry};
 use crate::report::{
     BlockReason, Blocked, Check, InputSummary, InspectOutput, Missing, NotEvaluated,
@@ -202,7 +204,35 @@ fn verify_proofs(
     for descriptor in descriptors {
         let mut resolution = keys::resolve(&descriptor.key_hints);
         findings.append(&mut resolution.findings);
-        let outcome = match registry.suite(descriptor.suite) {
+        let suite = registry.suite(descriptor.suite);
+        // Each distinct key's proof, with the suite's findings for it. A refused key has
+        // none, and without the suite no key has one.
+        let mut key_proofs: Vec<Option<Proof>> = resolution
+            .keys
+            .iter()
+            .map(|k| {
+                let key = k.key.as_ref()?;
+                Some(suite?.verify(&proof_input(descriptor, Some(key)), ctx))
+            })
+            .collect();
+        let decision = keys::decide(
+            &keys_and_proofs(&resolution.keys, &key_proofs),
+            KeyPolicy::default(),
+        );
+        if decision.unmet.contains(&Condition::EmbeddedKeyOptIn)
+            && let Some(embedded) = &descriptor.key_hints.embedded
+        {
+            // Refused, and reported as such rather than as "no key material"
+            // (REQUIREMENTS §10). The opt-in that would allow it is the caller's.
+            findings.push(Finding::error(
+                Phase::Verify,
+                Attribution::Policy,
+                FindingDetail::EmbeddedKeyRefused {
+                    location: embedded.location,
+                },
+            ));
+        }
+        let outcome = match suite {
             None => {
                 findings.push(Finding::error(
                     Phase::Verify,
@@ -214,14 +244,22 @@ fn verify_proofs(
                 ProofOutcome::NotAttempted
             }
             Some(suite) => {
-                let input = proof_input(descriptor, resolution.key.as_ref());
-                let (outcome, suite_findings) = suite.verify(&input, ctx);
+                // The deciding proof's findings are the ones reported. Without a deciding
+                // proof, the suite still checks what does not depend on a key, such as
+                // the algorithm, so that those findings are reported too.
+                let deciding = decision
+                    .deciding
+                    .and_then(|d| key_proofs.get_mut(d))
+                    .and_then(Option::take);
+                let (outcome, suite_findings) =
+                    deciding.unwrap_or_else(|| suite.verify(&proof_input(descriptor, None), ctx));
                 findings.extend(suite_findings);
                 findings.extend(embedded_proof(
                     descriptor,
                     &mut resolution,
+                    &decision,
                     &outcome,
-                    |key| suite.verify(&proof_input(descriptor, Some(key)), ctx).0,
+                    &key_proofs,
                 ));
                 outcome
             }
@@ -242,23 +280,47 @@ fn verify_proofs(
     PhaseOutcome::from_findings(VerifyOutput { proofs }, findings)
 }
 
+/// A proof with one key, and the suite's findings for it.
+type Proof = (ProofOutcome, Vec<Finding>);
+
+/// What ARCHITECTURE §8's rules consult about each key: its kinds, whether key
+/// resolution refused it, and whether its proof is correct.
+fn keys_and_proofs(keys: &[ProofKey], proofs: &[Option<Proof>]) -> Vec<KeyAndProof> {
+    keys.iter()
+        .zip(proofs)
+        .map(|(key, proof)| KeyAndProof {
+            kinds: key.kinds.clone(),
+            refused: key.key.is_none(),
+            correct: matches!(proof, Some((ProofOutcome::Correct { .. }, _))),
+        })
+        .collect()
+}
+
 /// The proof with the embedded key as the proof key, for information: it decides the
 /// outcome only as ARCHITECTURE §8's rules say, and the deciding proof's findings are the
-/// ones reported. The same key gives the same result, so a key the same as the issuer
-/// key is not proved again. An embedded proof that is correct while the deciding proof
-/// is not is its own finding.
+/// ones reported. The same key gives the same result, so an embedded key that is the
+/// deciding proof key has the deciding proof's result. An embedded proof that is correct
+/// while the deciding proof is not is its own finding.
 fn embedded_proof(
     descriptor: &ProofDescriptor,
     resolution: &mut Resolution,
+    decision: &Decision,
     outcome: &ProofOutcome,
-    prove: impl FnOnce(&PublicKey) -> ProofOutcome,
+    proofs: &[Option<Proof>],
 ) -> Option<Finding> {
+    let index = resolution
+        .keys
+        .iter()
+        .position(|k| k.kinds.contains(&KeySource::CredentialEmbedded))?;
     let provenance = &mut resolution.provenance;
     let embedded = provenance.embedded_key.as_mut()?;
-    embedded.proof = match (embedded.same_as_issuer_key, &resolution.embedded_key) {
-        (Some(true), _) => outcome.clone(),
-        (_, Some(key)) => prove(key),
-        (_, None) => ProofOutcome::NotAttempted,
+    embedded.proof = if decision.deciding == Some(index) {
+        outcome.clone()
+    } else {
+        proofs
+            .get(index)
+            .and_then(Option::as_ref)
+            .map_or(ProofOutcome::NotAttempted, |(o, _)| o.clone())
     };
     let (source, thumbprint) = provenance.source.zip(provenance.thumbprint.clone())?;
     let correct = |o: &ProofOutcome| matches!(o, ProofOutcome::Correct { .. });
