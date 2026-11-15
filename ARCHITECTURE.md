@@ -754,12 +754,15 @@ The rules, which together make the table below:
 
 1. When a caller-supplied key and an issuer key are both present, they must be the same
    key, whatever the issuer key's source; otherwise vcrd does not succeed, unless the
-   caller opts in to letting its key override the issuer key (milestone 2). A
-   caller-supplied key is thus a pin when the credential names an issuer key, and the key
-   itself when it names none. RFC 8725 §3.8 has an application reject a JWT whose keys do
-   not belong to its issuer.
-2. The deciding proof key is the caller-supplied key or the issuer key. The embedded key
-   decides only when neither is present, and then only with the caller's opt-in.
+   caller opts in to letting its key override the issuer key (milestone 2). When the
+   credential names an issuer key, a caller-supplied key is thus a constraint on it, and
+   adds no other way to succeed; when there is no issuer key, the caller-supplied key
+   decides. RFC 8725 §3.8 has an application reject a JWT whose keys do not belong to
+   its issuer.
+2. The deciding proof key is the issuer key when it is present, and the caller-supplied
+   key when the issuer key is not present or the caller has opted in to the override. The
+   embedded key decides only when neither is present, and then only with the caller's
+   opt-in.
 3. vcrd may succeed only when the deciding proof is correct.
 
 A refused caller-supplied key or a refused issuer key prevents success; the findings say
@@ -767,19 +770,30 @@ why. A refused embedded key is reported and otherwise treated as not present. A 
 attempted for a reason specific to its key counts, for success, as incorrect. One not
 attempted for a reason independent of the key, such as an `alg` vcrd does not implement
 or a signature of the wrong length, means no proof is attempted with any key, and vcrd
-does not succeed. Two different keys that both give correct proofs are a degenerate case,
-detected and rejected (milestone 2; milestone 1, with one algorithm and `verify_strict`,
-cannot produce it). The rules are necessary, not sufficient: an inspect error, an expired
-`exp` or an unimplemented `crit` still prevents success. An issuer key vcrd cannot obtain,
-such as one for a DID method it does not resolve, is not present; what a caller-supplied
-key may then do is an open question of milestone 2 (DEVELOPMENT-PLAN.md).
+does not succeed. Two different keys that both give correct proofs prevent success,
+whatever the caller's opt-ins. That is not a hypothetical case: from any ECDSA signature,
+public-key recovery computes a second public key under which the signature also verifies
+(milestone 2; milestone 1, with one algorithm and `verify_strict`, cannot produce it). The
+rules are necessary, not sufficient: an inspect error, an expired `exp` or an
+unimplemented `crit` still prevents success. An issuer key vcrd cannot obtain, such as one
+for a DID method it does not resolve, is not present, so a caller-supplied key decides,
+and the result says that the two were not compared (milestone 2, DEVELOPMENT-PLAN.md).
 
-Every combination of at most one key of each kind (a key set is milestone 2's question).
-E, I and C say whether an embedded, issuer and caller-supplied key is present (1) or not
-(0). E=I, E=C and I=C say whether two present keys are the same key. E?, I? and C? say
-whether the proof with that key is correct. S? says whether vcrd may succeed (Y), must not
-(N), or may only with the caller's opt-in to an embedded key alone (P). Equality is
-transitive, so no row has exactly two of the three equal.
+The table gives every combination of at most one key of each kind in which no two
+different keys both give correct proofs. A key set supplies at most one caller-supplied
+key, the one matched to the credential (milestone 2). E, I and C say whether an embedded,
+issuer and caller-supplied key is present (1) or not (0). E=I, E=C and I=C say whether
+two present keys are the same key. E?, I? and C? say whether the proof with that key is
+correct. S? says whether vcrd may succeed (Y), must not (N), or may only with the caller's
+opt-in that lets that key decide: the embedded key alone (E), or the caller-supplied key in
+place of an issuer key unlike it (C). Equality is transitive, so no row has exactly two of
+the three equal. `keys::decide` in `vcrd-core/src/keys.rs` states the rules as one
+function. Its unit test checks that the rows are every combination this paragraph
+describes, once each, and checks each row's S? with each setting of the two opt-ins.
+
+**Note: This table is read by `vcrd-core/src/keys.rs` and by
+`vcrd-cli/tests/key_and_proof_table.rs`. Changes to this documentation will likely cause
+code tests to fail, which will need to be fixed with code updates.**
 
 | EIC | E=I | E=C | I=C | E? | I? | C? | S? | Situation |
 |---|---|---|---|---|---|---|---|---|
@@ -791,9 +805,9 @@ transitive, so no row has exactly two of the three equal.
 | 011 | — | — | Y | — | Y | Y | Y | issuer same as caller-supplied key, proof correct |
 | 011 | — | — | Y | — | N | N | N | issuer same as caller-supplied key, proof incorrect |
 | 011 | — | — | N | — | Y | N | N | caller-supplied key differs from issuer key |
-| 011 | — | — | N | — | N | Y | N | issuer proof key incorrect even though caller-supplied key is correct |
+| 011 | — | — | N | — | N | Y | C | issuer proof key incorrect even though caller-supplied key is correct |
 | 011 | — | — | N | — | N | N | N | both the caller-supplied proof key and the issuer proof key incorrect |
-| 100 | — | — | — | Y | — | — | P | embedded proof key correct, but embedded key alone requires opt-in for success |
+| 100 | — | — | — | Y | — | — | E | embedded proof key correct, but embedded key alone requires opt-in for success |
 | 100 | — | — | — | N | — | — | N | embedded proof key incorrect |
 | 101 | — | Y | — | Y | — | Y | Y | embedded same as caller-supplied proof key, proof correct |
 | 101 | — | Y | — | N | — | N | N | embedded same as caller-supplied proof key, proof incorrect |
@@ -808,17 +822,17 @@ transitive, so no row has exactly two of the three equal.
 | 111 | Y | Y | Y | Y | Y | Y | Y | all keys match and proof key correct |
 | 111 | Y | Y | Y | N | N | N | N | all keys match and the proof key incorrect |
 | 111 | Y | N | N | Y | Y | N | N | caller-supplied key differs from issuer key |
-| 111 | Y | N | N | N | N | Y | N | issuer/embedded key incorrect even though caller-supplied key is correct |
+| 111 | Y | N | N | N | N | Y | C | issuer/embedded key incorrect even though caller-supplied key is correct |
 | 111 | Y | N | N | N | N | N | N | both the caller-supplied proof key and the issuer/embedded proof key incorrect |
-| 111 | N | Y | N | Y | N | Y | N | issuer proof key incorrect even though caller-supplied/embedded proof key correct |
+| 111 | N | Y | N | Y | N | Y | C | issuer proof key incorrect even though caller-supplied/embedded proof key correct |
 | 111 | N | Y | N | N | Y | N | N | caller-supplied key differs from issuer key |
 | 111 | N | Y | N | N | N | N | N | both the caller-supplied/embedded proof key and the issuer proof key incorrect |
 | 111 | N | N | Y | Y | N | N | N | issuer/caller-supplied proof key incorrect has precedence over embedded key correct |
 | 111 | N | N | Y | N | Y | Y | Y | issuer/caller-supplied proof key correct has precedence over embedded key incorrect |
 | 111 | N | N | Y | N | N | N | N | both the issuer/caller-supplied proof key and the embedded proof key incorrect |
-| 111 | N | N | N | Y | N | N | N | caller-supplied proof key incorrect has precedence over embedded key proof correct |
+| 111 | N | N | N | Y | N | N | N | issuer and caller-supplied proof keys incorrect, though the embedded proof key is correct |
 | 111 | N | N | N | N | Y | N | N | caller-supplied key differs from issuer key |
-| 111 | N | N | N | N | N | Y | N | issuer proof key incorrect even though caller-supplied proof key correct |
+| 111 | N | N | N | N | N | Y | C | issuer proof key incorrect even though caller-supplied proof key correct |
 | 111 | N | N | N | N | N | N | N | three different proof keys, all incorrect |
 
 Milestone 1 produces the ten rows without a caller-supplied key, each from a fixture
@@ -996,6 +1010,14 @@ valid.
   and in §2. Where the implementation changed a dependency without changing vcrd's
   functionality, remove it from REQUIREMENTS, and either record it here if the change is
   significant or leave a comment in the code.
+- **[D3] Documentation clean-up before release. Applies to permanent markdown documents
+  and comments in code, but not to documents that record the development process in
+  `docs/reviews`. In addition to removing references to the prototype [D1], remove
+  references to milestones. Work to be done in the future should refer to subsequent
+  releases, not milestones. Remove writing quirks common to LLM generation such as
+  overusing "name" as a verb (the human user will suggest alternatives for different
+  contexts) and the emphasis on justification of actions taken instead of introspection
+  into improvements (or just letting reasoning speak for itself).
 
 ### [S] Standards-review gaps carried from the prototype
 
@@ -1104,6 +1126,14 @@ change.
   problem type, and how those §7.2 does not name, such as findings attributed to vcrd,
   appear; and `controller` and `controlledIdentifierDocument`, which depend on key
   resolution. Milestone 3, with presentations' `mediaType: vp` in milestone 4.
+- **[Q8] Key sets bound to an issuer identifier.** A key set matched by `kid` binds no
+  key to an issuer: with keys of issuers A and B in one set, a credential that names A
+  and whose `kid` names B's key gives a correct proof with B's key (RFC 8725 §3.8). For a
+  DID issuer, inspect requires a `kid` under the issuer (`inspect.kid_foreign`); for a URL
+  issuer, nothing does. Milestone 2's key set is the caller's assertion that its keys are
+  the issuer's (DEVELOPMENT-PLAN.md, milestone 2, decided 2026-11-13). A configuration
+  file holding the keys of several issuers needs each set bound to an issuer identifier:
+  decide with milestone 3's configuration file.
 
 ### [C] Crates and algorithm coverage
 
@@ -1122,6 +1152,12 @@ change.
   family, and RS384/RS512 remain, and ES256K needs a decision. The fixture for an
   unsupported algorithm, `fixtures/alg-ed448.jwt`, needs one that stays unsupported: if
   Ed448 is ever implemented, move the fixture to another.
+- **[C4] ES256K** (RFC 8812), left out of milestone 2's coverage (DEVELOPMENT-PLAN.md,
+  milestone 2, decided 2026-11-13). It would add `k256`, another crate for [C1]; and
+  whether RFC 8812 allows a signature whose S is in the upper half of the group order,
+  and whether `k256` accepts one, needs reading first. Milestone 2's exit criteria use an
+  ES256K credential as the unsupported algorithm, and a `secp256k1-pub` `did:key` as the
+  codec vcrd names but cannot use; implementing ES256K moves both to others.
 
 ### [G] Guides
 

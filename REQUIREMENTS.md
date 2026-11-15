@@ -811,8 +811,9 @@ key material the caller supplies; the issuer key, which the issuer identifier gi
 only where the identifier itself encodes the key, as `did:key` does); and a key embedded in
 the credential. A caller-supplied key and an issuer key, when both are present, must be the
 same key, whatever the issuer key's source, unless the caller opts in to letting its key
-override the issuer key: a caller-supplied key is a pin when the credential names an issuer
-key. The embedded key decides the outcome only when neither of the others is present, and
+override the issuer key. When the credential names an issuer key, a caller-supplied key is
+thus a constraint on it, and adds no other way to succeed; when there is no issuer key, the
+caller-supplied key decides. The embedded key decides the outcome only when neither of the others is present, and
 then only with an explicit caller opt-in. Otherwise the embedded key is refused, and the
 refusal is reported rather than treated as "no key material". ARCHITECTURE §8 states these
 rules in full, with a table of every combination of keys and proof results.

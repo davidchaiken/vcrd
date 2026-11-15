@@ -321,7 +321,7 @@ below failed first; the expected files were then regenerated.
 
 [REQUIREMENTS] §6 counts a debugger procedure as documented only once it has been run
 end to end. The maintainer ran [docs/debugging.md](../debugging.md) on 2026-11-11, on
-macOS 27.0.1 (arm64) in VS Code, with CodeLLDB 1.12.3 and its lldb 22.1.8, and Rust
+macOS 27.0.1 (arm64) in VS Code 1.145.2, with CodeLLDB 1.12.3 and its lldb 22.1.8, and Rust
 1.99.1, on the code of `a24c60d`. The commit that adds the guide, `6f1278e`, leaves
 vcrd's source as it was: `git diff --stat a24c60d 6f1278e -- vcrd-core vcrd-cli/src`
 prints nothing. A debugger bug in Rust 1.98.1's lldb formatters was fixed by moving the

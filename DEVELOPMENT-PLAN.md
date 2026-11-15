@@ -34,7 +34,7 @@ refer to ARCHITECTURE §10. Milestone sizes are unequal: milestones 1 and 5 are 
 |---|---|---|
 | 0 Skeleton | buildable workspace, CI, repository hardening | [P3] [P4] |
 | 1 Thin slice | `vcrd inspect`/`verify` on a VC-JOSE-COSE credential, Ed25519, `did:key` | [S3] [S4] [S5] [S6] [S7] [G1] |
-| 2 Keys and algorithms | five algorithms, caller keys, embedded-key precedence, allowlist, full provenance, Linux debugging | [S1] [S2] [C1] [C2] [C3] [Q4] [G2] |
+| 2 Keys and algorithms | RFC 7518's signature algorithms, caller keys, embedded-key precedence, allowlist, full provenance, Linux debugging | [S1] [S2] [C1] [C2] [C3] [Q4] [G2] |
 | 3 CLI contract | config file, env, designations, `formats`/`suites`, man pages, fuzz, coverage, limits corpus, a VCDM 2.0 §7.1 result | [Q2] [Q7] [T2] [T5] [T6] |
 | 4 Presentations | `vp+jwt` with enveloped credentials, challenge/domain; JWS JSON serialization | [F1] |
 | 5 Data Integrity | `eddsa-rdfc-2022`, `eddsa-jcs-2022`, pinned contexts, canonicalization budget, VCDM 1.1's JWT encoding | [Q1] [T1] [F2] |
@@ -375,9 +375,77 @@ guide run again on macOS, including a Step Out of `keys::resolve` and of
 `runner::embedded_proof` with CodeLLDB's Variables view open: at 1.99.1 both made
 CodeLLDB's memory grow without bound, and 1.101 brings rust-lang/rust#165113.
 
-**Delivers.** `vcrd verify` for five algorithms, with caller keys, the embedded-key opt-in
-and the allowlist; the keys and their proofs' results for every row of ARCHITECTURE §8's
-key and proof table.
+**Decided 2026-11-13**, before implementation:
+
+- *Algorithms ([C3]).* Every signature algorithm of RFC 7518 §3.1 except `none`: HS256,
+  HS384, HS512, RS256, RS384, RS512, ES256, ES384, ES512, PS256, PS384 and PS512, beside
+  Ed25519 and EdDSA. ES256K is a named follow-on, ARCHITECTURE §10 [C4]; Ed448 is not
+  planned. With ES384, a `p384-pub` `did:key` is decoded, so the exit criteria's codec
+  that vcrd names but cannot use is `secp256k1-pub`.
+- *Crates ([C2]).* RustCrypto's generation that shares `sha2` 0.11 with `ed25519-dalek` 3:
+  `p256`, `p384` and `p521` 0.14, `rsa` 0.10 and `hmac` 0.13, checked when added with
+  `cargo tree -d`; verification features only, and signing features only in
+  dev-dependencies, for the fixture generator. A release candidate, or an advisory open
+  against the chosen version, comes back for decision. The maintainer reviews the
+  dependency changes of each commit.
+- *The caller-supplied key set.* `--key-set <FILE>`, a JWK Set (RFC 7517 §5) and nothing
+  else: a single JWK is a caller error that says what was found. An entry RFC 7517 §5 says
+  to ignore (a `kty` vcrd does not know, a required member missing, a value out of range)
+  is ignored, with a warning. Matching: the header's `kid`, resolved against the issuer as
+  inspect resolves it, compared exactly with each entry's `kid`, and among equal `kid`s the
+  entries of the key type the algorithm takes; otherwise the sole entry, when the set has
+  one and either it or the credential has no `kid`. No match, or more than one entry left,
+  is a refused caller-supplied key, attributed to caller policy (exit 5), never a fall
+  back to the issuer key alone. An entry's `alg`, `use` and `key_ops` are the caller's
+  policy: a key they exclude is refused.
+- *The opt-ins.* `--allow-embedded-key` lets the embedded key decide alone, a `header.jwk`
+  and a `did:key` `kid` alike; when a credential carries both and they differ, neither
+  decides. `--allow-key-override` lets a caller-supplied key unlike the issuer key decide.
+  Without it the issuer key decides, and a caller-supplied key unlike it is an error
+  attributed to caller policy (exit 5); with it, a warning names the issuer key and its
+  proof's result. ARCHITECTURE §8's S? column marks the rows each opt-in changes, E and C,
+  and `keys::decide` states the rules as one function.
+- *A caller-supplied key when vcrd cannot obtain the issuer key* (the open question
+  above): the caller-supplied key decides, as the table has it. The issuer key not obtained
+  is then a warning of its own, naming the issuer, the method and the reason, and saying
+  that the two keys were not compared; the result records whether the key was matched by
+  `kid` or as the sole entry. Key sets bound to an issuer identifier are ARCHITECTURE §10
+  [Q8], for milestone 3's configuration file.
+- *Each key and its proof.* `key_provenance` lists each distinct key once, by thumbprint,
+  with its `kinds` (the values of `source`), a detail for each kind, its thumbprint and
+  JWK, its proof's result and, when it is refused, why; `deciding` names the deciding proof
+  key, and `same_as_issuer_key` goes. A key vcrd names but cannot decode has no
+  thumbprint. A symmetric key has none either, and its `k` is masked below `--unsafe=2`.
+  The maintainer tries the first implementation's input and output, and this decision and
+  the previous one may change then.
+- *A correct proof that does not count* is a warning of its own, naming the key and why
+  its proof does not count: a key-set entry not matched, or one of several entries left;
+  an embedded key refused alone; one of two embedded keys that differ; a caller-supplied
+  key unlike the issuer key. Key substitution keeps `verify.embedded_key_proof_correct`.
+  No proof is made with an algorithm the allowlist excludes, nor with a key whose own
+  `alg`, `use` or `key_ops` excludes the algorithm (RFC 8725 §3.1), nor with a weak key;
+  the finding says that it was not attempted, and why.
+- *Two different keys that both give correct proofs* prevent success, whatever the
+  opt-ins: an error attributed to the input, naming both keys. ECDSA public-key recovery
+  produces them; slice 6 has a fixture.
+- *The allowlist.* `--algorithms`, comma-separated or repeated; without it, every
+  supported algorithm. A name outside IANA's registry of JWS algorithms, and `none`, are
+  caller errors (exit 1). A rejection is attributed to caller policy (exit 5); unsupported
+  and rejected at once exits 6, with both findings.
+- *[Q4].* A `Limits` field for the RSA modulus, 4096 bits by default; a larger modulus is
+  attributed to caller policy (exit 5), with its size and the limit.
+- *[G2].* In an Ubuntu container, from a committed `Dockerfile` with the image pinned by
+  digest, by command line with `rust-lldb`, not in VS Code; after slice 3.
+- *Rust 1.101.* If milestone 2 is otherwise done before 1.101 is stable, the task moves to
+  milestone 3.
+- *Slices*, one pull request each: (1) the rules in one function; (2) each key and its
+  proof in the result; (3) caller-supplied keys and the two opt-ins, with Ed25519; (4)
+  [G2]; (5) the allowlist; (6) ECDSA, with [C1] and [C2]; (7) RSA, with [S1] and [Q4]; (8)
+  HMAC, with [S2]; (9) the milestone review; (10) Rust 1.101.
+
+**Delivers.** `vcrd verify` for RFC 7518's signature algorithms, with caller keys, the
+embedded-key opt-in, the override opt-in and the allowlist; the keys and their proofs'
+results for every row of ARCHITECTURE §8's key and proof table.
 
 **Exit criteria.** Fixtures: algorithm confusion (HS256 with the issuer's public-key bytes
 as secret, reported as key-type mismatch, not as unsupported); `none`; unsupported
@@ -385,9 +453,10 @@ as secret, reported as key-type mismatch, not as unsupported); `none`; unsupport
 key substitution (embedded proof key correct, issuer proof key incorrect, exit 4); a
 caller-supplied key unlike a `did:key` issuer key, with its proof correct, not successful
 without the override opt-in and successful with it; embedded-only
-refused, and accepted with the opt-in (exit 0, `source: credential_embedded`); RSA 1024
-and HS256 128-bit keys (weak-key findings); a P-384 `did:key` (named, exit 6); ES512
-happy path, the EUDI evidence point of REQUIREMENTS §10.
+refused, and accepted with the opt-in (exit 0, the deciding key's `kinds`
+`credential_embedded`); RSA 1024 and HS256 128-bit keys (weak-key findings); a
+`secp256k1-pub` `did:key` (named, exit 6); ES512 happy path, the EUDI evidence point of
+REQUIREMENTS §10.
 
 **Closes.** [S1], [S2], [C1], [C2], [C3] (decision recorded; anything left out is a named
 follow-on), [Q4], [G2].
@@ -401,6 +470,18 @@ as extracted by the fetch tool, lists codecs `0xe7`, `0xec`, `0xed`, `0x1200` an
 only; `p521-pub` (`0x1202`) and `rsa-pub` (`0x1205`) come from the multicodec registry,
 which that review did not read. Record the source for each codec when it is implemented,
 and treat P-521 `did:key` as an extension beyond the method spec's table.
+
+Also read (decided 2026-11-13): RFC 7518 §2's Base64urlUInt and §6.1–6.4's key
+parameters, on which the thumbprints that compare keys depend, and §3.5's PSS salt
+length; RFC 8725 §3.1–3.5, and §3.8 again for key sets; RFC 8017 §8.1.2, §8.2.2 and
+§9.1.2, with the `rsa` crate's verification code; FIPS 186-5 §6.4.2 and SEC 1 v2.0
+§2.3.3–2.3.4, with the ECDSA crates' code; RFC 9864 §2.1, for fully specified ECDSA names
+in JOSE; IANA's JOSE registries, for the allowlist's names; RFC 7515 Appendix A.1–A.4 and
+RFC 7520 §4.1–4.4, as known-answer tests; the terminology check (REQUIREMENTS §15) for
+the milestone's new terms; and ARCHITECTURE §9's rows. Known input: RFC 8725 §3.1 has each
+key used with exactly one algorithm, checked at the time of the operation, while an RSA
+key serves RS256 and PS256 alike and only a caller-supplied JWK's `alg` can bind it to
+one.
 
 ### Milestone 3. The CLI contract, configuration and hardening
 
@@ -554,14 +635,14 @@ services of REQUIREMENTS §11 later. [D1], [D2]. The threat model promoted to
 `docs/threat-model.md` (REQUIREMENTS §12). README quickstart pointing at `examples/`.
 `cargo-dist` binaries, crates.io through Trusted Publishing, `Cargo.lock` tagged.
 `schema_version` stays 0 at 0.1.0 and is declared 1 in a later 0.x once external
-consumers have used it (REQUIREMENTS §9).
+consumers have used it (REQUIREMENTS §9). [D3] documentation clean-up.
 
 **Delivers.** Installable `vcrd-cli` and prebuilt binaries; `vcrd-core` on docs.rs.
 
 **Exit criteria.** The release pipeline runs from a tag; a semver-checks baseline exists;
 the changelog is generated; every §10 item is closed or carried with its tag.
 
-**Closes.** [P1], [P2], [P5], [P6], [T4], [T7], [D1], [D2].
+**Closes.** [P1], [P2], [P5], [P6], [T4], [T7], [D1], [D2], [D3].
 
 **Milestone review.** Re-run every prior milestone's review list against the release
 candidate, since REQUIREMENTS §11's practice is cumulative, and run the terminology check

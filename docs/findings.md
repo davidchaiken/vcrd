@@ -8,6 +8,12 @@ and no longer reported. [Checks not evaluated](#checks-not-evaluated), at the en
 describes each check a result can list as not evaluated, and each reason;
 `vcrd-cli/tests/not_evaluated_reference.rs` checks those the same way.
 
+**Note: This document is read by `vcrd-core/tests/finding_reference.rs` (each code's
+`<a id>` anchor), `vcrd-cli/tests/not_evaluated_reference.rs` (each check's and reason's
+anchor, under "Checks not evaluated") and `vcrd-cli/tests/output.rs` (that section's
+heading). Changes to this documentation will likely cause code tests to fail, which will
+need to be fixed with code updates.**
+
 Each entry gives:
 
 - **Meaning**: the condition.

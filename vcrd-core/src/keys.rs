@@ -213,12 +213,10 @@ pub struct EmbeddedKeyReport {
 
 #[derive(Default)]
 pub(crate) struct Resolution {
-    pub key: Option<PublicKey>,
     pub provenance: KeyProvenance,
     pub findings: Vec<Finding>,
-    /// The embedded key, when vcrd can use it as a proof key, for the runner's proof
-    /// with it.
-    pub embedded_key: Option<PublicKey>,
+    /// Each distinct key, by RFC 7638 thumbprint, once, with every kind of key it is.
+    pub keys: Vec<ProofKey>,
 }
 
 impl Resolution {
@@ -230,9 +228,117 @@ impl Resolution {
     }
 }
 
-/// Finds the key for one proof (REQUIREMENTS §10). Milestone 1 has one source, the
-/// issuer identifier when it is a `did:key`. A key the credential carries is
-/// compared with that one, and refused when it is all there is.
+/// A distinct key and the kinds of key it is (ARCHITECTURE §8).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ProofKey {
+    /// In the order of precedence: caller-supplied, issuer, embedded.
+    pub kinds: Vec<KeySource>,
+    /// The key, when it may be a proof key; `None` when key resolution refused it for a
+    /// property of its own, as a weak key or a key of a type vcrd cannot use.
+    pub key: Option<PublicKey>,
+}
+
+/// The caller's opt-ins to ARCHITECTURE §8's rules. Neither can be set yet: milestone 2
+/// adds them to the `Context`, with caller-supplied keys.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct KeyPolicy {
+    /// The embedded key may decide when there is neither a caller-supplied key nor an
+    /// issuer key.
+    pub embedded_key_alone: bool,
+    /// A caller-supplied key unlike the issuer key decides in its place.
+    pub caller_key_override: bool,
+}
+
+/// What ARCHITECTURE §8's rules consult about one distinct key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct KeyAndProof {
+    pub kinds: Vec<KeySource>,
+    /// Refused by key resolution for a property of its own (ARCHITECTURE §8, "Refused").
+    pub refused: bool,
+    /// Whether the proof with it as the proof key is correct.
+    pub correct: bool,
+}
+
+/// A condition ARCHITECTURE §8's rules set for success.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Condition {
+    /// Some key may decide: a caller-supplied key, an issuer key, or an embedded key the
+    /// caller has opted in to.
+    KeyPresent,
+    /// The embedded key decides alone only with the caller's opt-in (rule 2).
+    EmbeddedKeyOptIn,
+    /// A caller-supplied key and an issuer key are the same key, unless the caller has
+    /// opted in to the override (rule 1).
+    CallerKeyIsIssuerKey,
+    /// The deciding proof key is not refused.
+    DecidingKeyNotRefused,
+    /// The deciding proof is correct (rule 3).
+    DecidingProofCorrect,
+    /// No two different keys give correct proofs.
+    OneKeyCorrect,
+}
+
+/// The outcome of ARCHITECTURE §8's rules for one proof.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Decision {
+    /// The deciding proof key, as an index into the keys; `None` when no key may decide.
+    pub deciding: Option<usize>,
+    /// The conditions for success that are not met; empty when the rules permit success.
+    pub unmet: Vec<Condition>,
+}
+
+/// ARCHITECTURE §8's rules, which together make its key and proof table: which key is the
+/// deciding proof key, and which conditions for success are unmet. `keys` holds each
+/// distinct key once, with every kind of key it is.
+pub(crate) fn decide(keys: &[KeyAndProof], policy: KeyPolicy) -> Decision {
+    let find = |kind| keys.iter().position(|k| k.kinds.contains(&kind));
+    let caller = find(KeySource::CallerSupplied);
+    let issuer = find(KeySource::IssuerIdentifier);
+    let embedded = find(KeySource::CredentialEmbedded);
+    let mut unmet = Vec::new();
+    // Rule 1: a caller-supplied key and an issuer key are the same key, unless the caller
+    // has opted in to letting its key override the issuer key.
+    let differ = matches!((caller, issuer), (Some(c), Some(i)) if c != i);
+    if differ && !policy.caller_key_override {
+        unmet.push(Condition::CallerKeyIsIssuerKey);
+    }
+    // Rule 2: the issuer key decides when it is present, and the caller-supplied key when
+    // it is not or the caller has opted in to the override; the embedded key, only when
+    // neither is present and the caller has opted in. A refused embedded key is treated
+    // as not present.
+    let deciding = match (caller, issuer) {
+        (Some(c), Some(_)) if differ && policy.caller_key_override => Some(c),
+        (_, Some(i)) => Some(i),
+        (Some(c), None) => Some(c),
+        (None, None) => match embedded {
+            Some(_) if !policy.embedded_key_alone => {
+                unmet.push(Condition::EmbeddedKeyOptIn);
+                None
+            }
+            Some(e) => Some(e).filter(|&e| keys.get(e).is_some_and(|k| !k.refused)),
+            None => None,
+        },
+    };
+    // Rule 3: the deciding proof is correct.
+    match deciding.and_then(|d| keys.get(d)) {
+        None if !unmet.contains(&Condition::EmbeddedKeyOptIn) => {
+            unmet.push(Condition::KeyPresent);
+        }
+        None => {}
+        Some(key) if key.refused => unmet.push(Condition::DecidingKeyNotRefused),
+        Some(key) if !key.correct => unmet.push(Condition::DecidingProofCorrect),
+        Some(_) => {}
+    }
+    // Two different keys that both give correct proofs (ARCHITECTURE §8).
+    if keys.iter().filter(|k| k.correct).count() > 1 {
+        unmet.push(Condition::OneKeyCorrect);
+    }
+    Decision { deciding, unmet }
+}
+
+/// Finds the keys for one proof (REQUIREMENTS §10): the issuer key, when the issuer
+/// identifier is a `did:key`, and a key the credential carries, compared with it.
+/// Which key decides is [`decide`]'s question.
 pub(crate) fn resolve(hints: &KeyHints) -> Resolution {
     let mut resolution = match (hints.issuer.as_deref(), &hints.embedded) {
         (Some(issuer), _) => from_issuer(issuer),
@@ -253,9 +359,9 @@ pub(crate) fn resolve(hints: &KeyHints) -> Resolution {
     resolution
 }
 
-/// Records the embedded key in the provenance (ARCHITECTURE §8): the same key as the
-/// issuer key when their thumbprints are equal, refused when there is no issuer key,
-/// and a warning when the two differ. The runner adds its proof's result.
+/// Records the embedded key (ARCHITECTURE §8): the same key as the issuer key when their
+/// thumbprints are equal, and a warning when the two differ. The runner adds its proof's
+/// result.
 fn compare_embedded(embedded: &EmbeddedKey, resolution: &mut Resolution) {
     let thumbprint = &embedded.jwk.thumbprint;
     let provenance = &resolution.provenance;
@@ -265,35 +371,35 @@ fn compare_embedded(embedded: &EmbeddedKey, resolution: &mut Resolution) {
         .zip(provenance.thumbprint.clone());
     let same_as_issuer_key = issuer.as_ref().map(|(_, t)| t == thumbprint);
     let method = provenance.method;
-    match issuer {
-        // Refused, and reported as such rather than as "no key material"
-        // (REQUIREMENTS §10). The opt-in that would allow it is the caller's.
-        None => resolution.findings.push(Finding::error(
+    if let Some((source, key)) = issuer.filter(|_| same_as_issuer_key == Some(false)) {
+        resolution.findings.push(Finding::new(
             Phase::Verify,
-            Attribution::Policy,
-            FindingDetail::EmbeddedKeyRefused {
-                location: embedded.location,
-            },
-        )),
-        Some((source, key)) if same_as_issuer_key == Some(false) => {
-            resolution.findings.push(Finding::new(
-                Phase::Verify,
-                Attribution::Input,
-                Severity::Warning,
-                FindingDetail::EmbeddedKeyMismatch {
-                    embedded_key: EmbeddedKeyRef {
-                        location: embedded.location,
-                        thumbprint: thumbprint.clone(),
-                    },
-                    key: KeyRef {
-                        source,
-                        method,
-                        thumbprint: key,
-                    },
+            Attribution::Input,
+            Severity::Warning,
+            FindingDetail::EmbeddedKeyMismatch {
+                embedded_key: EmbeddedKeyRef {
+                    location: embedded.location,
+                    thumbprint: thumbprint.clone(),
                 },
-            ));
-        }
-        Some(_) => {}
+                key: KeyRef {
+                    source,
+                    method,
+                    thumbprint: key,
+                },
+            },
+        ));
+    }
+    let issuer_key = resolution
+        .keys
+        .iter_mut()
+        .find(|k| k.kinds.contains(&KeySource::IssuerIdentifier))
+        .filter(|_| same_as_issuer_key == Some(true));
+    match issuer_key {
+        Some(key) => key.kinds.push(KeySource::CredentialEmbedded),
+        None => resolution.keys.push(ProofKey {
+            kinds: vec![KeySource::CredentialEmbedded],
+            key: embedded.jwk.key.clone(),
+        }),
     }
     resolution.provenance.embedded_key = Some(EmbeddedKeyReport {
         location: embedded.location.to_owned(),
@@ -302,7 +408,6 @@ fn compare_embedded(embedded: &EmbeddedKey, resolution: &mut Resolution) {
         same_as_issuer_key,
         proof: ProofOutcome::NotAttempted,
     });
-    resolution.embedded_key = embedded.jwk.key.clone();
 }
 
 /// The key the issuer identifier encodes, when it is a `did:key`.
@@ -359,13 +464,19 @@ fn from_issuer(issuer: &str) -> Resolution {
                 Resolution {
                     provenance,
                     findings: vec![finding],
-                    ..Resolution::default()
+                    keys: vec![ProofKey {
+                        kinds: vec![KeySource::IssuerIdentifier],
+                        key: None,
+                    }],
                 }
             } else {
                 Resolution {
-                    key: Some(key),
                     provenance,
-                    ..Resolution::default()
+                    findings: Vec::new(),
+                    keys: vec![ProofKey {
+                        kinds: vec![KeySource::IssuerIdentifier],
+                        key: Some(key),
+                    }],
                 }
             }
         }
@@ -490,7 +601,257 @@ mod tests {
             resolution.provenance.thumbprint.as_deref(),
             Some("kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k")
         );
-        assert!(resolution.key.is_some());
+        assert_eq!(
+            kinds(&resolution),
+            [(vec![KeySource::IssuerIdentifier], true)]
+        );
+    }
+
+    /// Each distinct key resolution found: its kinds, and whether it may be a proof key.
+    fn kinds(resolution: &Resolution) -> Vec<(Vec<KeySource>, bool)> {
+        resolution
+            .keys
+            .iter()
+            .map(|k| (k.kinds.clone(), k.key.is_some()))
+            .collect()
+    }
+
+    /// The table's key columns, in its order: E, I and C.
+    const KINDS: [KeySource; 3] = [
+        KeySource::CredentialEmbedded,
+        KeySource::IssuerIdentifier,
+        KeySource::CallerSupplied,
+    ];
+
+    /// The table's columns E=I, E=C and I=C, as pairs of indexes into [`KINDS`].
+    const PAIRS: [(usize, usize); 3] = [(0, 1), (0, 2), (1, 2)];
+
+    /// A cell for a key, or a pair of keys, that is not present.
+    const ABSENT: &str = "—";
+
+    /// ARCHITECTURE §8's key and proof table: its header's cells, and each row's.
+    fn key_and_proof_table(architecture: &str) -> (Vec<&str>, Vec<Vec<&str>>) {
+        fn cells(line: &str) -> Vec<&str> {
+            line.trim_matches('|').split('|').map(str::trim).collect()
+        }
+        let mut lines = architecture
+            .lines()
+            .skip_while(|l| !l.starts_with("| EIC |"));
+        let header = cells(lines.next().unwrap());
+        let rows = lines
+            .take_while(|l| l.starts_with('|'))
+            .filter(|l| !l.starts_with("|---"))
+            .map(cells)
+            .collect();
+        (header, rows)
+    }
+
+    /// ARCHITECTURE §8's key and proof table against `decide`: its rows are every
+    /// combination its preamble describes, once each, and each row's S? is what
+    /// `decide` gives with each setting of the two opt-ins. The test reads the table, so
+    /// that the table and the rules cannot disagree unnoticed.
+    #[test]
+    fn decide_agrees_with_every_row_of_the_key_and_proof_table() {
+        let architecture =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../ARCHITECTURE.md"))
+                .unwrap();
+        let (header, rows) = key_and_proof_table(&architecture);
+        // The cells before S? say which keys are present, which are the same key, and
+        // which proofs are correct.
+        let combination = header.iter().position(|&c| c == "S?").unwrap();
+        let mut described: Vec<Vec<String>> = rows
+            .iter()
+            .map(|row| row[..combination].iter().map(|&c| c.to_owned()).collect())
+            .collect();
+        let mut expected = every_combination();
+        described.sort();
+        expected.sort();
+        let missing: Vec<_> = expected.iter().filter(|c| !described.contains(c)).collect();
+        let repeated: Vec<_> = described.windows(2).filter(|w| w[0] == w[1]).collect();
+        let unexpected: Vec<_> = described.iter().filter(|c| !expected.contains(c)).collect();
+        // `every_combination` gives each combination once, so these three lists are
+        // empty exactly when the rows and the combinations are equal.
+        assert!(
+            missing.is_empty() && repeated.is_empty() && unexpected.is_empty(),
+            "missing: {missing:?}; repeated: {repeated:?}; not described: {unexpected:?}"
+        );
+        for row in &rows {
+            let [
+                eic,
+                e_i,
+                e_c,
+                i_c,
+                e_proof,
+                i_proof,
+                c_proof,
+                success,
+                situation,
+            ] = row[..]
+            else {
+                panic!("a row of nine cells: {row:?}")
+            };
+            let keys = row_keys(eic, [e_i, e_c, i_c], [e_proof, i_proof, c_proof]);
+            for (embedded_key_alone, caller_key_override) in
+                [(false, false), (true, false), (false, true), (true, true)]
+            {
+                let policy = KeyPolicy {
+                    embedded_key_alone,
+                    caller_key_override,
+                };
+                let permitted = match success {
+                    "Y" => true,
+                    "N" => false,
+                    "E" => embedded_key_alone,
+                    "C" => caller_key_override,
+                    other => panic!("S? is {other}: {row:?}"),
+                };
+                let decision = decide(&keys, policy);
+                let cells = row[..combination].join(" ");
+                let context =
+                    format!("row {cells} {success} ({situation}), {policy:?}: {decision:?}");
+                assert_eq!(decision.unmet.is_empty(), permitted, "{context}");
+                if permitted {
+                    assert!(decision.deciding.is_some(), "{context}");
+                }
+            }
+        }
+    }
+
+    /// Every combination the table's preamble describes, as the cells before S?: at most
+    /// one key of each kind; which present keys are the same key, equality being
+    /// transitive; and each distinct key's proof, no two different keys both correct.
+    fn every_combination() -> Vec<Vec<String>> {
+        let yes_no = |b: bool| if b { "Y" } else { "N" };
+        let mut combinations = Vec::new();
+        for mask in 0..1usize << KINDS.len() {
+            let present: Vec<usize> = (0..KINDS.len()).filter(|k| mask & 1 << k != 0).collect();
+            for groups in groupings(present.len()) {
+                // Each present kind's distinct key, by index into `groups`.
+                let key = |kind: usize| present.iter().position(|&p| p == kind).map(|i| groups[i]);
+                let distinct = groups.iter().max().map_or(0, |m| m + 1);
+                // No key's proof correct, or one distinct key's.
+                for correct in std::iter::once(None).chain((0..distinct).map(Some)) {
+                    let eic = (0..KINDS.len())
+                        .map(|k| if key(k).is_some() { '1' } else { '0' })
+                        .collect::<String>();
+                    let same = PAIRS.iter().map(|&(a, b)| match (key(a), key(b)) {
+                        (Some(x), Some(y)) => yes_no(x == y),
+                        _ => ABSENT,
+                    });
+                    let proofs = (0..KINDS.len())
+                        .map(|k| key(k).map_or(ABSENT, |g| yes_no(Some(g) == correct)));
+                    let cells = std::iter::once(eic.as_str()).chain(same).chain(proofs);
+                    combinations.push(cells.map(str::to_owned).collect());
+                }
+            }
+        }
+        combinations
+    }
+
+    /// Every way to group `n` present keys into distinct keys, each once, as the distinct
+    /// key of each present key: the restricted growth strings of length `n`.
+    fn groupings(n: usize) -> Vec<Vec<usize>> {
+        let mut all = vec![Vec::new()];
+        for _ in 0..n {
+            all = all
+                .into_iter()
+                .flat_map(|groups: Vec<usize>| {
+                    let new = groups.iter().max().map_or(0, |m| m + 1);
+                    (0..=new).map(move |g| [groups.clone(), vec![g]].concat())
+                })
+                .collect();
+        }
+        all
+    }
+
+    /// The distinct keys a row of the table describes: E, I and C, each present key once,
+    /// joined with an earlier one where the row says the two are the same key.
+    fn row_keys(eic: &str, same: [&str; 3], proofs: [&str; 3]) -> Vec<KeyAndProof> {
+        let present: Vec<bool> = eic.chars().map(|c| c == '1').collect();
+        let mut keys: Vec<(Vec<usize>, bool)> = Vec::new();
+        for kind in (0..KINDS.len()).filter(|&k| present[k]) {
+            let correct = proofs[kind] == "Y";
+            let earlier = PAIRS
+                .iter()
+                .zip(same)
+                .find(|((a, b), cell)| *b == kind && *cell == "Y" && present[*a])
+                .map(|((a, _), _)| *a);
+            match earlier.and_then(|a| keys.iter_mut().find(|(kinds, _)| kinds.contains(&a))) {
+                Some((kinds, earlier_correct)) => {
+                    assert_eq!(*earlier_correct, correct, "the same key's proofs: {eic}");
+                    kinds.push(kind);
+                }
+                None => keys.push((vec![kind], correct)),
+            }
+        }
+        keys.into_iter()
+            .map(|(kinds, correct)| KeyAndProof {
+                // In the order of precedence: caller-supplied, issuer, embedded.
+                kinds: kinds.iter().rev().map(|&k| KINDS[k]).collect(),
+                refused: false,
+                correct,
+            })
+            .collect()
+    }
+
+    /// What the table leaves out, or cannot show: no key, a refused key, and two
+    /// different keys whose proofs are both correct (ARCHITECTURE §8).
+    #[test]
+    fn decide_beyond_the_table() {
+        use Condition::*;
+        use KeySource::*;
+        let key = |kinds: &[KeySource], refused, correct| KeyAndProof {
+            kinds: kinds.to_vec(),
+            refused,
+            correct,
+        };
+        let decision = |deciding, unmet: &[Condition]| Decision {
+            deciding,
+            unmet: unmet.to_vec(),
+        };
+        let neither = KeyPolicy::default();
+        let both = KeyPolicy {
+            embedded_key_alone: true,
+            caller_key_override: true,
+        };
+        assert_eq!(decide(&[], both), decision(None, &[KeyPresent]));
+        // A refused issuer key decides, and prevents success.
+        assert_eq!(
+            decide(&[key(&[IssuerIdentifier], true, false)], neither),
+            decision(Some(0), &[DecidingKeyNotRefused])
+        );
+        // A refused embedded key is treated as not present, even with the opt-in.
+        assert_eq!(
+            decide(&[key(&[CredentialEmbedded], true, false)], both),
+            decision(None, &[KeyPresent])
+        );
+        // Without the opt-in, an embedded key alone is refused for that reason.
+        assert_eq!(
+            decide(&[key(&[CredentialEmbedded], true, false)], neither),
+            decision(None, &[EmbeddedKeyOptIn])
+        );
+        // Two different keys with correct proofs: the issuer key and the embedded key.
+        let issuer_and_embedded = [
+            key(&[IssuerIdentifier], false, true),
+            key(&[CredentialEmbedded], false, true),
+        ];
+        assert_eq!(
+            decide(&issuer_and_embedded, both),
+            decision(Some(0), &[OneKeyCorrect])
+        );
+        // A caller-supplied key and an issuer key, with the override and without it.
+        let caller_and_issuer = [
+            key(&[CallerSupplied], false, true),
+            key(&[IssuerIdentifier], false, true),
+        ];
+        assert_eq!(
+            decide(&caller_and_issuer, both),
+            decision(Some(0), &[OneKeyCorrect])
+        );
+        assert_eq!(
+            decide(&caller_and_issuer, neither),
+            decision(Some(1), &[CallerKeyIsIssuerKey, OneKeyCorrect])
+        );
     }
 
     #[test]
@@ -727,10 +1088,16 @@ mod tests {
         let issuer = did_key(&[0xed, 0x01], &rfc8037_key());
         let resolution = with_embedded(Some(issuer), RFC8037_X);
         assert!(resolution.findings.is_empty(), "{:?}", resolution.findings);
+        assert_eq!(
+            kinds(&resolution),
+            [(
+                vec![KeySource::IssuerIdentifier, KeySource::CredentialEmbedded],
+                true
+            )]
+        );
         let embedded = resolution.provenance.embedded_key.unwrap();
         assert_eq!(embedded.same_as_issuer_key, Some(true));
         assert_eq!(embedded.location, "header.jwk");
-        assert!(resolution.key.is_some());
     }
 
     #[test]
@@ -744,22 +1111,49 @@ mod tests {
         };
         assert_eq!(finding.code, "verify.embedded_key_mismatch");
         assert_eq!(finding.severity, Severity::Warning);
+        assert_eq!(
+            kinds(&resolution),
+            [
+                (vec![KeySource::IssuerIdentifier], true),
+                (vec![KeySource::CredentialEmbedded], true)
+            ]
+        );
         let embedded = resolution.provenance.embedded_key.unwrap();
         assert_eq!(embedded.same_as_issuer_key, Some(false));
-        assert!(resolution.key.is_some(), "the issuer's key is still used");
     }
 
+    /// Resolution reports an embedded key alone, and refuses nothing: the rules refuse it
+    /// without the caller's opt-in (ARCHITECTURE §8, rule 2), and the runner reports the
+    /// refusal, `verify.embedded_key_refused`.
     #[test]
-    fn an_embedded_key_alone_is_refused_by_policy() {
+    fn an_embedded_key_alone_decides_only_with_the_opt_in() {
         let resolution = with_embedded(None, RFC8037_X);
-        let [finding] = resolution.findings.as_slice() else {
-            panic!("one finding: {:?}", resolution.findings)
-        };
-        assert_eq!(finding.code, "verify.embedded_key_refused");
-        assert_eq!(finding.attribution, Attribution::Policy);
+        assert!(resolution.findings.is_empty(), "{:?}", resolution.findings);
         assert_eq!(resolution.provenance.source, None);
-        assert!(resolution.key.is_none());
-        assert!(resolution.embedded_key.is_some());
+        assert_eq!(
+            kinds(&resolution),
+            [(vec![KeySource::CredentialEmbedded], true)]
+        );
+        let embedded = [KeyAndProof {
+            kinds: vec![KeySource::CredentialEmbedded],
+            refused: false,
+            correct: true,
+        }];
+        assert_eq!(
+            decide(&embedded, KeyPolicy::default()).unmet,
+            [Condition::EmbeddedKeyOptIn]
+        );
+        let opted_in = KeyPolicy {
+            embedded_key_alone: true,
+            ..KeyPolicy::default()
+        };
+        assert_eq!(
+            decide(&embedded, opted_in),
+            Decision {
+                deciding: Some(0),
+                unmet: Vec::new()
+            }
+        );
     }
 
     #[test]
