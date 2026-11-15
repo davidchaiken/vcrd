@@ -781,18 +781,19 @@ and the result says that the two were not compared (milestone 2, DEVELOPMENT-PLA
 
 The table gives every combination of at most one key of each kind in which no two
 different keys both give correct proofs. A key set supplies at most one caller-supplied
-key, the one matched to the credential (milestone 2). E, I and C say whether an embedded, issuer
-and caller-supplied key is present (1) or not (0). E=I, E=C and I=C say whether two
-present keys are the same key. E?, I? and C? say whether the proof with that key is
+key, the one matched to the credential (milestone 2). E, I and C say whether an embedded,
+issuer and caller-supplied key is present (1) or not (0). E=I, E=C and I=C say whether
+two present keys are the same key. E?, I? and C? say whether the proof with that key is
 correct. S? says whether vcrd may succeed (Y), must not (N), or may only with the caller's
 opt-in that lets that key decide: the embedded key alone (E), or the caller-supplied key in
 place of an issuer key unlike it (C). Equality is transitive, so no row has exactly two of
 the three equal. `keys::decide` in `vcrd-core/src/keys.rs` states the rules as one
-function, and its unit test reads this table and checks every row with each setting of
-the two opt-ins.
+function. Its unit test checks that the rows are every combination this paragraph
+describes, once each, and checks each row's S? with each setting of the two opt-ins.
 
-**Note: This table is read by `vcrd-core/src/keys.rs`. Changes to this documentation will
-likely cause code tests to fail, which will need to be fixed with code updates.**
+**Note: This table is read by `vcrd-core/src/keys.rs` and by
+`vcrd-cli/tests/key_and_proof_table.rs`. Changes to this documentation will likely cause
+code tests to fail, which will need to be fixed with code updates.**
 
 | EIC | E=I | E=C | I=C | E? | I? | C? | S? | Situation |
 |---|---|---|---|---|---|---|---|---|

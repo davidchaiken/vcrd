@@ -32,6 +32,10 @@ Every value in them is invented; none is anyone's personal data.
 Exit codes are ARCHITECTURE §6's. Each fixture is derived from the curated example unless
 it says otherwise.
 
+**Note: This table is read by `vcrd-core/tests/fixtures.rs`, which fails when a file in
+this directory has no row. Changes to this documentation will likely cause code tests to
+fail, which will need to be fixed with code updates.**
+
 | File | Condition | Finding | Attribution | Exit |
 |---|---|---|---|---|
 | `deep-nesting.jwt` | The payload nests 42 levels deep, over the default depth limit of 32 and under `serde_json`'s own 128. | `parse.nesting_too_deep` | policy | 5 |

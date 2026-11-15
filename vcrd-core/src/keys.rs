@@ -616,25 +616,65 @@ mod tests {
             .collect()
     }
 
-    /// ARCHITECTURE §8's key and proof table against `decide`: every row, with each
-    /// setting of the two opt-ins. The test reads the table, so that the table and the
-    /// rules cannot disagree unnoticed.
+    /// The table's key columns, in its order: E, I and C.
+    const KINDS: [KeySource; 3] = [
+        KeySource::CredentialEmbedded,
+        KeySource::IssuerIdentifier,
+        KeySource::CallerSupplied,
+    ];
+
+    /// The table's columns E=I, E=C and I=C, as pairs of indexes into [`KINDS`].
+    const PAIRS: [(usize, usize); 3] = [(0, 1), (0, 2), (1, 2)];
+
+    /// A cell for a key, or a pair of keys, that is not present.
+    const ABSENT: &str = "—";
+
+    /// ARCHITECTURE §8's key and proof table: its header's cells, and each row's.
+    fn key_and_proof_table(architecture: &str) -> (Vec<&str>, Vec<Vec<&str>>) {
+        fn cells(line: &str) -> Vec<&str> {
+            line.trim_matches('|').split('|').map(str::trim).collect()
+        }
+        let mut lines = architecture
+            .lines()
+            .skip_while(|l| !l.starts_with("| EIC |"));
+        let header = cells(lines.next().unwrap());
+        let rows = lines
+            .take_while(|l| l.starts_with('|'))
+            .filter(|l| !l.starts_with("|---"))
+            .map(cells)
+            .collect();
+        (header, rows)
+    }
+
+    /// ARCHITECTURE §8's key and proof table against `decide`: its rows are every
+    /// combination its preamble describes, once each, and each row's S? is what
+    /// `decide` gives with each setting of the two opt-ins. The test reads the table, so
+    /// that the table and the rules cannot disagree unnoticed.
     #[test]
     fn decide_agrees_with_every_row_of_the_key_and_proof_table() {
         let architecture =
             std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../ARCHITECTURE.md"))
                 .unwrap();
-        let rows: Vec<Vec<&str>> = architecture
-            .split_once("| EIC | E=I |")
-            .unwrap()
-            .1
-            .lines()
-            // The rest of the header row, then the delimiter row.
-            .skip(2)
-            .take_while(|l| l.starts_with('|'))
-            .map(|l| l.trim_matches('|').split('|').map(str::trim).collect())
+        let (header, rows) = key_and_proof_table(&architecture);
+        // The cells before S? say which keys are present, which are the same key, and
+        // which proofs are correct.
+        let combination = header.iter().position(|&c| c == "S?").unwrap();
+        let mut described: Vec<Vec<String>> = rows
+            .iter()
+            .map(|row| row[..combination].iter().map(|&c| c.to_owned()).collect())
             .collect();
-        assert_eq!(rows.len(), 37, "the table's rows");
+        let mut expected = every_combination();
+        described.sort();
+        expected.sort();
+        let missing: Vec<_> = expected.iter().filter(|c| !described.contains(c)).collect();
+        let repeated: Vec<_> = described.windows(2).filter(|w| w[0] == w[1]).collect();
+        let unexpected: Vec<_> = described.iter().filter(|c| !expected.contains(c)).collect();
+        // `every_combination` gives each combination once, so these three lists are
+        // empty exactly when the rows and the combinations are equal.
+        assert!(
+            missing.is_empty() && repeated.is_empty() && unexpected.is_empty(),
+            "missing: {missing:?}; repeated: {repeated:?}; not described: {unexpected:?}"
+        );
         for row in &rows {
             let [
                 eic,
@@ -666,8 +706,9 @@ mod tests {
                     other => panic!("S? is {other}: {row:?}"),
                 };
                 let decision = decide(&keys, policy);
-                let cells = row[..8].join(" ");
-                let context = format!("row {cells} ({situation}), {policy:?}: {decision:?}");
+                let cells = row[..combination].join(" ");
+                let context =
+                    format!("row {cells} {success} ({situation}), {policy:?}: {decision:?}");
                 assert_eq!(decision.unmet.is_empty(), permitted, "{context}");
                 if permitted {
                     assert!(decision.deciding.is_some(), "{context}");
@@ -676,17 +717,59 @@ mod tests {
         }
     }
 
+    /// Every combination the table's preamble describes, as the cells before S?: at most
+    /// one key of each kind; which present keys are the same key, equality being
+    /// transitive; and each distinct key's proof, no two different keys both correct.
+    fn every_combination() -> Vec<Vec<String>> {
+        let yes_no = |b: bool| if b { "Y" } else { "N" };
+        let mut combinations = Vec::new();
+        for mask in 0..1usize << KINDS.len() {
+            let present: Vec<usize> = (0..KINDS.len()).filter(|k| mask & 1 << k != 0).collect();
+            for groups in groupings(present.len()) {
+                // Each present kind's distinct key, by index into `groups`.
+                let key = |kind: usize| present.iter().position(|&p| p == kind).map(|i| groups[i]);
+                let distinct = groups.iter().max().map_or(0, |m| m + 1);
+                // No key's proof correct, or one distinct key's.
+                for correct in std::iter::once(None).chain((0..distinct).map(Some)) {
+                    let eic = (0..KINDS.len())
+                        .map(|k| if key(k).is_some() { '1' } else { '0' })
+                        .collect::<String>();
+                    let same = PAIRS.iter().map(|&(a, b)| match (key(a), key(b)) {
+                        (Some(x), Some(y)) => yes_no(x == y),
+                        _ => ABSENT,
+                    });
+                    let proofs = (0..KINDS.len())
+                        .map(|k| key(k).map_or(ABSENT, |g| yes_no(Some(g) == correct)));
+                    let cells = std::iter::once(eic.as_str()).chain(same).chain(proofs);
+                    combinations.push(cells.map(str::to_owned).collect());
+                }
+            }
+        }
+        combinations
+    }
+
+    /// Every way to group `n` present keys into distinct keys, each once, as the distinct
+    /// key of each present key: the restricted growth strings of length `n`.
+    fn groupings(n: usize) -> Vec<Vec<usize>> {
+        let mut all = vec![Vec::new()];
+        for _ in 0..n {
+            all = all
+                .into_iter()
+                .flat_map(|groups: Vec<usize>| {
+                    let new = groups.iter().max().map_or(0, |m| m + 1);
+                    (0..=new).map(move |g| [groups.clone(), vec![g]].concat())
+                })
+                .collect();
+        }
+        all
+    }
+
     /// The distinct keys a row of the table describes: E, I and C, each present key once,
     /// joined with an earlier one where the row says the two are the same key.
     fn row_keys(eic: &str, same: [&str; 3], proofs: [&str; 3]) -> Vec<KeyAndProof> {
-        use KeySource::*;
-        // The columns' order: E, I, C.
-        const KINDS: [KeySource; 3] = [CredentialEmbedded, IssuerIdentifier, CallerSupplied];
-        // E=I, E=C and I=C, as indexes into KINDS.
-        const PAIRS: [(usize, usize); 3] = [(0, 1), (0, 2), (1, 2)];
         let present: Vec<bool> = eic.chars().map(|c| c == '1').collect();
         let mut keys: Vec<(Vec<usize>, bool)> = Vec::new();
-        for kind in (0..3).filter(|&k| present[k]) {
+        for kind in (0..KINDS.len()).filter(|&k| present[k]) {
             let correct = proofs[kind] == "Y";
             let earlier = PAIRS
                 .iter()

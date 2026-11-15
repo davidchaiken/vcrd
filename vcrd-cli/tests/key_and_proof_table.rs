@@ -28,17 +28,16 @@ const INPUTS: &[(&str, &str)] = &[
 #[test]
 fn vcrd_agrees_with_every_row_milestone_1_can_produce() {
     let architecture = fs::read_to_string(format!("{ROOT}/ARCHITECTURE.md")).unwrap();
+    // The rows after the header, less the delimiter row. That the rows are every
+    // combination the table describes is `vcrd-core`'s test of `keys::decide`.
     let rows: Vec<Vec<&str>> = architecture
-        .split_once("| EIC | E=I |")
-        .unwrap()
-        .1
         .lines()
-        // The rest of the header row, then the delimiter row.
-        .skip(2)
+        .skip_while(|l| !l.starts_with("| EIC |"))
+        .skip(1)
         .take_while(|l| l.starts_with('|'))
+        .filter(|l| !l.starts_with("|---"))
         .map(|l| l.trim_matches('|').split('|').map(str::trim).collect())
         .collect();
-    assert_eq!(rows.len(), 37, "the table's rows");
     let produced: Vec<&Vec<&str>> = rows.iter().filter(|r| r[0].ends_with('0')).collect();
     assert_eq!(
         produced.len(),

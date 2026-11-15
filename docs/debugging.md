@@ -6,6 +6,12 @@ procedure as documented only once it has been run end to end. This guide covers 
 with Visual Studio Code (VS Code) and the CodeLLDB extension. Linux is ARCHITECTURE §10
 [G2], in milestone 2 of DEVELOPMENT-PLAN.md.
 
+**Note: This guide is read by `vcrd-cli/tests/debugging.rs`: the functions in the tables
+of where to break, every path it names, and its quotations of the scripts in
+`scripts/debugging/`. The same test reads `.vscode/launch.json`, which must offer every
+example and fixture. Changes to this documentation will likely cause code tests to fail,
+which will need to be fixed with code updates.**
+
 ## Known to work
 
 | Component | Version | Shown by |
