@@ -870,65 +870,88 @@ version and its syntax does not have, is reported as `version_present`.
 Shown for the fixture `fixtures/embedded-jwk.jwt`, where the credential carries another
 key, which signed it, but names a `did:key` issuer for a different key:
 
+```bash
+vcrd verify fixtures/embedded-jwk.jwt --now 2026-10-01T00:00:00Z --format json | jq '.proofs[0].key_provenance'
+```
+
 ```json
-"key_provenance": {
-  "source": "issuer_identifier",
-  "method": "did:key",
-  "thumbprint": "0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c",
-  "jwk": { "crv": "Ed25519", "kty": "OKP", "x": "mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0" },
-  "embedded_key": {
-    "location": "header.jwk",
-    "thumbprint": "_i3gzFWABuHlZnuT9FBtp8CVlJ57CcWpTPwviZ2m1ms",
-    "jwk": { "crv": "Ed25519", "kty": "OKP", "x": "dmVW__tsfsOxTi_nA17JMexgwC2vIwXdN2ouKk5wJDs" },
-    "same_as_issuer_key": false,
-    "proof": "correct"
-  }
+{
+  "deciding": 0,
+  "keys": [
+    {
+      "kinds": ["issuer_identifier"],
+      "method": "did:key",
+      "thumbprint": "0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c",
+      "jwk": { "crv": "Ed25519", "kty": "OKP", "x": "mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0" },
+      "proof": "incorrect"
+    },
+    {
+      "kinds": ["credential_embedded"],
+      "location": "header.jwk",
+      "thumbprint": "_i3gzFWABuHlZnuT9FBtp8CVlJ57CcWpTPwviZ2m1ms",
+      "jwk": { "crv": "Ed25519", "kty": "OKP", "x": "dmVW__tsfsOxTi_nA17JMexgwC2vIwXdN2ouKk5wJDs" },
+      "proof": "correct"
+    }
+  ]
 }
 ```
 
-The top-level members describe the deciding proof key; the proof's `outcome`, beside
-`key_provenance`, is its proof's result, here `incorrect`.
+`keys` lists each distinct key once, compared by thumbprint, with every kind of key it
+is: a credential whose embedded key is its issuer key has one entry, of both kinds, with
+the issuer key's `method` and the embedded key's `location`. `deciding` is the index of
+the deciding proof key, absent when no key decides; the proof's `outcome`, beside
+`key_provenance`, is its proof's result, here `incorrect`. A refused issuer key still
+decides, so that no other key can. A `did:key` of a type vcrd names, or does not know, but
+cannot use is the issuer key, refused (`type_unsupported`, or `not_for_signing` for a
+key-agreement key), with no thumbprint or JWK, since vcrd does not decode it; a malformed
+`did:key`, or an issuer whose method vcrd does not resolve, gives no issuer key.
 
-`source` is an open enumeration, so consumers must accept values they do not recognize. Its
-values and their guarantees:
+`kinds` takes its values from an open enumeration, so consumers must accept values they
+do not recognize. Its values and their guarantees:
 
-| `source` | Meaning | What it does *not* establish |
+| Kind | Meaning | What it does *not* establish |
 |---|---|---|
 | `caller_supplied` | key material the caller passed in | anything beyond the caller's own assertion that it belongs to the issuer |
 | `issuer_identifier` | derived from the issuer identifier the credential names; the credential cannot use a different key while naming this issuer | who controls that identifier |
-| `credential_embedded` | a key the credential carries about itself, used only because the caller opted in | anything — it is bound to nothing |
+| `credential_embedded` | a key the credential carries about itself, which decides only because the caller opted in | anything — it is bound to nothing |
 
-`embedded_key` is present whenever the credential carries a public key vcrd can read
-about its own proof. `same_as_issuer_key` says whether it is the issuer key, and is absent
-when there is no issuer key to compare it with; `proof` is the proof's result with it as
-the proof key. That proof is additional information: it applies the same algorithm policy
-and key-type binding, decides the outcome only as the rules above say, and is
-`not_attempted` when it cannot be made, as for a key type vcrd does not implement. The
-same key gives the same result, so a key the same as the issuer key is not proved again.
+A key of several kinds has the guarantees of each. Each key's `proof` is its proof's
+result with it as the proof key. The proofs with keys other than the deciding proof key
+are additional information: they apply the same algorithm policy and key-type binding,
+decide the outcome only as the rules above say, and are `not_attempted` when they cannot
+be made, as for a key type vcrd does not implement. The same key gives the same result,
+so a key is proved once whatever its kinds. `refused` says why a key may not decide:
+`weak_key`, `not_for_signing`, `type_unsupported`, or `embedded_key_alone` for an embedded
+key alone without the caller's opt-in; a key's own property comes first.
 
 An embedded key unlike the issuer key is a warning, `verify.embedded_key_mismatch`,
 attributed to the input: RFC 7515 §4.1.3 makes `jwk` the key that signed. An embedded
-proof that is correct while the deciding proof is not, key substitution, is a second
-warning, `verify.embedded_key_proof_correct`: the deciding proof's findings already fail
-verify, and this one says what the embedded key shows. When there is no issuer key, the
-embedded key is refused: `verify.embedded_key_refused`, attributed to the caller's policy
-(exit 5), since the opt-in that would allow it is the caller's.
+proof that is correct while the deciding proof is not, the two keys known to differ, is
+key substitution, a second warning, `verify.embedded_key_proof_correct`: the deciding
+proof's findings already fail verify, and this one says what the embedded key shows. Any
+other correct proof with a key that does not decide is
+`verify.non_deciding_key_proof_correct`, a warning attributed to the input, with the key
+and why its proof does not count: its refusal, or `another_key_decides`. When there is no
+issuer key, the embedded key is refused: `verify.embedded_key_refused`, attributed to the
+caller's policy (exit 5), since the opt-in that would allow it is the caller's. Findings
+name each key as `keys` does, by its `kinds`, `method` or `location`, and `thumbprint`.
 
 Inspect reports a `jwk` that is not a public key vcrd can read (`inspect.jwk_invalid`), one
 whose key type it does not know (`inspect.jwk_kty_unsupported`, a warning attributed to
 vcrd, since a later standard may define the type), and one carrying private-key members
 (`inspect.jwk_private_key`). None of these blocks verify. A symmetric key (`kty: oct`) is
-secret, so it is reported and given no `embedded_key`: its thumbprint would be an unsalted
+secret, so it is reported and is not listed in `keys`: its thumbprint would be an unsalted
 hash of the secret, and the output is often shared more widely than the input.
 
-| Situation | `source` | `embedded_key` |
+| Situation | `keys` | `deciding` |
 |---|---|---|
-| `did:key` issuer only | `issuer_identifier` | — |
-| caller-supplied key set | `caller_supplied` | — |
-| embedded key equals the `did:key` | `issuer_identifier` | `same_as_issuer_key: true`, `proof` the same as `outcome` |
-| embedded key differs, and signed | `issuer_identifier` | `same_as_issuer_key: false`, `proof: correct`; the mismatch and proof-correct warnings |
-| embedded only, caller opted in | `credential_embedded` | no `same_as_issuer_key` |
-| embedded only, no opt-in | absent | no `same_as_issuer_key`; the refusal is its own finding, `verify.embedded_key_refused` |
+| `did:key` issuer only | `issuer_identifier` | the issuer key |
+| caller-supplied key set | `caller_supplied` | the caller-supplied key |
+| embedded key equals the `did:key` | one key, `issuer_identifier` and `credential_embedded` | that key |
+| embedded key differs, and signed | `issuer_identifier`, `proof: incorrect`; `credential_embedded`, `proof: correct`; the mismatch and key-substitution warnings | the issuer key |
+| `did:key` of a type vcrd cannot use, beside an embedded key that signed | `issuer_identifier`, `refused: type_unsupported`, no thumbprint; `credential_embedded`, `proof: correct`; `verify.non_deciding_key_proof_correct`, `another_key_decides` | the issuer key |
+| embedded only, caller opted in | `credential_embedded` | the embedded key |
+| embedded only, no opt-in | `credential_embedded`, `refused: embedded_key_alone`; the refusal is its own finding, `verify.embedded_key_refused`, and a correct proof `verify.non_deciding_key_proof_correct` | absent |
 
 ### Algorithms
 

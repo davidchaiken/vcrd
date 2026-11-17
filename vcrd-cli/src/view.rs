@@ -10,11 +10,11 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use vcrd_core::{
     Attribution, Base64urlProblem, BlockReason, Check, ClaimLocation, Context, CritProblem,
-    DateField, DeclaredAlgorithm, DidKeyProblem, Document, DocumentKind, EmbeddedKeyRef, Finding,
-    FindingDetail, IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment, KeyRef, KeySourceKind,
-    LanguageValueProblem, LeafClass, Missing, NotEvaluatedReason, Phase, PhaseOutcome,
-    ProofOutcome, PublicJwk, Rendered, RenderedJson, Report, RevealLocation, Revealed, Severity,
-    Treatment, Validity, ValueKind, WeakKeyCriterion, render,
+    DateField, DeclaredAlgorithm, DidKeyProblem, Document, DocumentKind, Finding, FindingDetail,
+    IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment, KeyRef, KeySourceKind,
+    LanguageValueProblem, LeafClass, Missing, NotDeciding, NotEvaluatedReason, Phase, PhaseOutcome,
+    ProofOutcome, PublicJwk, Refusal, Rendered, RenderedJson, Report, RevealLocation, Revealed,
+    Severity, Treatment, Validity, ValueKind, WeakKeyCriterion, render,
 };
 
 /// `0` until the schema is declared stable (REQUIREMENTS §9).
@@ -153,31 +153,35 @@ pub struct ProofView {
 
 #[derive(Debug, Serialize)]
 pub struct ProvenanceView {
+    /// The deciding proof key, as an index into `keys`; absent when no key decides.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub source: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub method: Option<&'static str>,
-    /// The deciding proof key, as an RFC 7638 thumbprint.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub thumbprint: Option<String>,
-    /// The deciding proof key, as a JWK: the members the thumbprint covers.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub jwk: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub embedded_key: Option<EmbeddedKeyView>,
+    pub deciding: Option<usize>,
+    /// Each distinct key once; empty when verify did not run.
+    pub keys: Vec<KeyView>,
 }
 
+/// One distinct key (ARCHITECTURE §8).
 #[derive(Debug, Serialize)]
-pub struct EmbeddedKeyView {
-    pub location: String,
-    pub thumbprint: String,
-    /// The embedded key's public members, which its thumbprint covers.
-    pub jwk: Value,
-    /// Absent when there is no issuer key to compare it with.
+pub struct KeyView {
+    /// The values of the open enumeration `source`, in the order of precedence.
+    pub kinds: Vec<&'static str>,
+    /// How the issuer key was derived from the issuer identifier, e.g. `did:key`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub same_as_issuer_key: Option<bool>,
+    pub method: Option<&'static str>,
+    /// Where the credential carries the embedded key, e.g. `header.jwk`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<&'static str>,
+    /// The RFC 7638 thumbprint; absent for a key vcrd names but cannot decode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thumbprint: Option<String>,
+    /// The members the thumbprint covers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jwk: Option<Value>,
     /// The proof's result with it as the proof key.
     pub proof: &'static str,
+    /// Why it may not decide the outcome, when it may not.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refused: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -426,21 +430,21 @@ fn proofs(report: &Report) -> Vec<ProofView> {
                 algorithm: p.algorithm.clone(),
                 outcome: proof_outcome(&p.outcome),
                 key_provenance: ProvenanceView {
-                    source: p.key_provenance.source.map(|s| s.as_str()),
-                    method: p.key_provenance.method,
-                    thumbprint: p.key_provenance.thumbprint.clone(),
-                    jwk: p.key_provenance.jwk.as_ref().map(jwk),
-                    embedded_key: p
+                    deciding: p.key_provenance.deciding,
+                    keys: p
                         .key_provenance
-                        .embedded_key
-                        .as_ref()
-                        .map(|k| EmbeddedKeyView {
-                            location: k.location.clone(),
+                        .keys
+                        .iter()
+                        .map(|k| KeyView {
+                            kinds: k.kinds.iter().map(|kind| kind.as_str()).collect(),
+                            method: k.method,
+                            location: k.location,
                             thumbprint: k.thumbprint.clone(),
-                            jwk: jwk(&k.jwk),
-                            same_as_issuer_key: k.same_as_issuer_key,
+                            jwk: k.jwk.as_ref().map(jwk),
                             proof: proof_outcome(&k.proof),
-                        }),
+                            refused: k.refused.map(refusal_name),
+                        })
+                        .collect(),
                 },
                 validity: Some(validity_name(p.validity)),
             })
@@ -459,11 +463,8 @@ fn proofs(report: &Report) -> Vec<ProofView> {
                     .map(str::to_owned),
                 outcome: "not_attempted",
                 key_provenance: ProvenanceView {
-                    source: None,
-                    method: None,
-                    thumbprint: None,
-                    jwk: None,
-                    embedded_key: None,
+                    deciding: None,
+                    keys: Vec::new(),
                 },
                 validity: None,
             })
@@ -876,26 +877,51 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
         }
         FindingDetail::EmbeddedKeyMismatch { embedded_key, key } => json!({
             "type": "embedded_key_mismatch",
-            "embedded_key": embedded_key_ref(embedded_key),
+            "embedded_key": key_ref(embedded_key),
             "key": key_ref(key),
         }),
         FindingDetail::EmbeddedKeyProofCorrect { embedded_key, key } => json!({
             "type": "embedded_key_proof_correct",
-            "embedded_key": embedded_key_ref(embedded_key),
+            "embedded_key": key_ref(embedded_key),
             "key": key_ref(key),
+        }),
+        FindingDetail::NonDecidingKeyProofCorrect { key, why } => json!({
+            "type": "non_deciding_key_proof_correct",
+            "key": key_ref(key),
+            "why": match why {
+                NotDeciding::Refused(refusal) => refusal_name(*refusal),
+                NotDeciding::AnotherKeyDecides => "another_key_decides",
+            },
         }),
     }
 }
 
-/// The embedded key as a finding names it: where it was, and its thumbprint.
-fn embedded_key_ref(key: &EmbeddedKeyRef) -> Value {
-    json!({"location": key.location, "thumbprint": key.thumbprint})
+/// Why a key may not decide the outcome (ARCHITECTURE §8, "Refused").
+fn refusal_name(refusal: Refusal) -> &'static str {
+    match refusal {
+        Refusal::WeakKey => "weak_key",
+        Refusal::NotForSigning => "not_for_signing",
+        Refusal::TypeUnsupported => "type_unsupported",
+        Refusal::EmbeddedKeyAlone => "embedded_key_alone",
+    }
 }
 
-/// A key as a finding names it: where it came from, as `key_provenance` says, and its
-/// thumbprint.
+/// A key as a finding names it, as `key_provenance` does: its kinds, where each came
+/// from, and its thumbprint, each member present only when it applies.
 fn key_ref(key: &KeyRef) -> Value {
-    json!({"source": key.source.as_str(), "method": key.method, "thumbprint": key.thumbprint})
+    let kinds: Vec<&str> = key.kinds.iter().map(|k| k.as_str()).collect();
+    let mut members = serde_json::Map::new();
+    members.insert("kinds".to_owned(), json!(kinds));
+    if let Some(method) = key.method {
+        members.insert("method".to_owned(), json!(method));
+    }
+    if let Some(location) = key.location {
+        members.insert("location".to_owned(), json!(location));
+    }
+    if let Some(thumbprint) = &key.thumbprint {
+        members.insert("thumbprint".to_owned(), json!(thumbprint));
+    }
+    Value::Object(members)
 }
 
 /// A public key's JWK members as a JSON object.

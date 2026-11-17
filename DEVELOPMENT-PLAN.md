@@ -417,7 +417,10 @@ CodeLLDB's memory grow without bound, and 1.101 brings rust-lang/rust#165113.
   key, and `same_as_issuer_key` goes. A key vcrd names but cannot decode has no
   thumbprint. A symmetric key has none either, and its `k` is masked below `--unsafe=2`.
   The maintainer tries the first implementation's input and output, and this decision and
-  the previous one may change then.
+  the previous one may change then. Decided 2026-11-16, on reviewing slice 2's output:
+  `text` and `plain` show every key's thumbprint from level 2, the deciding proof key's
+  included, where milestone 1 showed the deciding proof key's at level 1. Level 1 says
+  which kinds of key each is and where each came from.
 - *A correct proof that does not count* is a warning of its own, naming the key and why
   its proof does not count: a key-set entry not matched, or one of several entries left;
   an embedded key refused alone; one of two embedded keys that differ; a caller-supplied

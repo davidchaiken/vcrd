@@ -17,16 +17,16 @@ Phases
  verify  | failed  | verify.embedded_key_mismatch, verify.algorithm_deprecated, verify.signature_invalid, verify.embedded_key_proof_correct |
 
 Proof
- Suite                     jws
- Algorithm                 EdDSA
- Outcome                   incorrect
- Validity                  unbounded
- Deciding proof key        issuer key, from did:key
- Thumbprint                0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
- Key JWK                   {"crv":"Ed25519","kty":"OKP","x":"mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0"}
- Embedded key              header.jwk: a different key; proof correct
- Embedded key thumbprint   _i3gzFWABuHlZnuT9FBtp8CVlJ57CcWpTPwviZ2m1ms
- Embedded key JWK          {"crv":"Ed25519","kty":"OKP","x":"dmVW__tsfsOxTi_nA17JMexgwC2vIwXdN2ouKk5wJDs"}
+ Suite                jws
+ Algorithm            EdDSA
+ Outcome              incorrect
+ Validity             unbounded
+ Deciding proof key   issuer key, from did:key
+ Thumbprint           0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
+ JWK                  {"crv":"Ed25519","kty":"OKP","x":"mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0"}
+ Other key            embedded key, at header.jwk; proof correct
+ Thumbprint           _i3gzFWABuHlZnuT9FBtp8CVlJ57CcWpTPwviZ2m1ms
+ JWK                  {"crv":"Ed25519","kty":"OKP","x":"dmVW__tsfsOxTi_nA17JMexgwC2vIwXdN2ouKk5wJDs"}
 
 Header
  Path    | Type   | Value                                                    | Visibility
@@ -51,18 +51,20 @@ Claims
 Findings
  Code                              | Attribution | Severity | Detail
 -----------------------------------+-------------+----------+----------------------------------------------------------------------
- verify.embedded_key_mismatch      | input       | warning  | embedded_key.location: header.jwk
+ verify.embedded_key_mismatch      | input       | warning  | embedded_key.kinds: credential_embedded
+                                   |             |          | embedded_key.location: header.jwk
                                    |             |          | embedded_key.thumbprint: _i3gzFWABuHlZnuT9FBtp8CVlJ57CcWpTPwviZ2m1ms
+                                   |             |          | key.kinds: issuer_identifier
                                    |             |          | key.method: did:key
-                                   |             |          | key.source: issuer_identifier
                                    |             |          | key.thumbprint: 0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
  verify.algorithm_deprecated       | input       | info     | declared: EdDSA
                                    |             |          | replacement: Ed25519
  verify.signature_invalid          | input       | error    | algorithm: EdDSA
- verify.embedded_key_proof_correct | input       | warning  | embedded_key.location: header.jwk
+ verify.embedded_key_proof_correct | input       | warning  | embedded_key.kinds: credential_embedded
+                                   |             |          | embedded_key.location: header.jwk
                                    |             |          | embedded_key.thumbprint: _i3gzFWABuHlZnuT9FBtp8CVlJ57CcWpTPwviZ2m1ms
+                                   |             |          | key.kinds: issuer_identifier
                                    |             |          | key.method: did:key
-                                   |             |          | key.source: issuer_identifier
                                    |             |          | key.thumbprint: 0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
 
 Not evaluated

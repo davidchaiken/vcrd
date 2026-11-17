@@ -7,8 +7,8 @@ use sha2::{Digest, Sha256};
 
 use crate::document::{EmbeddedKey, KeyHints};
 use crate::finding::{
-    Attribution, DidKeyProblem, EmbeddedKeyRef, Finding, FindingDetail, JwkProblem, KeyRef,
-    KeySourceKind, Severity, WeakKeyCriterion,
+    Attribution, DidKeyProblem, Finding, FindingDetail, JwkProblem, KeyRef, KeySourceKind,
+    Severity, WeakKeyCriterion,
 };
 use crate::json::Json;
 use crate::report::{Phase, ProofOutcome};
@@ -154,22 +154,76 @@ fn ed25519_key(bytes: &[u8; 32]) -> Result<VerifyingKey, DidKeyProblem> {
     Ok(key)
 }
 
-/// Where the deciding proof key came from, and the embedded key, if any (ARCHITECTURE
-/// §8). Reported whether verification succeeds or fails.
+/// Each key for one proof, the kinds of key it is, its proof's result, and which key
+/// decides (ARCHITECTURE §8). Reported whether verification succeeds or fails.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KeyProvenance {
-    /// Present also when the key is refused, as a weak key is, so that the finding's
-    /// key can be told apart; absent when no key could decide the outcome.
-    pub source: Option<KeySource>,
-    /// How the key was derived from its source, e.g. `did:key`.
+    /// The deciding proof key, as an index into `keys`; absent when no key may decide.
+    /// A refused issuer key still decides, so that no other key can.
+    pub deciding: Option<usize>,
+    /// Each distinct key once, by RFC 7638 thumbprint, with every kind of key it is.
+    pub keys: Vec<KeyReport>,
+}
+
+/// One distinct key: the kinds of key it is, where each came from, and its proof's
+/// result (ARCHITECTURE §8).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeyReport {
+    /// In the order of precedence: caller-supplied, issuer, embedded.
+    pub kinds: Vec<KeySource>,
+    /// How the issuer key was derived from the issuer identifier, e.g. `did:key`;
+    /// present when the key is the issuer key.
     pub method: Option<&'static str>,
-    /// The deciding proof key, as an RFC 7638 thumbprint.
+    /// Where the credential carries it, e.g. `header.jwk`; present when the key is an
+    /// embedded key.
+    pub location: Option<&'static str>,
+    /// The RFC 7638 thumbprint; absent for a key vcrd names but cannot decode.
     pub thumbprint: Option<String>,
-    /// The deciding proof key, as a JWK: what the thumbprint is of.
+    /// The key as a JWK: what the thumbprint is of.
     pub jwk: Option<PublicJwk>,
-    /// Present whenever the credential carries a key about its own proof that vcrd
-    /// can read.
-    pub embedded_key: Option<EmbeddedKeyReport>,
+    /// The proof's result with it as the proof key.
+    pub proof: ProofOutcome,
+    /// Why it may not decide the outcome, when it may not.
+    pub refused: Option<Refusal>,
+}
+
+impl KeyReport {
+    /// The key as a finding names it, boxed so that a finding naming two keys stays
+    /// small.
+    pub(crate) fn reference(&self) -> Box<KeyRef> {
+        Box::new(KeyRef {
+            kinds: self.kinds.clone(),
+            method: self.method,
+            location: self.location,
+            thumbprint: self.thumbprint.clone(),
+        })
+    }
+
+    fn new(kind: KeySource) -> Self {
+        KeyReport {
+            kinds: vec![kind],
+            method: None,
+            location: None,
+            thumbprint: None,
+            jwk: None,
+            proof: ProofOutcome::NotAttempted,
+            refused: None,
+        }
+    }
+}
+
+/// Why a key may not decide the outcome (ARCHITECTURE §8, "Refused"). One reason: the
+/// key's own property comes before its being an embedded key alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refusal {
+    /// A weak key (ARCHITECTURE §8, "Weak keys").
+    WeakKey,
+    /// A key-agreement key, which no verifier may use for a signature (RFC 8037 §3.2).
+    NotForSigning,
+    /// A key of a type vcrd cannot use.
+    TypeUnsupported,
+    /// An embedded key alone, without the caller's opt-in (ARCHITECTURE §8, rule 2).
+    EmbeddedKeyAlone,
 }
 
 /// An open set: consumers must accept values they do not recognize (ARCHITECTURE §8).
@@ -195,25 +249,8 @@ impl KeySource {
     }
 }
 
-/// The embedded key: a key the credential carries about its own proof (ARCHITECTURE §8).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EmbeddedKeyReport {
-    /// Where it was, e.g. `header.jwk`.
-    pub location: String,
-    pub thumbprint: String,
-    /// Its public members, as the credential carries them.
-    pub jwk: PublicJwk,
-    /// Whether it is the issuer key; absent when there is no issuer key to compare it
-    /// with.
-    pub same_as_issuer_key: Option<bool>,
-    /// The proof's result with it as the proof key, under the same algorithm policy and
-    /// key-type binding as the deciding proof.
-    pub proof: ProofOutcome,
-}
-
 #[derive(Default)]
 pub(crate) struct Resolution {
-    pub provenance: KeyProvenance,
     pub findings: Vec<Finding>,
     /// Each distinct key, by RFC 7638 thumbprint, once, with every kind of key it is.
     pub keys: Vec<ProofKey>,
@@ -228,13 +265,14 @@ impl Resolution {
     }
 }
 
-/// A distinct key and the kinds of key it is (ARCHITECTURE §8).
+/// A distinct key, as the result reports it, and the key itself (ARCHITECTURE §8).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ProofKey {
-    /// In the order of precedence: caller-supplied, issuer, embedded.
-    pub kinds: Vec<KeySource>,
+    /// The kinds of key it is and where each came from; the runner adds its proof's
+    /// result.
+    pub report: KeyReport,
     /// The key, when it may be a proof key; `None` when key resolution refused it for a
-    /// property of its own, as a weak key or a key of a type vcrd cannot use.
+    /// property of its own, as `report.refused` says.
     pub key: Option<PublicKey>,
 }
 
@@ -359,55 +397,49 @@ pub(crate) fn resolve(hints: &KeyHints) -> Resolution {
     resolution
 }
 
-/// Records the embedded key (ARCHITECTURE §8): the same key as the issuer key when their
-/// thumbprints are equal, and a warning when the two differ. The runner adds its proof's
-/// result.
+/// Records the embedded key (ARCHITECTURE §8): one key with the issuer key when their
+/// thumbprints are equal, and a warning when the two differ. An issuer key vcrd cannot
+/// decode has no thumbprint to compare. The runner adds its proof's result.
 fn compare_embedded(embedded: &EmbeddedKey, resolution: &mut Resolution) {
-    let thumbprint = &embedded.jwk.thumbprint;
-    let provenance = &resolution.provenance;
-    let issuer = provenance
-        .source
-        .filter(|s| *s == KeySource::IssuerIdentifier)
-        .zip(provenance.thumbprint.clone());
-    let same_as_issuer_key = issuer.as_ref().map(|(_, t)| t == thumbprint);
-    let method = provenance.method;
-    if let Some((source, key)) = issuer.filter(|_| same_as_issuer_key == Some(false)) {
-        resolution.findings.push(Finding::new(
-            Phase::Verify,
-            Attribution::Input,
-            Severity::Warning,
-            FindingDetail::EmbeddedKeyMismatch {
-                embedded_key: EmbeddedKeyRef {
-                    location: embedded.location,
-                    thumbprint: thumbprint.clone(),
-                },
-                key: KeyRef {
-                    source,
-                    method,
-                    thumbprint: key,
-                },
-            },
-        ));
-    }
+    let report = KeyReport {
+        location: Some(embedded.location),
+        thumbprint: Some(embedded.jwk.thumbprint.clone()),
+        jwk: Some(embedded.jwk.public.clone()),
+        refused: embedded
+            .jwk
+            .key
+            .is_none()
+            .then_some(Refusal::TypeUnsupported),
+        ..KeyReport::new(KeySource::CredentialEmbedded)
+    };
     let issuer_key = resolution
         .keys
         .iter_mut()
-        .find(|k| k.kinds.contains(&KeySource::IssuerIdentifier))
-        .filter(|_| same_as_issuer_key == Some(true));
+        .find(|k| k.report.kinds.contains(&KeySource::IssuerIdentifier))
+        .filter(|k| k.report.thumbprint.is_some());
     match issuer_key {
-        Some(key) => key.kinds.push(KeySource::CredentialEmbedded),
-        None => resolution.keys.push(ProofKey {
-            kinds: vec![KeySource::CredentialEmbedded],
-            key: embedded.jwk.key.clone(),
-        }),
+        Some(issuer) if issuer.report.thumbprint == report.thumbprint => {
+            issuer.report.kinds.push(KeySource::CredentialEmbedded);
+            issuer.report.location = report.location;
+        }
+        issuer => {
+            if let Some(issuer) = issuer {
+                resolution.findings.push(Finding::new(
+                    Phase::Verify,
+                    Attribution::Input,
+                    Severity::Warning,
+                    FindingDetail::EmbeddedKeyMismatch {
+                        embedded_key: report.reference(),
+                        key: issuer.report.reference(),
+                    },
+                ));
+            }
+            resolution.keys.push(ProofKey {
+                report,
+                key: embedded.jwk.key.clone(),
+            });
+        }
     }
-    resolution.provenance.embedded_key = Some(EmbeddedKeyReport {
-        location: embedded.location.to_owned(),
-        thumbprint: thumbprint.clone(),
-        jwk: embedded.jwk.public.clone(),
-        same_as_issuer_key,
-        proof: ProofOutcome::NotAttempted,
-    });
 }
 
 /// The key the issuer identifier encodes, when it is a `did:key`.
@@ -427,25 +459,32 @@ fn from_issuer(issuer: &str) -> Resolution {
             Attribution::Input,
             FindingDetail::DidKeyUndecodable { problem },
         )),
-        Ok(DidKey::Unusable { codec, name }) => Resolution::failed(Finding::error(
-            Phase::Verify,
-            Attribution::Vcrd,
-            FindingDetail::DidKeyCodecUnsupported { codec, name },
-        )),
-        Ok(DidKey::NotForSigning { codec, name }) => Resolution::failed(Finding::error(
-            Phase::Verify,
-            Attribution::Input,
-            FindingDetail::DidKeyNotForSigning { codec, name },
-        )),
+        // A key vcrd names, or does not know, but cannot use is still the issuer key:
+        // refused, with no thumbprint, since vcrd does not decode it (ARCHITECTURE §8).
+        Ok(DidKey::Unusable { codec, name }) => refused_did_key(
+            Refusal::TypeUnsupported,
+            Finding::error(
+                Phase::Verify,
+                Attribution::Vcrd,
+                FindingDetail::DidKeyCodecUnsupported { codec, name },
+            ),
+        ),
+        Ok(DidKey::NotForSigning { codec, name }) => refused_did_key(
+            Refusal::NotForSigning,
+            Finding::error(
+                Phase::Verify,
+                Attribution::Input,
+                FindingDetail::DidKeyNotForSigning { codec, name },
+            ),
+        ),
         Ok(DidKey::Usable(key, weak)) => {
             let jwk = key.jwk();
-            let thumbprint = jwk.thumbprint();
-            let provenance = KeyProvenance {
-                source: Some(KeySource::IssuerIdentifier),
+            let report = KeyReport {
                 method: Some("did:key"),
-                thumbprint: Some(thumbprint.clone()),
+                thumbprint: Some(jwk.thumbprint()),
                 jwk: Some(jwk),
-                embedded_key: None,
+                refused: weak.then_some(Refusal::WeakKey),
+                ..KeyReport::new(KeySource::IssuerIdentifier)
             };
             if weak {
                 // Checked at resolution, not left to the verifier (ARCHITECTURE §8).
@@ -453,33 +492,39 @@ fn from_issuer(issuer: &str) -> Resolution {
                     Phase::Verify,
                     Attribution::Input,
                     FindingDetail::WeakKey {
-                        key: KeyRef {
-                            source: KeySource::IssuerIdentifier,
-                            method: Some("did:key"),
-                            thumbprint,
-                        },
+                        key: report.reference(),
                         criterion: WeakKeyCriterion::SmallOrder,
                     },
                 );
                 Resolution {
-                    provenance,
                     findings: vec![finding],
-                    keys: vec![ProofKey {
-                        kinds: vec![KeySource::IssuerIdentifier],
-                        key: None,
-                    }],
+                    keys: vec![ProofKey { report, key: None }],
                 }
             } else {
                 Resolution {
-                    provenance,
                     findings: Vec::new(),
                     keys: vec![ProofKey {
-                        kinds: vec![KeySource::IssuerIdentifier],
+                        report,
                         key: Some(key),
                     }],
                 }
             }
         }
+    }
+}
+
+/// A `did:key` issuer key refused for its type, with the finding that says why.
+fn refused_did_key(refusal: Refusal, finding: Finding) -> Resolution {
+    Resolution {
+        findings: vec![finding],
+        keys: vec![ProofKey {
+            report: KeyReport {
+                method: Some("did:key"),
+                refused: Some(refusal),
+                ..KeyReport::new(KeySource::IssuerIdentifier)
+            },
+            key: None,
+        }],
     }
 }
 
@@ -594,17 +639,42 @@ mod tests {
         let resolution = resolve(&hints);
         assert!(resolution.findings.is_empty(), "{:?}", resolution.findings);
         assert_eq!(
-            resolution.provenance.source,
-            Some(KeySource::IssuerIdentifier)
-        );
-        assert_eq!(
-            resolution.provenance.thumbprint.as_deref(),
-            Some("kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k")
-        );
-        assert_eq!(
             kinds(&resolution),
             [(vec![KeySource::IssuerIdentifier], true)]
         );
+        let report = &resolution.keys[0].report;
+        assert_eq!(report.method, Some("did:key"));
+        assert_eq!(
+            report.thumbprint.as_deref(),
+            Some("kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k")
+        );
+        assert_eq!(report.refused, None);
+    }
+
+    /// ARCHITECTURE §8, "Refused": a `did:key` of a key type vcrd names but cannot use,
+    /// or of a key-agreement key, is a refused issuer key. vcrd does not decode it, so
+    /// it has no thumbprint.
+    #[test]
+    fn a_did_key_vcrd_cannot_use_is_a_refused_issuer_key() {
+        for (prefix, length, refusal) in [
+            (&[0x83, 0x24][..], 57, Refusal::TypeUnsupported),
+            (&[0xec, 0x01][..], 32, Refusal::NotForSigning),
+        ] {
+            let resolution = resolve_issuer(&did_key(prefix, &vec![9; length]));
+            assert_eq!(resolution.findings.len(), 1, "{:?}", resolution.findings);
+            let [key] = resolution.keys.as_slice() else {
+                panic!("one key: {:?}", resolution.keys)
+            };
+            assert_eq!(key.key, None);
+            assert_eq!(
+                key.report,
+                KeyReport {
+                    method: Some("did:key"),
+                    refused: Some(refusal),
+                    ..KeyReport::new(KeySource::IssuerIdentifier)
+                }
+            );
+        }
     }
 
     /// Each distinct key resolution found: its kinds, and whether it may be a proof key.
@@ -612,7 +682,7 @@ mod tests {
         resolution
             .keys
             .iter()
-            .map(|k| (k.kinds.clone(), k.key.is_some()))
+            .map(|k| (k.report.kinds.clone(), k.key.is_some()))
             .collect()
     }
 
@@ -1095,9 +1165,11 @@ mod tests {
                 true
             )]
         );
-        let embedded = resolution.provenance.embedded_key.unwrap();
-        assert_eq!(embedded.same_as_issuer_key, Some(true));
-        assert_eq!(embedded.location, "header.jwk");
+        let report = &resolution.keys[0].report;
+        assert_eq!(
+            (report.method, report.location),
+            (Some("did:key"), Some("header.jwk"))
+        );
     }
 
     #[test]
@@ -1118,8 +1190,7 @@ mod tests {
                 (vec![KeySource::CredentialEmbedded], true)
             ]
         );
-        let embedded = resolution.provenance.embedded_key.unwrap();
-        assert_eq!(embedded.same_as_issuer_key, Some(false));
+        assert_eq!(resolution.keys[1].report.location, Some("header.jwk"));
     }
 
     /// Resolution reports an embedded key alone, and refuses nothing: the rules refuse it
@@ -1129,7 +1200,6 @@ mod tests {
     fn an_embedded_key_alone_decides_only_with_the_opt_in() {
         let resolution = with_embedded(None, RFC8037_X);
         assert!(resolution.findings.is_empty(), "{:?}", resolution.findings);
-        assert_eq!(resolution.provenance.source, None);
         assert_eq!(
             kinds(&resolution),
             [(vec![KeySource::CredentialEmbedded], true)]

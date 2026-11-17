@@ -100,10 +100,15 @@ fn a_weak_key_is_refused_at_resolution() {
     let weak = finding(&out, "verify.weak_key", "input", "error");
     let proof = &out["proofs"][0];
     assert_eq!(proof["outcome"], "not_attempted");
-    assert_eq!(proof["key_provenance"]["source"], "issuer_identifier");
+    // The refused issuer key still decides, so that no other key can (ARCHITECTURE §8).
+    assert_eq!(proof["key_provenance"]["deciding"], 0);
+    let key = &proof["key_provenance"]["keys"][0];
+    assert_eq!(key["kinds"], json!(["issuer_identifier"]));
+    assert_eq!(key["refused"], "weak_key");
+    assert_eq!(key["proof"], "not_attempted");
     // The identity point, as the issuer's `did:key` encodes it.
     assert_eq!(
-        proof["key_provenance"]["jwk"]["x"],
+        key["jwk"]["x"],
         "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
     );
     assert_eq!(
@@ -111,7 +116,7 @@ fn a_weak_key_is_refused_at_resolution() {
         json!({
             "type": "weak_key",
             "key": {
-                "source": "issuer_identifier",
+                "kinds": ["issuer_identifier"],
                 "method": "did:key",
                 "thumbprint": "eV9frzBXPTP92MWWMpoFOh0WI_kJLvGlhcNs15APU_s",
             },
@@ -149,23 +154,33 @@ fn key_substitution_is_reported() {
     let proof = &out["proofs"][0];
     assert_eq!(proof["outcome"], "incorrect");
     let provenance = &proof["key_provenance"];
-    assert_eq!(provenance["source"], "issuer_identifier");
-    let key = &provenance["embedded_key"];
-    assert_eq!(key["location"], "header.jwk");
-    assert_eq!(key["same_as_issuer_key"], false);
-    assert_eq!(key["proof"], "correct");
-    assert_ne!(key["thumbprint"], provenance["thumbprint"]);
+    assert_eq!(provenance["deciding"], 0);
+    let [issuer, embedded] = provenance["keys"].as_array().unwrap().as_slice() else {
+        panic!("two keys: {out}")
+    };
+    assert_eq!(issuer["kinds"], json!(["issuer_identifier"]));
+    assert_eq!(issuer["method"], "did:key");
+    assert_eq!(issuer["proof"], "incorrect");
+    assert_eq!(embedded["kinds"], json!(["credential_embedded"]));
+    assert_eq!(embedded["location"], "header.jwk");
+    assert_eq!(embedded["proof"], "correct");
+    assert!(embedded.get("refused").is_none(), "{out}");
+    assert_ne!(embedded["thumbprint"], issuer["thumbprint"]);
     // Each thumbprint is shown with the key it names.
-    assert_eq!(provenance["jwk"]["kty"], "OKP");
-    assert_eq!(key["jwk"]["kty"], "OKP");
-    assert_ne!(key["jwk"]["x"], provenance["jwk"]["x"]);
-    // The findings say where each key came from.
+    assert_eq!(issuer["jwk"]["kty"], "OKP");
+    assert_eq!(embedded["jwk"]["kty"], "OKP");
+    assert_ne!(embedded["jwk"]["x"], issuer["jwk"]["x"]);
+    // The findings name each key as `key_provenance` does.
     let keys = json!({
-        "embedded_key": {"location": "header.jwk", "thumbprint": key["thumbprint"]},
+        "embedded_key": {
+            "kinds": ["credential_embedded"],
+            "location": "header.jwk",
+            "thumbprint": embedded["thumbprint"],
+        },
         "key": {
-            "source": "issuer_identifier",
+            "kinds": ["issuer_identifier"],
             "method": "did:key",
-            "thumbprint": provenance["thumbprint"],
+            "thumbprint": issuer["thumbprint"],
         },
     });
     for (f, kind) in [
@@ -176,6 +191,15 @@ fn key_substitution_is_reported() {
         detail["type"] = json!(kind);
         assert_eq!(f["detail"], detail);
     }
+    // Key substitution is its own finding, not also a non-deciding key's.
+    assert!(
+        !out["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["code"] == "verify.non_deciding_key_proof_correct"),
+        "{out}"
+    );
 }
 
 /// REQUIREMENTS §10: the refusal is reported, not treated as "no key material", so
@@ -193,12 +217,36 @@ fn a_key_the_credential_asserts_alone_is_refused() {
     assert!(out["phases"]["verify"].get("blocked_by").is_none(), "{out}");
     let proof = &out["proofs"][0];
     assert_eq!(proof["outcome"], "not_attempted");
-    assert!(proof["key_provenance"].get("source").is_none(), "{out}");
-    // With no issuer key, there is nothing to compare the embedded key with, and no
-    // deciding proof for its proof to differ from.
-    let key = &proof["key_provenance"]["embedded_key"];
-    assert!(key.get("same_as_issuer_key").is_none(), "{out}");
+    // No key decides. The embedded key's proof is made, for information, and its
+    // being correct is a warning of its own.
+    let provenance = &proof["key_provenance"];
+    assert!(provenance.get("deciding").is_none(), "{out}");
+    let [key] = provenance["keys"].as_array().unwrap().as_slice() else {
+        panic!("one key: {out}")
+    };
+    assert_eq!(key["kinds"], json!(["credential_embedded"]));
+    assert_eq!(key["location"], "header.jwk");
     assert_eq!(key["proof"], "correct");
+    assert_eq!(key["refused"], "embedded_key_alone");
+    let uncounted = finding(
+        &out,
+        "verify.non_deciding_key_proof_correct",
+        "input",
+        "warning",
+    );
+    assert_eq!(
+        uncounted["detail"],
+        json!({
+            "type": "non_deciding_key_proof_correct",
+            "key": {
+                "kinds": ["credential_embedded"],
+                "location": "header.jwk",
+                "thumbprint": key["thumbprint"],
+            },
+            "why": "embedded_key_alone",
+        })
+    );
+    // There is no deciding proof for its proof to differ from: not key substitution.
     let codes: Vec<&Value> = out["findings"]
         .as_array()
         .unwrap()

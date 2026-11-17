@@ -11,9 +11,10 @@ proofs[0].suite: jws
 proofs[0].algorithm: EdDSA
 proofs[0].outcome: correct
 proofs[0].validity: unbounded
-proofs[0].key_provenance.source: issuer_identifier
-proofs[0].key_provenance.method: did:key
-proofs[0].key_provenance.thumbprint: 0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
+proofs[0].key_provenance.deciding: 0
+proofs[0].key_provenance.keys[0].kinds: issuer_identifier
+proofs[0].key_provenance.keys[0].method: did:key
+proofs[0].key_provenance.keys[0].proof: correct
 credential.claims.credentialSubject.degree.name: type=string value=(masked) visibility=masked
 credential.claims.credentialSubject.degree.type: type=string value=(masked) visibility=masked
 credential.claims.credentialSubject.id: type=string value=(masked) visibility=masked
