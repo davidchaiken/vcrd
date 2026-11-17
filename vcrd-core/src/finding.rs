@@ -2,7 +2,7 @@
 
 use time::OffsetDateTime;
 
-use crate::keys::KeySource;
+use crate::keys::{KeySource, Refusal};
 use crate::registry::{FormatId, SuiteId};
 use crate::report::Phase;
 
@@ -405,7 +405,7 @@ pub enum FindingDetail {
     /// The key cannot bind a signature to a message (REQUIREMENTS §10). `criterion`
     /// says which of the algorithm's weak-key criteria it meets (ARCHITECTURE §8).
     WeakKey {
-        key: KeyRef,
+        key: Box<KeyRef>,
         criterion: WeakKeyCriterion,
     },
     /// The only key on offer is one the credential carries about itself, which vcrd
@@ -416,19 +416,24 @@ pub enum FindingDetail {
     /// key that signed. A warning: it never changes the deciding proof key
     /// (ARCHITECTURE §8).
     EmbeddedKeyMismatch {
-        embedded_key: EmbeddedKeyRef,
+        embedded_key: Box<KeyRef>,
         /// The issuer key.
-        key: KeyRef,
+        key: Box<KeyRef>,
     },
     /// The proof with the embedded key is correct and the deciding proof is not: the
     /// signer holds the embedded key's private key, which is not the deciding proof
     /// key's (ARCHITECTURE §8). A warning: the deciding proof's findings already fail
     /// verify.
     EmbeddedKeyProofCorrect {
-        embedded_key: EmbeddedKeyRef,
+        embedded_key: Box<KeyRef>,
         /// The deciding proof key.
-        key: KeyRef,
+        key: Box<KeyRef>,
     },
+    /// The proof with a key that is not the deciding proof key is correct, though it
+    /// does not count (ARCHITECTURE §8): the signer holds that key's private key. Key
+    /// substitution, where the deciding proof is not correct, is
+    /// `EmbeddedKeyProofCorrect` instead.
+    NonDecidingKeyProofCorrect { key: Box<KeyRef>, why: NotDeciding },
 }
 
 impl FindingDetail {
@@ -521,6 +526,9 @@ impl FindingDetail {
             FindingDetail::EmbeddedKeyRefused { .. } => "verify.embedded_key_refused",
             FindingDetail::EmbeddedKeyMismatch { .. } => "verify.embedded_key_mismatch",
             FindingDetail::EmbeddedKeyProofCorrect { .. } => "verify.embedded_key_proof_correct",
+            FindingDetail::NonDecidingKeyProofCorrect { .. } => {
+                "verify.non_deciding_key_proof_correct"
+            }
         }
     }
 }
@@ -580,22 +588,27 @@ pub enum CritProblem {
     NotInHeader { name: String },
 }
 
-/// A key a finding concerns: where it came from, how, and its RFC 7638 thumbprint, as
-/// `key_provenance` names it.
+/// A key a finding concerns, named as `key_provenance` names it: the kinds of key it
+/// is, where each came from, and its RFC 7638 thumbprint.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyRef {
-    pub source: KeySource,
-    /// How the key was derived from its source, e.g. `did:key`.
+    /// In the order of precedence: caller-supplied, issuer, embedded.
+    pub kinds: Vec<KeySource>,
+    /// How the issuer key was derived, e.g. `did:key`, when the key is the issuer key.
     pub method: Option<&'static str>,
-    pub thumbprint: String,
+    /// Where the credential carries it, e.g. `header.jwk`, when it is an embedded key.
+    pub location: Option<&'static str>,
+    /// Absent for a key vcrd names but cannot decode.
+    pub thumbprint: Option<String>,
 }
 
-/// The embedded key, as a finding names it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EmbeddedKeyRef {
-    /// Where it was, e.g. `header.jwk`.
-    pub location: &'static str,
-    pub thumbprint: String,
+/// Why a key whose proof is correct does not decide the outcome (ARCHITECTURE §8).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotDeciding {
+    /// The key is refused.
+    Refused(Refusal),
+    /// Another key decides, by rule 2.
+    AnotherKeyDecides,
 }
 
 /// The weak-key criteria of ARCHITECTURE §8's table.

@@ -5,7 +5,9 @@
 
 use serde_json::json;
 use time::macros::datetime;
-use vcrd_core::{Attribution, FindingDetail, ProofOutcome, Severity, Validity};
+use vcrd_core::{
+    Attribution, FindingDetail, KeySource, NotDeciding, ProofOutcome, Refusal, Severity, Validity,
+};
 
 use support::{NOW, issuer_jwk, proof_of, signed, verified, verified_with_skew};
 
@@ -250,15 +252,78 @@ fn an_embedded_key_equal_to_the_issuers_is_the_same_key_and_correct() {
     let report = verified(&signed(|h, _| h["jwk"] = issuer_jwk()));
     let (proof, findings) = proof_of(&report);
     assert_eq!(findings, []);
-    let key = proof.key_provenance.embedded_key.as_ref().unwrap();
+    let [key] = proof.key_provenance.keys.as_slice() else {
+        panic!("one key: {proof:?}")
+    };
     assert_eq!(
-        (key.location.as_str(), key.same_as_issuer_key),
-        ("header.jwk", Some(true))
+        key.kinds,
+        [KeySource::IssuerIdentifier, KeySource::CredentialEmbedded]
+    );
+    assert_eq!(
+        (key.method, key.location),
+        (Some("did:key"), Some("header.jwk"))
     );
     assert!(matches!(key.proof, ProofOutcome::Correct { .. }));
+    assert_eq!(proof.key_provenance.deciding, Some(0));
+}
+
+/// ARCHITECTURE §8, "Refused": a `did:key` whose key type vcrd names but cannot use is
+/// a refused issuer key, with no thumbprint, since vcrd cannot decode it. It still
+/// decides, so an embedded key beside it is not alone and is not refused; its correct
+/// proof does not count, and says so. The two keys cannot be compared.
+#[test]
+fn a_did_key_vcrd_names_but_cannot_use_is_a_refused_issuer_key() {
+    // ed448-pub (0x1203), which vcrd names and does not plan to implement.
+    let multibase = format!(
+        "z{}",
+        bs58::encode([&[0x83, 0x24][..], &[9; 57][..]].concat()).into_string()
+    );
+    let issuer = format!("did:key:{multibase}");
+    let report = verified(&signed(|h, p| {
+        h["jwk"] = issuer_jwk();
+        h["kid"] = json!(format!("{issuer}#{multibase}"));
+        p["issuer"] = json!(issuer);
+    }));
+    let (proof, findings) = proof_of(&report);
     assert_eq!(
-        Some(&key.thumbprint),
-        proof.key_provenance.thumbprint.as_ref()
+        findings,
+        [
+            (
+                "verify.did_key_codec_unsupported",
+                Attribution::Vcrd,
+                Severity::Error
+            ),
+            (
+                "verify.non_deciding_key_proof_correct",
+                Attribution::Input,
+                Severity::Warning
+            ),
+        ]
+    );
+    assert!(matches!(proof.outcome, ProofOutcome::NotAttempted));
+    assert_eq!(proof.key_provenance.deciding, Some(0));
+    let [issuer_key, embedded] = proof.key_provenance.keys.as_slice() else {
+        panic!("two keys: {proof:?}")
+    };
+    assert_eq!(issuer_key.kinds, [KeySource::IssuerIdentifier]);
+    assert_eq!(issuer_key.thumbprint, None);
+    assert_eq!(issuer_key.refused, Some(Refusal::TypeUnsupported));
+    assert_eq!(embedded.kinds, [KeySource::CredentialEmbedded]);
+    assert_eq!(embedded.refused, None);
+    assert!(matches!(embedded.proof, ProofOutcome::Correct { .. }));
+    let uncounted = report
+        .findings()
+        .find(|f| f.code == "verify.non_deciding_key_proof_correct")
+        .unwrap();
+    assert!(
+        matches!(
+            uncounted.detail,
+            FindingDetail::NonDecidingKeyProofCorrect {
+                why: NotDeciding::AnotherKeyDecides,
+                ..
+            }
+        ),
+        "{uncounted:?}"
     );
 }
 
@@ -284,8 +349,13 @@ fn a_jwk_with_private_members_is_an_inspect_error() {
         matches!(detail, vcrd_core::FindingDetail::JwkPrivateKey { members } if members == &["d"]),
         "{detail:?}"
     );
-    let key = proof.key_provenance.embedded_key.as_ref().unwrap();
-    assert_eq!(key.same_as_issuer_key, Some(true));
+    let [key] = proof.key_provenance.keys.as_slice() else {
+        panic!("one key, the issuer key and the embedded key: {proof:?}")
+    };
+    assert_eq!(
+        key.kinds,
+        [KeySource::IssuerIdentifier, KeySource::CredentialEmbedded]
+    );
 }
 
 /// A `jwk` vcrd cannot read is reported, and verify goes ahead with the `did:key`.
@@ -298,7 +368,10 @@ fn a_malformed_jwk_does_not_stop_verify() {
         [("inspect.jwk_invalid", Attribution::Input, Severity::Error)]
     );
     assert!(matches!(proof.outcome, ProofOutcome::Correct { .. }));
-    assert_eq!(proof.key_provenance.embedded_key, None);
+    let [key] = proof.key_provenance.keys.as_slice() else {
+        panic!("the issuer key alone: {proof:?}")
+    };
+    assert_eq!(key.kinds, [KeySource::IssuerIdentifier]);
 }
 
 /// A key type vcrd does not know may be one a later standard defines, so it is

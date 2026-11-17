@@ -152,7 +152,7 @@ and `verify`, and what to look at there, in the Variables view or with `print`:
 |---|---|---|---|---|
 | The `did:key` decoded | `examples/ed25519.jwt` | `decode_did_key` | At the breakpoint: `identifier`. Step Out: the value returned | `vcrd-core/src/keys.rs` |
 | The keys, and where each came from | `fixtures/embedded-jwk.jwt` | `resolve` | At the breakpoint: `*hints`. Step Over to its last line: `resolution`, whose `keys` holds each distinct key with its kinds | `vcrd-core/src/keys.rs` |
-| The embedded key compared with the issuer key | `fixtures/embedded-jwk.jwt` | `compare_embedded` | Step Out, into `resolve`: `resolution.provenance.thumbprint`, beside `embedded->jwk.thumbprint` | `vcrd-core/src/keys.rs` |
+| The embedded key compared with the issuer key | `fixtures/embedded-jwk.jwt` | `compare_embedded` | Step Out, into `resolve`: `resolution.keys`, where the embedded key has an entry of its own, its thumbprint unlike the issuer key's | `vcrd-core/src/keys.rs` |
 | Which key decides, and which conditions for success are unmet (ARCHITECTURE §8, "Keys and proofs") | `fixtures/embedded-jwk-only.jwt` | `decide` | Step Over to its last line: `deciding` and `unmet` | `vcrd-core/src/keys.rs` |
 
 ### Proofs
@@ -161,7 +161,7 @@ and `verify`, and what to look at there, in the Variables view or with `print`:
 |---|---|---|---|---|
 | The signature check, where `verify_strict` rejects the signature | `fixtures/tampered-claim.jwt` | `eddsa` | Step Out: the value returned | `vcrd-core/src/suites/jws.rs` |
 | The small-order check, before `verify_strict`, which would reject the signature without naming why | `fixtures/small-order-r.jwt` | `eddsa` | Step Over: `small_order` | `vcrd-core/src/suites/jws.rs` |
-| The embedded key's proof, correct where the issuer key's is incorrect (ARCHITECTURE §8, "Keys and proofs") | `fixtures/embedded-jwk.jwt` | `embedded_proof` | Step Over past `embedded.proof = …`: `embedded->proof` | `vcrd-core/src/runner.rs` |
+| Each key's proof, the embedded key's correct where the issuer key's is incorrect, and the finding that says so (ARCHITECTURE §8, "Keys and proofs") | `fixtures/embedded-jwk.jwt` | `key_reports` | Step Over to its last line: `provenance` and `findings` | `vcrd-core/src/runner.rs` |
 
 ### Setting breakpoints
 
@@ -256,12 +256,12 @@ scripts/debugging/did-key-jwk.sh did:key:z6MkpsLTxWPDwHepjwD5uTTUjkg9edkaFWqSMje
 0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
 ```
 
-These are the `jwk` and `thumbprint` that `--format json` reports in
-`proofs[0].key_provenance`. `jwk-thumbprint.sh` reads any OKP JWK, such as an embedded
-key from vcrd's own output:
+These are the `jwk` and `thumbprint` that `--format json` reports for the issuer key in
+`proofs[0].key_provenance.keys`. `jwk-thumbprint.sh` reads any OKP JWK, such as an
+embedded key from vcrd's own output:
 
 ```bash
-cargo run -q -p vcrd-cli -- verify fixtures/embedded-jwk.jwt --now 2026-10-01T00:00:00Z --format json | jq '.proofs[0].key_provenance.embedded_key.jwk' | scripts/debugging/jwk-thumbprint.sh
+cargo run -q -p vcrd-cli -- verify fixtures/embedded-jwk.jwt --now 2026-10-01T00:00:00Z --format json | jq '.proofs[0].key_provenance.keys[] | select(.kinds | index("credential_embedded")) | .jwk' | scripts/debugging/jwk-thumbprint.sh
 ```
 
 ```

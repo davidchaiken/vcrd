@@ -3,12 +3,11 @@
 
 use crate::context::Context;
 use crate::document::{DeclaredAlgorithm, ProofDescriptor, ProofMaterial, ProofTime, ProofTimes};
-use crate::finding::{
-    Attribution, EmbeddedKeyRef, Finding, FindingDetail, KeyRef, KeySourceKind, Severity,
-};
+use crate::finding::{Attribution, Finding, FindingDetail, KeySourceKind, NotDeciding, Severity};
 use crate::json::{self, Json};
 use crate::keys::{
-    self, Condition, Decision, KeyAndProof, KeyPolicy, KeySource, ProofKey, PublicKey, Resolution,
+    self, Condition, Decision, KeyAndProof, KeyPolicy, KeyProvenance, KeyReport, KeySource,
+    ProofKey, PublicKey, Refusal,
 };
 use crate::registry::{CredentialFormat, Detection, ProofInput, Registry};
 use crate::report::{
@@ -254,16 +253,12 @@ fn verify_proofs(
                 let (outcome, suite_findings) =
                     deciding.unwrap_or_else(|| suite.verify(&proof_input(descriptor, None), ctx));
                 findings.extend(suite_findings);
-                findings.extend(embedded_proof(
-                    descriptor,
-                    &mut resolution,
-                    &decision,
-                    &outcome,
-                    &key_proofs,
-                ));
                 outcome
             }
         };
+        let (key_provenance, key_findings) =
+            key_reports(resolution.keys, &decision, &outcome, &key_proofs);
+        findings.extend(key_findings);
         let validity = proof_validity(&descriptor.times, ctx, &mut findings);
         proofs.push(ProofResult {
             suite: descriptor.suite,
@@ -273,7 +268,7 @@ fn verify_proofs(
                 .and_then(DeclaredAlgorithm::name)
                 .map(str::to_owned),
             outcome,
-            key_provenance: resolution.provenance,
+            key_provenance,
             validity,
         });
     }
@@ -289,60 +284,86 @@ fn keys_and_proofs(keys: &[ProofKey], proofs: &[Option<Proof>]) -> Vec<KeyAndPro
     keys.iter()
         .zip(proofs)
         .map(|(key, proof)| KeyAndProof {
-            kinds: key.kinds.clone(),
+            kinds: key.report.kinds.clone(),
             refused: key.key.is_none(),
             correct: matches!(proof, Some((ProofOutcome::Correct { .. }, _))),
         })
         .collect()
 }
 
-/// The proof with the embedded key as the proof key, for information: it decides the
-/// outcome only as ARCHITECTURE §8's rules say, and the deciding proof's findings are the
-/// ones reported. The same key gives the same result, so an embedded key that is the
-/// deciding proof key has the deciding proof's result. An embedded proof that is correct
-/// while the deciding proof is not is its own finding.
-fn embedded_proof(
-    descriptor: &ProofDescriptor,
-    resolution: &mut Resolution,
+/// Each key's report, with its proof's result and, for an embedded key alone without the
+/// caller's opt-in, its refusal; and the findings for proofs that are correct and do not
+/// decide. The proofs with keys other than the deciding proof key are made for
+/// information: they decide the outcome only as ARCHITECTURE §8's rules say, and only
+/// the deciding proof's findings are reported. The same key gives the same result, so a
+/// key that is the deciding proof key has the deciding proof's result.
+///
+/// An embedded key's correct proof, while the deciding proof is not correct and the two
+/// keys are known to differ, is key substitution. Any other correct proof that does not
+/// decide is a warning of its own, with the reason.
+fn key_reports(
+    keys: Vec<ProofKey>,
     decision: &Decision,
     outcome: &ProofOutcome,
     proofs: &[Option<Proof>],
-) -> Option<Finding> {
-    let index = resolution
-        .keys
-        .iter()
-        .position(|k| k.kinds.contains(&KeySource::CredentialEmbedded))?;
-    let provenance = &mut resolution.provenance;
-    let embedded = provenance.embedded_key.as_mut()?;
-    embedded.proof = if decision.deciding == Some(index) {
-        outcome.clone()
-    } else {
-        proofs
-            .get(index)
-            .and_then(Option::as_ref)
-            .map_or(ProofOutcome::NotAttempted, |(o, _)| o.clone())
-    };
-    let (source, thumbprint) = provenance.source.zip(provenance.thumbprint.clone())?;
+) -> (KeyProvenance, Vec<Finding>) {
+    let alone = decision.unmet.contains(&Condition::EmbeddedKeyOptIn);
+    let reports: Vec<KeyReport> = keys
+        .into_iter()
+        .zip(proofs)
+        .enumerate()
+        .map(|(index, (key, proof))| {
+            let mut report = key.report;
+            report.proof = match proof {
+                _ if decision.deciding == Some(index) => outcome.clone(),
+                Some((proof, _)) => proof.clone(),
+                None => ProofOutcome::NotAttempted,
+            };
+            if alone
+                && report.refused.is_none()
+                && report.kinds.contains(&KeySource::CredentialEmbedded)
+            {
+                report.refused = Some(Refusal::EmbeddedKeyAlone);
+            }
+            report
+        })
+        .collect();
     let correct = |o: &ProofOutcome| matches!(o, ProofOutcome::Correct { .. });
-    if !correct(&embedded.proof) || correct(outcome) {
-        return None;
+    let deciding = decision.deciding.and_then(|d| reports.get(d));
+    let mut findings = Vec::new();
+    for (index, report) in reports.iter().enumerate() {
+        if decision.deciding == Some(index) || !correct(&report.proof) {
+            continue;
+        }
+        let substituted = deciding.filter(|d| {
+            !correct(&d.proof)
+                && d.thumbprint.is_some()
+                && report.kinds.contains(&KeySource::CredentialEmbedded)
+        });
+        let detail = match substituted {
+            Some(d) => FindingDetail::EmbeddedKeyProofCorrect {
+                embedded_key: report.reference(),
+                key: d.reference(),
+            },
+            None => FindingDetail::NonDecidingKeyProofCorrect {
+                key: report.reference(),
+                why: report
+                    .refused
+                    .map_or(NotDeciding::AnotherKeyDecides, NotDeciding::Refused),
+            },
+        };
+        findings.push(Finding::new(
+            Phase::Verify,
+            Attribution::Input,
+            Severity::Warning,
+            detail,
+        ));
     }
-    Some(Finding::new(
-        Phase::Verify,
-        Attribution::Input,
-        Severity::Warning,
-        FindingDetail::EmbeddedKeyProofCorrect {
-            embedded_key: EmbeddedKeyRef {
-                location: descriptor.key_hints.embedded.as_ref()?.location,
-                thumbprint: embedded.thumbprint.clone(),
-            },
-            key: KeyRef {
-                source,
-                method: provenance.method,
-                thumbprint,
-            },
-        },
-    ))
+    let provenance = KeyProvenance {
+        deciding: decision.deciding,
+        keys: reports,
+    };
+    (provenance, findings)
 }
 
 fn proof_input<'a>(descriptor: &'a ProofDescriptor, key: Option<&'a PublicKey>) -> ProofInput<'a> {

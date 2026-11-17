@@ -270,22 +270,23 @@ fn level_1_lists_the_checks_not_evaluated_and_where_they_are_described() {
     );
 }
 
-/// docs/output.md: level 1 names the deciding proof key by its thumbprint, gives the
-/// proof's own validity beside the credential's, and the credential's bounds. `text`
-/// says which kind of key it is in a phrase; `plain` keeps `source` and `method`.
+/// docs/output.md: level 1 says which kind of key the deciding proof key is, and gives
+/// the proof's own validity beside the credential's, and the credential's bounds. `text`
+/// says it in a phrase; `plain` keeps `kinds` and `method`. Which key, by its
+/// thumbprint, waits for level 2 (decided 2026-11-16).
 #[test]
-fn level_1_names_the_key_and_both_validity_periods() {
+fn level_1_names_the_kind_of_key_and_both_validity_periods() {
     let thumbprint = "0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c";
     let text = words(&verify(support::EXAMPLE, &[]));
     for phrase in [
         "Credential validity current, 2026-01-01T00:00:00Z to 2031-01-01T00:00:00Z",
         "Validity unbounded",
         "Deciding proof key issuer key, from did:key",
-        &format!("Thumbprint {thumbprint}"),
     ] {
         assert!(text.contains(phrase), "{phrase:?} not in {text}");
     }
     assert!(!text.contains("Key source"), "{text}");
+    assert!(!text.contains(thumbprint), "{text}");
     let expired = words(&verify(&support::fixture("exp-past.jwt"), &[]));
     assert!(
         expired.contains("Outcome correct Validity expired"),
@@ -298,53 +299,113 @@ fn level_1_names_the_key_and_both_validity_periods() {
         "credential.valid_from: 2026-01-01T00:00:00Z",
         "credential.valid_until: 2031-01-01T00:00:00Z",
         "proofs[0].validity: unbounded",
-        "proofs[0].key_provenance.source: issuer_identifier",
-        "proofs[0].key_provenance.method: did:key",
-        &format!("proofs[0].key_provenance.thumbprint: {thumbprint}"),
+        "proofs[0].key_provenance.deciding: 0",
+        "proofs[0].key_provenance.keys[0].kinds: issuer_identifier",
+        "proofs[0].key_provenance.keys[0].method: did:key",
     ] {
+        assert!(plain.lines().any(|l| l == line), "{line:?} not in {plain}");
+    }
+    assert!(!plain.contains(thumbprint), "{plain}");
+}
+
+/// docs/output.md: level 2 names every key by its thumbprint, the deciding proof key
+/// and the others alike, in `text` beneath each key's line and in `plain` as each key's
+/// `thumbprint`.
+#[test]
+fn level_2_names_every_key_by_its_thumbprint() {
+    let input = support::fixture("embedded-jwk.jwt");
+    let thumbprints = [
+        "0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c",
+        "_i3gzFWABuHlZnuT9FBtp8CVlJ57CcWpTPwviZ2m1ms",
+    ];
+    let text = words(&verify(&input, &["--verbosity", "2"]));
+    let position = |s: &str| {
+        text.find(s)
+            .unwrap_or_else(|| panic!("{s:?} not in {text}"))
+    };
+    let order = [
+        position("Deciding proof key issuer key"),
+        position(&format!("Thumbprint {}", thumbprints[0])),
+        position("Other key embedded key"),
+        position(&format!("Thumbprint {}", thumbprints[1])),
+    ];
+    assert!(
+        order.windows(2).all(|w| w[0] < w[1]),
+        "each thumbprint beneath its key: {text}"
+    );
+    let plain = verify(&input, &["--format", "plain", "--verbosity", "2"]);
+    for (index, thumbprint) in thumbprints.iter().enumerate() {
+        let line = format!("proofs[0].key_provenance.keys[{index}].thumbprint: {thumbprint}");
         assert!(plain.lines().any(|l| l == line), "{line:?} not in {plain}");
     }
 }
 
-/// docs/output.md: `text` describes the embedded key in a phrase, whether it is the
-/// issuer key and its proof's result; `plain` keeps the values.
+/// docs/output.md: `text` describes each key in a phrase, the deciding proof key first,
+/// with the other keys' proofs' results and why a key is refused; `plain` keeps the
+/// values. Level 1 shows no thumbprint.
 #[test]
-fn level_1_describes_the_embedded_key_in_a_phrase() {
-    let embedded = "proofs[0].key_provenance.embedded_key";
-    for (fixture, phrase, values) in [
+fn level_1_describes_each_key_in_a_phrase() {
+    let provenance = "proofs[0].key_provenance";
+    for (fixture, phrases, values) in [
         (
             "embedded-jwk-only.jwt",
-            "header.jwk: no issuer key to compare with; proof correct",
-            &["proof: correct"][..],
+            &[
+                "Deciding proof key none",
+                "Other key embedded key, at header.jwk; proof correct; refused: alone, without the opt-in",
+            ][..],
+            vec![
+                "keys[0].kinds: credential_embedded",
+                "keys[0].location: header.jwk",
+                "keys[0].proof: correct",
+                "keys[0].refused: embedded_key_alone",
+            ],
         ),
         (
             "embedded-jwk.jwt",
-            "header.jwk: a different key; proof correct",
-            &["same_as_issuer_key: false", "proof: correct"][..],
+            &[
+                "Deciding proof key issuer key, from did:key",
+                "Other key embedded key, at header.jwk; proof correct",
+            ][..],
+            vec![
+                "deciding: 0",
+                "keys[0].kinds: issuer_identifier",
+                "keys[0].method: did:key",
+                "keys[0].proof: incorrect",
+                "keys[1].kinds: credential_embedded",
+                "keys[1].location: header.jwk",
+                "keys[1].proof: correct",
+            ],
         ),
         (
             "embedded-jwk-same.jwt",
-            "header.jwk: the same key; proof correct",
-            &["same_as_issuer_key: true", "proof: correct"][..],
+            &["Deciding proof key issuer key, from did:key, and embedded key, at header.jwk"][..],
+            vec![
+                "deciding: 0",
+                "keys[0].kinds: issuer_identifier, credential_embedded",
+                "keys[0].method: did:key",
+                "keys[0].location: header.jwk",
+                "keys[0].proof: correct",
+            ],
         ),
     ] {
         let input = support::fixture(fixture);
         let text = verify(&input, &[]);
-        assert!(
-            words(&text).contains(&format!("Embedded key {phrase}")),
-            "{text}"
-        );
+        for phrase in phrases {
+            assert!(words(&text).contains(phrase), "{phrase:?} not in {text}");
+        }
         assert!(
             !text
                 .lines()
-                .any(|l| l.starts_with(" Same as issuer key") || l.starts_with(" Proof ")),
+                .any(|l| l.starts_with(" Kinds") || l.starts_with(" Proof ")),
             "{text}"
         );
 
         let plain = verify(&input, &["--format", "plain"]);
-        let lines: Vec<&str> = plain.lines().filter(|l| l.starts_with(embedded)).collect();
-        let mut expected = vec![format!("{embedded}.location: header.jwk")];
-        expected.extend(values.iter().map(|v| format!("{embedded}.{v}")));
+        let lines: Vec<&str> = plain
+            .lines()
+            .filter(|l| l.starts_with(provenance))
+            .collect();
+        let expected: Vec<String> = values.iter().map(|v| format!("{provenance}.{v}")).collect();
         assert_eq!(lines, expected, "{plain}");
     }
 }

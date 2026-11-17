@@ -13,9 +13,7 @@ use tabled::builder::Builder;
 use tabled::settings::object::{Cell as TableCell, Columns};
 use tabled::settings::{Style, Width};
 
-use crate::view::{
-    EmbeddedKeyView, Envelope, FindingView, LeafView, PhaseView, ProofView, ResultView,
-};
+use crate::view::{Envelope, FindingView, KeyView, LeafView, PhaseView, ProofView, ResultView};
 
 /// The `text` output at this verbosity, 1 to 3.
 pub fn text(envelope: &Envelope, verbosity: u8) -> String {
@@ -577,68 +575,63 @@ fn proof_section(index: usize, proof: &ProofView, full: bool) -> Section {
     if let Some(validity) = proof.validity {
         fields.push(field("validity", "Validity", validity));
     }
+    // Every key, at every level: without the keys that do not decide and their proofs'
+    // results, a refused key reads as if nothing was tried. The deciding proof key
+    // comes first. Level 1 says which kinds of key each is and where each came from;
+    // which key, by its thumbprint, is level 2's (decided 2026-11-16).
     let provenance = &proof.key_provenance;
-    if let Some(source) = provenance.source {
-        let phrase = key_source(source, provenance.method);
-        fields.push(field("key_provenance", "Deciding proof key", phrase).text_only());
-        fields.push(field("key_provenance.source", "Key source", source).plain_only());
+    // "none" only when verify ran, which `validity` marks: otherwise no key was tried.
+    if provenance.deciding.is_none() && proof.validity.is_some() {
+        fields.push(field("key_provenance.deciding", "Deciding proof key", "none").text_only());
     }
-    if let Some(method) = provenance.method {
-        let method = field("key_provenance.method", "Method", method);
-        // `text` says it in the key's phrase, when there is one.
-        fields.push(if provenance.source.is_some() {
-            method.plain_only()
-        } else {
-            method
-        });
-    }
-    // Which key, at every level: the source alone does not name it.
-    if let Some(thumbprint) = &provenance.thumbprint {
-        fields.push(field(
-            "key_provenance.thumbprint",
-            "Thumbprint",
-            thumbprint.clone(),
-        ));
-    }
-    if full && let Some(jwk) = &provenance.jwk {
-        fields.push(field("key_provenance.jwk", "Key JWK", jwk.to_string()));
-    }
-    // The embedded key, whether it is the issuer key and its proof's result, at every
-    // level: without them a refused key reads as if nothing was tried.
-    if let Some(key) = &provenance.embedded_key {
-        let embedded = "key_provenance.embedded_key";
-        fields.push(field(embedded, "Embedded key", embedded_key(key)).text_only());
-        fields.push(
-            field(
-                &format!("{embedded}.location"),
-                "Embedded key",
-                key.location.clone(),
-            )
-            .plain_only(),
-        );
-        if full {
-            fields.push(field(
-                &format!("{embedded}.thumbprint"),
-                "Embedded key thumbprint",
-                key.thumbprint.clone(),
-            ));
-            fields.push(field(
-                &format!("{embedded}.jwk"),
-                "Embedded key JWK",
-                key.jwk.to_string(),
-            ));
-        }
-        if let Some(same) = key.same_as_issuer_key {
+    let order = provenance
+        .deciding
+        .into_iter()
+        .chain((0..provenance.keys.len()).filter(|&i| Some(i) != provenance.deciding));
+    for index in order {
+        let Some(key) = provenance.keys.get(index) else {
+            continue;
+        };
+        let deciding = Some(index) == provenance.deciding;
+        let name = format!("key_provenance.keys[{index}]");
+        let member = |m: &str| format!("{name}.{m}");
+        if deciding {
             fields.push(
                 field(
-                    &format!("{embedded}.same_as_issuer_key"),
-                    "Same as issuer key",
-                    same.to_string(),
+                    "key_provenance.deciding",
+                    "Deciding proof key",
+                    index.to_string(),
                 )
                 .plain_only(),
             );
         }
-        fields.push(field(&format!("{embedded}.proof"), "Proof", key.proof).plain_only());
+        let (label, phrase) = if deciding {
+            ("Deciding proof key", key_phrase(key, false))
+        } else {
+            ("Other key", key_phrase(key, true))
+        };
+        fields.push(field(&name, label, phrase).text_only());
+        fields.push(field(&member("kinds"), "Kinds", key.kinds.join(", ")).plain_only());
+        if let Some(method) = key.method {
+            fields.push(field(&member("method"), "Method", method).plain_only());
+        }
+        if let Some(location) = key.location {
+            fields.push(field(&member("location"), "Location", location).plain_only());
+        }
+        if let Some(thumbprint) = key.thumbprint.as_ref().filter(|_| full) {
+            fields.push(field(
+                &member("thumbprint"),
+                "Thumbprint",
+                thumbprint.clone(),
+            ));
+        }
+        if full && let Some(jwk) = &key.jwk {
+            fields.push(field(&member("jwk"), "JWK", jwk.to_string()));
+        }
+        fields.push(field(&member("proof"), "Proof", key.proof).plain_only());
+        if let Some(refused) = key.refused {
+            fields.push(field(&member("refused"), "Refused", refused).plain_only());
+        }
     }
     Section {
         name,
@@ -647,31 +640,41 @@ fn proof_section(index: usize, proof: &ProofView, full: bool) -> Section {
     }
 }
 
-/// Which kind of key the deciding proof key is, in ARCHITECTURE §8's terms, such as
-/// `issuer key, from did:key`.
-fn key_source(source: &str, method: Option<&str>) -> String {
-    let kind = match source {
-        "issuer_identifier" => "issuer key",
-        "caller_supplied" => "caller-supplied key",
-        "credential_embedded" => "embedded key",
-        other => other,
-    };
-    match method {
-        Some(method) => format!("{kind}, from {method}"),
-        None => kind.to_owned(),
+/// A key in ARCHITECTURE §8's terms: the kinds of key it is and where each came from,
+/// with, for a key that does not decide, its proof's result, and why it is refused,
+/// such as `embedded key, at header.jwk; proof correct`.
+fn key_phrase(key: &KeyView, with_proof: bool) -> String {
+    let kinds: Vec<String> = key
+        .kinds
+        .iter()
+        .map(|kind| match *kind {
+            "issuer_identifier" => match key.method {
+                Some(method) => format!("issuer key, from {method}"),
+                None => "issuer key".to_owned(),
+            },
+            "credential_embedded" => match key.location {
+                Some(location) => format!("embedded key, at {location}"),
+                None => "embedded key".to_owned(),
+            },
+            "caller_supplied" => "caller-supplied key".to_owned(),
+            other => other.to_owned(),
+        })
+        .collect();
+    let mut phrase = kinds.join(", and ");
+    if with_proof {
+        phrase.push_str(&format!("; proof {}", key.proof.replace('_', " ")));
     }
-}
-
-/// The embedded key in a phrase: where it is, whether it is the issuer key, and its
-/// proof's result, such as `header.jwk: a different key; proof correct`.
-fn embedded_key(key: &EmbeddedKeyView) -> String {
-    let comparison = match key.same_as_issuer_key {
-        Some(true) => "the same key",
-        Some(false) => "a different key",
-        None => "no issuer key to compare with",
-    };
-    let proof = key.proof.replace('_', " ");
-    format!("{}: {comparison}; proof {proof}", key.location)
+    if let Some(refused) = key.refused {
+        let why = match refused {
+            "weak_key" => "a weak key",
+            "not_for_signing" => "not a signing key",
+            "type_unsupported" => "a type vcrd cannot use",
+            "embedded_key_alone" => "alone, without the opt-in",
+            other => other,
+        };
+        phrase.push_str(&format!("; refused: {why}"));
+    }
+    phrase
 }
 
 /// Values: the claims, the metadata or the header. The Visibility column says

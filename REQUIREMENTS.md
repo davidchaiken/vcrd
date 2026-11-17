@@ -1292,8 +1292,8 @@ checked for such conflicts when the standard comes into scope (§11).
     `credentialSubject.id`.
   - `vc` and `vp` — a credential or a presentation inside a JWT, as VCDM 1.1's JWT
     encoding has it. VC-JOSE-COSE says they MUST NOT be present.
-- **Key provenance** — where the deciding proof key came from, and the embedded key, if
-  any (§10).
+- **Key provenance** — each key a result involves, the kinds of key it is and where each
+  came from, its proof's result, and which key is the deciding proof key (§10).
 - **KMS** — Key Management Service.
 - **mDL** — mobile driver's license.
 - **mdoc** — the ISO 18013-5 "mobile document" CBOR-encoded credential format that mDLs

@@ -7,7 +7,7 @@ mod support;
 
 use std::fs;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/..");
 
@@ -82,25 +82,38 @@ fn vcrd_agrees_with_every_row_milestone_1_can_produce() {
         let context = format!("row {key} ({situation}), {input}: {out}");
         let proof = &out["proofs"][0];
         let provenance = &proof["key_provenance"];
-        let embedded = provenance.get("embedded_key");
+        let keys = provenance["keys"].as_array().unwrap();
+        let with = |kind: &str| {
+            keys.iter()
+                .position(|k| k["kinds"].as_array().unwrap().contains(&json!(kind)))
+        };
+        let (embedded, issuer) = (with("credential_embedded"), with("issuer_identifier"));
         let present = |i: usize| eic.chars().nth(i) == Some('1');
         let (has_embedded, has_issuer) = (present(0), present(1));
 
         assert_eq!(embedded.is_some(), has_embedded, "{context}");
-        if let Some(embedded) = embedded {
-            assert_eq!(embedded["proof"], correct(embedded_proof), "{context}");
-            assert_eq!(
-                embedded.get("same_as_issuer_key"),
-                has_issuer.then(|| Value::Bool(same == "Y")).as_ref(),
-                "{context}"
-            );
+        assert_eq!(issuer.is_some(), has_issuer, "{context}");
+        // Two kinds that are the same key are one entry.
+        if has_embedded && has_issuer {
+            assert_eq!(embedded == issuer, same == "Y", "{context}");
         }
+        if let Some(e) = embedded {
+            assert_eq!(keys[e]["proof"], correct(embedded_proof), "{context}");
+        }
+        // Without a caller-supplied key or the override, the issuer key decides.
+        assert_eq!(
+            provenance.get("deciding"),
+            issuer.map(Value::from).as_ref(),
+            "{context}"
+        );
         if has_issuer {
-            assert_eq!(provenance["source"], "issuer_identifier", "{context}");
             assert_eq!(proof["outcome"], correct(issuer_proof), "{context}");
         } else {
-            assert!(provenance.get("source").is_none(), "{context}");
             assert_eq!(proof["outcome"], "not_attempted", "{context}");
+            // Without the opt-in, an embedded key alone is refused.
+            if let Some(e) = embedded {
+                assert_eq!(keys[e]["refused"], "embedded_key_alone", "{context}");
+            }
         }
         // Milestone 1 has no opt-in, so E does not succeed either.
         assert_eq!(output.status.code() == Some(0), success == "Y", "{context}");
@@ -116,6 +129,13 @@ fn vcrd_agrees_with_every_row_milestone_1_can_produce() {
         assert_eq!(
             has(&out, "verify.embedded_key_proof_correct"),
             substituted,
+            "{context}"
+        );
+        // An embedded key that does not decide, with a correct proof.
+        let uncounted = has_embedded && embedded != issuer && embedded_proof == "Y";
+        assert_eq!(
+            has(&out, "verify.non_deciding_key_proof_correct"),
+            uncounted && !substituted,
             "{context}"
         );
     }

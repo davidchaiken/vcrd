@@ -28,8 +28,10 @@ fn verify_exits_0_with_one_json_document() {
     );
     let proof = &out["proofs"][0];
     assert_eq!(proof["outcome"], "correct");
-    assert_eq!(proof["key_provenance"]["source"], "issuer_identifier");
-    assert_eq!(proof["key_provenance"]["method"], "did:key");
+    assert_eq!(proof["key_provenance"]["deciding"], 0);
+    let key = &proof["key_provenance"]["keys"][0];
+    assert_eq!(key["kinds"], json!(["issuer_identifier"]));
+    assert_eq!(key["method"], "did:key");
     assert_eq!(out["credential"]["validity"], "current");
     assert_eq!(
         out["not_evaluated"],

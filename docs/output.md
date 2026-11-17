@@ -30,8 +30,8 @@ complete at levels 1 to 3.
 | Level | `text` and `plain` show |
 |---|---|
 | 0 | nothing, in any format, on either stream: the exit code is the whole answer. `--unsafe` has no effect, since nothing is shown. |
-| 1 | the status; the credential's kind, issuer, types, and validity with its bounds; inspect's outcome, kinds of finding and what blocked it; when verify was requested, the same for verify, and each proof's suite, algorithm, outcome and own validity, which kind of key the deciding proof key is (`key_provenance.source` and `method`) and its thumbprint, and the embedded key, if any: where it is, whether it is the issuer key, and its proof's result; the claims, masked; every error and warning, and how many `info` findings were left out; and the checks not evaluated |
-| 2 | everything except the credential's metadata. Level 1, plus: the exit code; the input's size and depth; the format and profile; the parse phase; the JWK of the deciding proof key, and the thumbprint and JWK of the embedded key; the header; and the `info` findings |
+| 1 | the status; the credential's kind, issuer, types, and validity with its bounds; inspect's outcome, kinds of finding and what blocked it; when verify was requested, the same for verify, and each proof's suite, algorithm, outcome and own validity, and each of its keys (`key_provenance`): the kinds of key it is and where each came from, its proof's result, and why it is refused; the claims, masked; every error and warning, and how many `info` findings were left out; and the checks not evaluated |
+| 2 | everything except the credential's metadata. Level 1, plus: the exit code; the input's size and depth; the format and profile; the parse phase; each key's thumbprint and JWK; the header; and the `info` findings |
 | 3 | everything: level 2, plus the credential's metadata |
 
 An `info` finding never fails a phase, and one appears on most credentials in use today:
@@ -47,8 +47,8 @@ phrase is made of, one per line, as JSON names them:
 | `text` | Example | `plain` |
 |---|---|---|
 | Credential validity | `current, 2026-01-01T00:00:00Z to 2031-01-01T00:00:00Z` | `credential.validity`, `valid_from`, `valid_until` |
-| Deciding proof key | `issuer key, from did:key` | `key_provenance.source`, `method` |
-| Embedded key | `header.jwk: a different key; proof correct` | `key_provenance.embedded_key.location`, `same_as_issuer_key`, `proof` |
+| Deciding proof key | `issuer key, from did:key`, or `none` when verify ran and no key decides | `key_provenance.deciding`, and that key's `kinds`, `method`, `location`, `proof` and `refused` |
+| Other key | `embedded key, at header.jwk; proof correct` | `key_provenance.keys[n].kinds`, `method`, `location`, `proof` and `refused` |
 
 The summary's validity is labeled Credential validity because a proof has its own,
 labeled Validity in the Proof section: the JWT's `nbf` and `exp`, which can expire while
@@ -197,31 +197,36 @@ defines them in full:
 
 The rules, which ARCHITECTURE.md §8 sets out as a table of every combination:
 
-1. A caller-supplied key and an issuer key, when both are present, must be the same key.
-2. The deciding proof key is the caller-supplied key or the issuer key. The embedded key
-   decides only when neither is present, and then only with the caller's opt-in.
+1. A caller-supplied key and an issuer key, when both are present, must be the same key,
+   unless the caller opts in to letting its key override the issuer key (milestone 2).
+2. The deciding proof key is the issuer key when it is present, and the caller-supplied
+   key when the issuer key is not present or the caller has opted in to the override. The
+   embedded key decides only when neither is present, and then only with the caller's
+   opt-in.
 3. vcrd may succeed only when the deciding proof is correct.
 
-A refused caller-supplied or issuer key prevents success; a refused embedded key is
-treated as not present. The rules are necessary, not sufficient: an inspect error or an
-expired signature still fails.
+A refused caller-supplied or issuer key prevents success, and still decides, so that no
+other key can; a refused embedded key is treated as not present. The rules are
+necessary, not sufficient: an inspect error or an expired signature still fails.
 
 Where a result answers each question about its keys:
 
 | Question | JSON and `plain` | `text` |
 |---|---|---|
-| Which kind of key is the deciding proof key? | `key_provenance.source` and `method`; absent when no key could decide | Deciding proof key |
-| Does the credential carry an embedded key? | `key_provenance.embedded_key`, present when it carries one vcrd can read | Embedded key |
-| Is the embedded key the issuer key? | `embedded_key.same_as_issuer_key`, absent when there is no issuer key; the two thumbprints | the same key, a different key, or no issuer key to compare with |
-| Is the deciding proof correct? | `outcome` | Outcome |
-| Is the proof with the embedded key correct? | `embedded_key.proof` | proof correct, incorrect or not attempted |
+| Which keys are there? | `key_provenance.keys`: each distinct key once, with its `kinds` (`caller_supplied`, `issuer_identifier`, `credential_embedded`) and where each came from, `method` for the issuer key and `location` for the embedded key | Deciding proof key, Other key |
+| Which key decides? | `key_provenance.deciding`, its index in `keys`; absent when no key decides | Deciding proof key, or `none` |
+| Is the embedded key the issuer key? | whether one entry in `keys` has both kinds | `issuer key, from did:key, and embedded key, at header.jwk` |
+| Is the deciding proof correct? | `outcome`, and that key's `proof` | Outcome |
+| Is the proof with another key correct? | that key's `proof` | `proof correct`, `proof incorrect` or `proof not attempted` |
+| Why may a key not decide? | its `refused`: `weak_key`, `not_for_signing`, `type_unsupported` or `embedded_key_alone` | `refused:` and a phrase |
 
 The findings that say what the keys and proofs show:
 
 | Situation | Finding |
 |---|---|
 | The embedded key is not the issuer key. | [`verify.embedded_key_mismatch`](findings.md#verify.embedded_key_mismatch), a warning |
-| The proof with the embedded key is correct and the deciding proof is not: key substitution. | [`verify.embedded_key_proof_correct`](findings.md#verify.embedded_key_proof_correct), a warning |
+| The proof with the embedded key is correct, the deciding proof is not, and the two keys are known to differ: key substitution. | [`verify.embedded_key_proof_correct`](findings.md#verify.embedded_key_proof_correct), a warning |
+| Any other proof with a key that does not decide is correct. | [`verify.non_deciding_key_proof_correct`](findings.md#verify.non_deciding_key_proof_correct), a warning |
 | An embedded key alone, without the caller's opt-in. | [`verify.embedded_key_refused`](findings.md#verify.embedded_key_refused), an error |
 | A refused issuer key. | [`verify.weak_key`](findings.md#verify.weak_key), [`verify.did_key_not_for_signing`](findings.md#verify.did_key_not_for_signing) or [`verify.did_key_codec_unsupported`](findings.md#verify.did_key_codec_unsupported), errors |
 
@@ -234,32 +239,38 @@ One object for each proof the input carries, whether or not verify ran:
 | `suite` | always | the proof suite, such as `jws` |
 | `algorithm` | always | the algorithm the input declares, which vcrd checks and never obeys; `null` when there is none |
 | `outcome` | always | the proof's result with the deciding proof key: `correct`, `incorrect`, or `not_attempted` (no key could decide, or the algorithm or the signature ruled out every proof; the findings say which) |
-| `key_provenance` | always | where the deciding proof key came from, and the embedded key, if any (above); empty when verify did not run |
+| `key_provenance` | always | each key and which decides (above); `keys` is empty when verify did not run |
 | `validity` | when verify ran | where the clock falls relative to the proof's own times: `current`, `expired`, `not_yet_valid`, `unbounded` (no times) or `unknown` (a time that is not a number). For a JWT these are `nbf` and `exp`, the times of the signature, separate from the credential's own validity period in `credential.validity` |
 
 A proof can be correct and still have expired: `outcome` and `validity` are independent.
 
-`key_provenance.embedded_key` has the embedded key's `location`, `thumbprint` and `jwk`;
-`same_as_issuer_key`, absent when there is no issuer key to compare it with; and `proof`,
-the proof's result with it as the proof key, which vcrd makes for information whether or
-not the key can decide. `outcome: not_attempted` with `embedded_key.proof: correct`
-means that the signature holds for a key vcrd refused to let decide (REQUIREMENTS §10).
+`key_provenance` has `deciding`, the index in `keys` of the deciding proof key, absent
+when no key decides, and `keys`, each distinct key once:
+
+| Key | Present | Value |
+|---|---|---|
+| `kinds` | always | the kinds of key it is, in the order caller-supplied, issuer, embedded: the values of an open set, so consumers must accept values they do not recognize |
+| `method` | for the issuer key | how it was derived from the issuer identifier, such as `did:key` |
+| `location` | for an embedded key | where the credential carries it, such as `header.jwk` |
+| `thumbprint` | when vcrd can decode the key | its JWK Thumbprint |
+| `jwk` | with `thumbprint` | the key as a JWK |
+| `proof` | always | the proof's result with it as the proof key, which vcrd makes for information whether or not the key can decide |
+| `refused` | when the key may not decide | why: `weak_key`, `not_for_signing`, `type_unsupported` or `embedded_key_alone` |
+
+`outcome: not_attempted` with another key's `proof: correct` means that the signature
+holds for a key vcrd did not let decide (REQUIREMENTS §10).
 
 Each key is named by its JWK Thumbprint (RFC 7638; REQUIREMENTS §15): the SHA-256, in
 base64url, of its public members as a canonical JSON object. Beside the thumbprint is the
 key itself as a JWK, those same members, so that a reader can see which key a thumbprint
-names and compare two keys by eye:
-
-| Key | What it names |
-|---|---|
-| `key_provenance.thumbprint`, `key_provenance.jwk` | the deciding proof key: for a `did:key` issuer, the key the identifier encodes |
-| `embedded_key.thumbprint`, `embedded_key.jwk` | the embedded key, at `embedded_key.location`, such as the header's `jwk` |
+names and compare two keys by eye. For a `did:key` issuer, the key is the one the
+identifier encodes; a `did:key` of a type vcrd names but cannot use has no thumbprint.
 
 An embedded key's private members, if any, are never part of its JWK here. Findings about
-keys name them the same way: `key`, with its `source`, `method` and `thumbprint`, for the
-issuer key or the deciding proof key, and `embedded_key`, with its `location` and
-`thumbprint`, for the embedded key. `verify.weak_key` adds `criterion`, the weak-key test
-the key fails: for Ed25519, `small_order`.
+keys name them the same way, without the JWK: `key`, and for the embedded key
+`embedded_key`, each with its `kinds`, `method` or `location`, and `thumbprint`.
+`verify.weak_key` adds `criterion`, the weak-key test the key fails: for Ed25519,
+`small_order`.
 
 ## `findings`
 
@@ -318,7 +329,6 @@ Proof
  Outcome              correct
  Validity             unbounded
  Deciding proof key   issuer key, from did:key
- Thumbprint           0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
 
 Claims
  Path                          | Type   | Value    | Visibility
@@ -362,9 +372,10 @@ proofs[0].suite: jws
 proofs[0].algorithm: EdDSA
 proofs[0].outcome: correct
 proofs[0].validity: expired
-proofs[0].key_provenance.source: issuer_identifier
-proofs[0].key_provenance.method: did:key
-proofs[0].key_provenance.thumbprint: 0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
+proofs[0].key_provenance.deciding: 0
+proofs[0].key_provenance.keys[0].kinds: issuer_identifier
+proofs[0].key_provenance.keys[0].method: did:key
+proofs[0].key_provenance.keys[0].proof: correct
 credential.claims.credentialSubject.degree.name: type=string value=(masked) visibility=masked
 credential.claims.credentialSubject.degree.type: type=string value=(masked) visibility=masked
 credential.claims.credentialSubject.id: type=string value=(masked) visibility=masked
@@ -496,12 +507,13 @@ vcrd verify fixtures/exp-past.jwt --now 2026-10-01T00:00:00Z --format json | jq 
 the same instant, `null` if it is outside the years -9999 to 9999.
 
 A credential with no `issuer` that carries its signer's key in the header's `jwk`. With no
-issuer key, vcrd refuses the embedded key, so no key decides: `outcome` is
-`not_attempted`, and verify fails, attributed to the caller's policy. `proof: correct`
-says the signature holds for the refused key: the credential was signed by whoever holds
-that key, which is all a key the credential asserts about itself can show. There is no
-`same_as_issuer_key`, since there is no issuer key to compare it with. With no deciding
-proof key, the `info` finding for `EdDSA` has `replacement: null`.
+issuer key, vcrd refuses the embedded key, `refused: embedded_key_alone`, so no key
+decides: there is no `deciding`, `outcome` is `not_attempted`, and verify fails,
+attributed to the caller's policy. `proof: correct` says the signature holds for the
+refused key: the credential was signed by whoever holds that key, which is all a key the
+credential asserts about itself can show. `verify.non_deciding_key_proof_correct` says the
+same as a finding. With no deciding proof key, the `info` finding for `EdDSA` has
+`replacement: null`.
 
 ```bash
 vcrd verify fixtures/embedded-jwk-only.jwt --now 2026-10-01T00:00:00Z --format json | jq '{status, exit_code, proofs: [.proofs[] | {outcome, key_provenance}], findings: [.findings[] | {code, attribution}]}'
@@ -515,19 +527,24 @@ vcrd verify fixtures/embedded-jwk-only.jwt --now 2026-10-01T00:00:00Z --format j
     {
       "outcome": "not_attempted",
       "key_provenance": {
-        "embedded_key": {
-          "location": "header.jwk",
-          "thumbprint": "0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c",
-          "jwk": { "crv": "Ed25519", "kty": "OKP", "x": "mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0" },
-          "proof": "correct"
-        }
+        "keys": [
+          {
+            "kinds": ["credential_embedded"],
+            "location": "header.jwk",
+            "thumbprint": "0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c",
+            "jwk": { "crv": "Ed25519", "kty": "OKP", "x": "mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0" },
+            "proof": "correct",
+            "refused": "embedded_key_alone"
+          }
+        ]
       }
     }
   ],
   "findings": [
     { "code": "inspect.issuer_missing", "attribution": "input" },
     { "code": "verify.embedded_key_refused", "attribution": "policy" },
-    { "code": "verify.algorithm_deprecated", "attribution": "input" }
+    { "code": "verify.algorithm_deprecated", "attribution": "input" },
+    { "code": "verify.non_deciding_key_proof_correct", "attribution": "input" }
   ]
 }
 ```

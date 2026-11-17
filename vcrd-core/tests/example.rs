@@ -55,11 +55,12 @@ fn verifies_when_current() {
     };
     assert!(matches!(proof.outcome, ProofOutcome::Correct { .. }));
     assert_eq!(proof.algorithm.as_deref(), Some("EdDSA"));
-    assert_eq!(
-        proof.key_provenance.source,
-        Some(KeySource::IssuerIdentifier)
-    );
-    assert_eq!(proof.key_provenance.method, Some("did:key"));
+    assert_eq!(proof.key_provenance.deciding, Some(0));
+    let [key] = proof.key_provenance.keys.as_slice() else {
+        panic!("one key: {proof:?}")
+    };
+    assert_eq!(key.kinds, [KeySource::IssuerIdentifier]);
+    assert_eq!(key.method, Some("did:key"));
     assert!(report.contained.is_empty());
 }
 
@@ -132,10 +133,13 @@ fn a_format_without_its_suite_is_vcrds_limit() {
         panic!("one proof")
     };
     assert!(matches!(proof.outcome, ProofOutcome::NotAttempted));
-    assert_eq!(
-        proof.key_provenance.source,
-        Some(KeySource::IssuerIdentifier)
-    );
+    // Without the suite, the issuer key still decides, and its proof is not attempted.
+    assert_eq!(proof.key_provenance.deciding, Some(0));
+    let [key] = proof.key_provenance.keys.as_slice() else {
+        panic!("one key: {proof:?}")
+    };
+    assert_eq!(key.kinds, [KeySource::IssuerIdentifier]);
+    assert!(matches!(key.proof, ProofOutcome::NotAttempted));
 }
 
 /// The claims are masked in every `Debug` rendering of the report (ARCHITECTURE §7).

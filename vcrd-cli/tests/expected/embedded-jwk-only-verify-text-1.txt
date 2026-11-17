@@ -4,17 +4,18 @@
  Credential validity   current, 2026-01-01T00:00:00Z to 2031-01-01T00:00:00Z
 
 Phases
- Phase   | Outcome | Findings                    | Blocked by
----------+---------+-----------------------------+------------
- inspect | failed  | inspect.issuer_missing      |
- verify  | failed  | verify.embedded_key_refused |
+ Phase   | Outcome | Findings                                                           | Blocked by
+---------+---------+--------------------------------------------------------------------+------------
+ inspect | failed  | inspect.issuer_missing                                             |
+ verify  | failed  | verify.embedded_key_refused, verify.non_deciding_key_proof_correct |
 
 Proof
- Suite          jws
- Algorithm      EdDSA
- Outcome        not_attempted
- Validity       unbounded
- Embedded key   header.jwk: no issuer key to compare with; proof correct
+ Suite                jws
+ Algorithm            EdDSA
+ Outcome              not_attempted
+ Validity             unbounded
+ Deciding proof key   none
+ Other key            embedded key, at header.jwk; proof correct; refused: alone, without the opt-in
 
 Claims
  Path                          | Type   | Value    | Visibility
@@ -25,10 +26,14 @@ Claims
  id                            | string | (masked) | masked
 
 Findings
- Code                        | Attribution | Severity | Detail
------------------------------+-------------+----------+----------------------
- inspect.issuer_missing      | input       | error    |
- verify.embedded_key_refused | policy      | error    | location: header.jwk
+ Code                                  | Attribution | Severity | Detail
+---------------------------------------+-------------+----------+-------------------------------------------------------------
+ inspect.issuer_missing                | input       | error    |
+ verify.embedded_key_refused           | policy      | error    | location: header.jwk
+ verify.non_deciding_key_proof_correct | input       | warning  | key.kinds: credential_embedded
+                                       |             |          | key.location: header.jwk
+                                       |             |          | key.thumbprint: 0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
+                                       |             |          | why: embedded_key_alone
 
  Not shown   1 info finding (see --verbosity 2)
 

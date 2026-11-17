@@ -17,15 +17,13 @@ proofs[0].suite: jws
 proofs[0].algorithm: EdDSA
 proofs[0].outcome: correct
 proofs[0].validity: unbounded
-proofs[0].key_provenance.source: issuer_identifier
-proofs[0].key_provenance.method: did:key
-proofs[0].key_provenance.thumbprint: 0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
-proofs[0].key_provenance.jwk: {"crv":"Ed25519","kty":"OKP","x":"mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0"}
-proofs[0].key_provenance.embedded_key.location: header.jwk
-proofs[0].key_provenance.embedded_key.thumbprint: 0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
-proofs[0].key_provenance.embedded_key.jwk: {"crv":"Ed25519","kty":"OKP","x":"mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0"}
-proofs[0].key_provenance.embedded_key.same_as_issuer_key: true
-proofs[0].key_provenance.embedded_key.proof: correct
+proofs[0].key_provenance.deciding: 0
+proofs[0].key_provenance.keys[0].kinds: issuer_identifier, credential_embedded
+proofs[0].key_provenance.keys[0].method: did:key
+proofs[0].key_provenance.keys[0].location: header.jwk
+proofs[0].key_provenance.keys[0].thumbprint: 0kK-Zjs_vVav2Mgu9S8siRJe5kiAirSKcKbBklPk90c
+proofs[0].key_provenance.keys[0].jwk: {"crv":"Ed25519","kty":"OKP","x":"mr_OeAx1DyiX4A43ybyqSq5M1eqR4HqXxtw69t3R2c0"}
+proofs[0].key_provenance.keys[0].proof: correct
 format.header.alg: type=string value=EdDSA visibility=non_sensitive
 format.header.cty: type=string value=vc visibility=non_sensitive
 format.header.jwk.crv: type=string value=Ed25519 visibility=non_sensitive

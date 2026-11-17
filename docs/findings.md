@@ -853,7 +853,8 @@ repository; neither has a dated copy, so each is linked where it is published no
   [multicodec table], when vcrd knows it, otherwise `null`.
 - **Standard.** None: the key types vcrd implements ([ARCHITECTURE] §8).
 - **Remedy.** Use a verifier that implements `name`. `p256-pub` and `p521-pub` arrive in
-  milestone 2 ([DEVELOPMENT-PLAN.md]).
+  milestone 2 ([DEVELOPMENT-PLAN.md]). `key_provenance` lists the key as the issuer key,
+  refused (`type_unsupported`), with no thumbprint, since vcrd does not decode it.
 
 ### <a id="verify.did_key_not_for_signing"></a>`verify.did_key_not_for_signing`
 
@@ -870,8 +871,9 @@ repository; neither has a dated copy, so each is linked where it is published no
 
 - **Meaning.** The key cannot bind a signature to a message, so vcrd refuses it.
 - **Attribution and severity.** `input`, `error`.
-- **Detail.** `key`: the key, with its `source`, `method` and `thumbprint`. `criterion`:
-  the weak-key test it fails; for Ed25519, `small_order`.
+- **Detail.** `key`: the key, named as `key_provenance.keys` names it, by its `kinds`,
+  `method` or `location`, and `thumbprint`. `criterion`: the weak-key test it fails; for
+  Ed25519, `small_order`.
 - **Standard.** [REQUIREMENTS] §10, with the criteria in [ARCHITECTURE] §8. [RFC 8032]
   does not ask a verifier to check the key; vcrd checks it when the key is resolved, so
   that the finding names it.
@@ -886,8 +888,9 @@ repository; neither has a dated copy, so each is linked where it is published no
 - **Detail.** `location`: where the key is, such as `header.jwk`.
 - **Standard.** [REQUIREMENTS] §10's key sources, with the rules in [ARCHITECTURE] §8,
   "Keys and proofs". [RFC 7515] §4.1.3 defines `jwk`.
-- **Remedy.** The proof with the embedded key, `key_provenance.embedded_key.proof`,
-  establishes only that whoever made the credential holds its private key. The opt-in
+- **Remedy.** The proof with the embedded key, its `proof` in `key_provenance.keys`,
+  establishes only that whoever made the credential holds its private key;
+  `verify.non_deciding_key_proof_correct` says when that proof is correct. The opt-in
   arrives in milestone 2 ([DEVELOPMENT-PLAN.md]).
 
 ### <a id="verify.embedded_key_mismatch"></a>`verify.embedded_key_mismatch`
@@ -895,29 +898,49 @@ repository; neither has a dated copy, so each is linked where it is published no
 - **Meaning.** The embedded key is not the issuer key. It never changes the deciding
   proof key.
 - **Attribution and severity.** `input`, `warning`.
-- **Detail.** `embedded_key`: the embedded key, with its `location` and `thumbprint`.
-  `key`: the issuer key, with its `source`, `method` and `thumbprint`.
+- **Detail.** `embedded_key`: the embedded key, and `key`: the issuer key, each named as
+  `key_provenance.keys` names it, by its `kinds`, `method` or `location`, and
+  `thumbprint`.
 - **Standard.** [RFC 7515] §4.1.3 makes `jwk` the public key that corresponds to the key
   that signed; [ARCHITECTURE] §8.
 - **Remedy.** The credential carries a key other than the one its issuer identifier
-  gives. `key_provenance.embedded_key.proof` says whether the proof with it is correct;
-  when it is and the deciding proof is not, `verify.embedded_key_proof_correct` says so
-  too.
+  gives. The embedded key's `proof` in `key_provenance.keys` says whether the proof with
+  it is correct; when it is and the deciding proof is not,
+  `verify.embedded_key_proof_correct` says so too.
 
 ### <a id="verify.embedded_key_proof_correct"></a>`verify.embedded_key_proof_correct`
 
-- **Meaning.** The proof with the embedded key is correct and the deciding proof is not:
-  whoever signed holds the embedded key's private key, and the embedded key is not the
-  deciding proof key.
+- **Meaning.** The proof with the embedded key is correct and the deciding proof is not,
+  and the two keys are known to differ: whoever signed holds the embedded key's private
+  key, and the embedded key is not the deciding proof key.
 - **Attribution and severity.** `input`, `warning`. The deciding proof's own findings
   already fail verify.
-- **Detail.** `embedded_key`: the embedded key, with its `location` and `thumbprint`.
-  `key`: the deciding proof key, with its `source`, `method` and `thumbprint`.
+- **Detail.** `embedded_key`: the embedded key, and `key`: the deciding proof key, each
+  named as `key_provenance.keys` names it, by its `kinds`, `method` or `location`, and
+  `thumbprint`.
 - **Standard.** [RFC 8725] §3.8: the keys must belong to the issuer, or the application
   must reject the JWT. [ARCHITECTURE] §8's key and proof table, the row with the
   embedded proof correct and the issuer proof incorrect.
 - **Remedy.** This is key substitution: a credential that names an issuer, signed with a
   key that is not the issuer's. The signature establishes nothing about the issuer.
+
+### <a id="verify.non_deciding_key_proof_correct"></a>`verify.non_deciding_key_proof_correct`
+
+- **Meaning.** The proof with a key that is not the deciding proof key is correct, though
+  it does not count toward the outcome: whoever signed holds that key's private key.
+  Where that is key substitution, `verify.embedded_key_proof_correct` is reported
+  instead.
+- **Attribution and severity.** `input`, `warning`.
+- **Detail.** `key`: the key, named as `key_provenance.keys` names it, by its `kinds`,
+  `method` or `location`, and `thumbprint`. `why`: why its proof does not count, either
+  the reason it is refused, such as `embedded_key_alone` for an embedded key alone
+  without the caller's opt-in, or `another_key_decides`, as when the issuer key decides
+  but vcrd cannot compare it with this key.
+- **Standard.** [ARCHITECTURE] §8, "Keys and proofs": the rules that say which key
+  decides, and the proofs with the other keys, made for information.
+- **Remedy.** Nothing fails because of it. It says what the credential's signature
+  establishes beside the outcome: a trust layer that accepts this key on other grounds,
+  or a caller that opts in to it, would find the signature correct.
 
 ## Checks not evaluated
 
