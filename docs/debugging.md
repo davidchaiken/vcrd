@@ -50,10 +50,11 @@ Last run end-to-end on 2026-11-11; `docs/reviews/milestone-1.md` records the com
   `vcrd-cli/tests/support/mod.rs`), so that an input gives the result its tests expect.
   The set of inputs should be correct, because the test `vcrd-cli/tests/debugging.rs`
   fails when a file in either directory is missing from the list.
-- **vcrd: pick an input and an opt-in** does the same, and also asks for one of the
-  caller's opt-ins to the key and proof rules, such as `--allow-embedded-key`. With
-  `fixtures/embedded-jwk-https-issuer.jwt`, it shows an embedded key that is refused
-  without the opt-in deciding with it.
+- **vcrd: allow-embedded-key** runs one of the
+  committed inputs that show the key and proof rules at work, with the options it is
+  meant to be run with and the tests' clock: `verify
+  fixtures/embedded-jwk-https-issuer.jwt --allow-embedded-key`. Without the option, the
+  same input under **vcrd: pick an input** shows the embedded key refused.
 - **vcrd: file in editor (current time)** runs the subcommand on the file in the active
   editor tab, with the system clock. Use it for a credential from outside the
   repository.

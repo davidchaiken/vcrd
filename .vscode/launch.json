@@ -14,14 +14,14 @@
       "sourceLanguages": ["rust"]
     },
     {
-      "name": "vcrd: pick an input and an opt-in",
+      "name": "vcrd: allow-embedded-key",
       "type": "lldb",
       "request": "launch",
       "cargo": {
         "args": ["build", "--bin=vcrd", "--package=vcrd-cli"],
         "filter": { "name": "vcrd", "kind": "bin" }
       },
-      "args": ["${input:command}", "${input:input}", "--now", "2026-10-01T00:00:00Z", "${input:optIn}"],
+      "args": ["verify", "fixtures/embedded-jwk-https-issuer.jwt", "--now", "2026-10-01T00:00:00Z", "--allow-embedded-key"],
       "cwd": "${workspaceFolder}",
       "sourceLanguages": ["rust"]
     },
@@ -71,8 +71,6 @@
         "fixtures/vcdm-1.1-encoding.jwt",
         "fixtures/weak-key.jwt"
       ],
-      "default": "examples/ed25519.jwt" },
-    { "id": "optIn", "type": "pickString", "description": "Opt-in to the key and proof rules",
-      "options": ["--allow-embedded-key"], "default": "--allow-embedded-key" }
+      "default": "examples/ed25519.jwt" }
   ]
 }
