@@ -362,6 +362,7 @@ fn inspect_payload(
         );
         output.profile = None;
         output.no_issuer_identifier = true;
+        output.unsupported_document = true;
         findings.push(finding);
         return;
     }
@@ -375,6 +376,7 @@ fn inspect_payload(
             FindingDetail::PresentationUnsupported,
         ));
         output.no_issuer_identifier = true;
+        output.unsupported_document = true;
         return;
     }
     if let Some(claim) = v1_claim {

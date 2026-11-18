@@ -64,12 +64,24 @@ impl Default for Limits {
     }
 }
 
+/// The caller's opt-ins to ARCHITECTURE §8's rules of keys and proofs. Neither is on by
+/// default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct KeyPolicy {
+    /// The embedded key may decide when there is neither a caller-supplied key nor an
+    /// issuer key (rule 2).
+    pub allow_embedded_key_alone: bool,
+    /// A caller-supplied key unlike the issuer key decides in its place (rule 1).
+    pub allow_caller_key_override: bool,
+}
+
 /// Everything an operation consults that is not its input.
 pub struct Context {
     clock: Box<dyn Clock>,
     clock_skew: Duration,
     limits: Limits,
     designations: Designations,
+    key_policy: KeyPolicy,
 }
 
 impl Context {
@@ -81,6 +93,7 @@ impl Context {
                 clock_skew: Duration::ZERO,
                 limits: Limits::default(),
                 designations: Designations::default(),
+                key_policy: KeyPolicy::default(),
             },
         }
     }
@@ -102,6 +115,10 @@ impl Context {
     pub fn designations(&self) -> &Designations {
         &self.designations
     }
+
+    pub fn key_policy(&self) -> KeyPolicy {
+        self.key_policy
+    }
 }
 
 impl std::fmt::Debug for Context {
@@ -111,6 +128,7 @@ impl std::fmt::Debug for Context {
             .field("clock_skew", &self.clock_skew)
             .field("limits", &self.limits)
             .field("designations", &self.designations)
+            .field("key_policy", &self.key_policy)
             .finish()
     }
 }
@@ -132,6 +150,11 @@ impl ContextBuilder {
 
     pub fn designations(mut self, designations: Designations) -> Self {
         self.context.designations = designations;
+        self
+    }
+
+    pub fn key_policy(mut self, key_policy: KeyPolicy) -> Self {
+        self.context.key_policy = key_policy;
         self
     }
 

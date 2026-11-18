@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use clap::Parser;
 use clap::error::ErrorKind;
-use vcrd_core::{Context, Designations, FixedClock, Registry, SystemClock};
+use vcrd_core::{Context, Designations, FixedClock, KeyPolicy, Registry, SystemClock};
 
 use args::{Cli, Operation, OutputFormat};
 use view::Envelope;
@@ -59,12 +59,17 @@ fn main() -> ExitCode {
     }
 
     let skew = Duration::from_secs(cli.options.clock_skew);
+    let key_policy = KeyPolicy {
+        allow_embedded_key_alone: cli.options.allow_embedded_key,
+        ..KeyPolicy::default()
+    };
     let ctx = match cli.options.now {
         Some(now) => Context::builder(FixedClock(now)),
         None => Context::builder(SystemClock),
     }
     .clock_skew(skew)
     .designations(designations)
+    .key_policy(key_policy)
     .build();
 
     let input = match read_input(file, ctx.limits().max_bytes) {

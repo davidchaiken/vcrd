@@ -670,6 +670,7 @@ fn key_phrase(key: &KeyView, with_proof: bool) -> String {
             "not_for_signing" => "not a signing key",
             "type_unsupported" => "a type vcrd cannot use",
             "embedded_key_alone" => "alone, without the opt-in",
+            "embedded_keys_differ" => "one of two embedded keys that differ",
             other => other,
         };
         phrase.push_str(&format!("; refused: {why}"));

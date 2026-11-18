@@ -446,6 +446,49 @@ CodeLLDB's memory grow without bound, and 1.101 brings rust-lang/rust#165113.
   [G2]; (5) the allowlist; (6) ECDSA, with [C1] and [C2]; (7) RSA, with [S1] and [Q4]; (8)
   HMAC, with [S2]; (9) the milestone review; (10) Rust 1.101.
 
+**Decided 2026-11-16**, before slice 3:
+
+- *Slice 3 in two pull requests.* 3a: the caller's key policy in the `Context`, the flag
+  `--allow-embedded-key`, a `did:key` `kid` as an embedded key, and every condition of
+  `keys::decide` that is not met reported by a finding. 3b: the key set, its matching,
+  `--allow-key-override`, and every row of the key and proof table through the binary.
+- *An issuer key vcrd cannot obtain*, when another key decides, a caller-supplied key or
+  the embedded key with the opt-in, is `verify.issuer_key_not_obtained`, a warning
+  attributed to vcrd, in place of the error `verify.issuer_method_unsupported`: the table
+  counts that issuer key as not present. A malformed `did:key` stays an input error.
+- *A `did:key` `kid`*, when there is no issuer key, is an embedded key at `header.kid`. When
+  it is the same key as the `jwk`, the two are one entry, at `header.jwk`; when the
+  credential carries two embedded keys not known to be the same, neither decides, and
+  where that is why no key decides, `verify.embedded_keys_differ` is an error attributed
+  to the input. An issuer key present leaves `kid` to inspect, as before.
+- *No key that may decide*, with no finding of key resolution's to say why, is
+  `verify.no_key_material`, so that verify never passes without a deciding proof key.
+- *The key set (3b).* `KeySet::parse` and `ContextBuilder::key_set`; a file that is not a
+  JWK Set is a caller error (exit 1). Its size is capped by a `Limits` field the caller
+  can raise, as the other limits are; the test of the cap generates the oversize file.
+  An entry RFC 7517 §5 says to ignore is `verify.key_set_entry_ignored`, and an entry with
+  private members `verify.key_set_private_key`, warnings attributed to caller policy. An
+  `oct` entry is kept, refused as `type_unsupported` until slice 8. `--unsafe=2` may show
+  cryptographic secrets, private members and an `oct` key's `k` among them, so that an
+  issuer can debug with vcrd.
+- *Matching (3b).* `ProofSuite` says whether a key fits a declared algorithm. A
+  caller-supplied key records `kid` and `matched_by` (`kid` or `sole_entry`). With no
+  match, or several entries left, each entry the algorithm and the entry's own `alg`,
+  `use` and `key_ops` allow is tried, and those with correct proofs are listed, refused,
+  with `verify.non_deciding_key_proof_correct`.
+- *New findings (3b):* `verify.caller_key_not_found`, `verify.caller_key_ambiguous`,
+  `verify.caller_key_excluded` and `verify.caller_key_not_issuer_key`, errors attributed
+  to caller policy; `verify.issuer_key_overridden`, a warning attributed to caller policy;
+  and `verify.different_keys_correct`, an error attributed to the input (its fixture in
+  slice 6).
+- *Inputs for the table's rows.* The key and proof table's test builds its inputs at run
+  time, with vcrd-cli dev-dependencies already in the workspace. Three inputs that show
+  the rules at work are committed, in `fixtures/README.md` and `.vscode/launch.json`, and
+  serve as a spot check of the generator: an embedded key with an `https:` issuer,
+  refused without the opt-in and deciding with it (3a); a caller-supplied key unlike a
+  `did:key` issuer key, failing without the override and deciding with it; and a
+  caller-supplied key for an `https:` issuer, matched by `kid` among several (3b).
+
 **Delivers.** `vcrd verify` for RFC 7518's signature algorithms, with caller keys, the
 embedded-key opt-in, the override opt-in and the allowlist; the keys and their proofs'
 results for every row of ARCHITECTURE §8's key and proof table.
@@ -655,6 +698,9 @@ of REQUIREMENTS §15 over every standard now in scope.
 
 - **SD-JWT VC** (REQUIREMENTS §10's near-term roadmap): [Q3] first, since a withheld claim
   is neither present nor absent in `Document`; `cnf` holder binding.
+- **Open Badges inspection and verification.** Consider supporting Open Badges 2.0 and
+  Open Badges 3.0 with appropriate warnings findings for credentials that are not
+  cryptographically signed.
 - **Network:** `did:web`, status lists, the hardening bar of REQUIREMENTS §12, the first
   "dangerous, external" instance of the blocking rule (`jku`, `x5u`, private-address
   resolution). VC-JOSE-COSE §4.2's requirement that a controlled identifier document's

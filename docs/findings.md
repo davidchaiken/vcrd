@@ -806,23 +806,41 @@ repository; neither has a dated copy, so each is linked where it is published no
   `credential_embedded`.
 - **Standard.** None: vcrd's order of key sources ([REQUIREMENTS] §10; [ARCHITECTURE]
   §8).
-- **Remedy.** Not reported in milestone 1, whose only source is the issuer identifier:
-  when a credential gives none, verify does not run, and `phases.verify.blocked_by`
-  reports `missing: key_material` instead. Milestone 2 adds keys the caller supplies
-  ([DEVELOPMENT-PLAN.md]).
+- **Remedy.** When a credential gives no key at all, verify does not run, and
+  `phases.verify.blocked_by` reports `missing: key_material` instead. This finding says
+  that verify ran and no key could decide, with nothing else to say why: for example,
+  the caller opted in to an embedded key alone, and the only key the credential carries
+  is of a type vcrd cannot use. Supply a key vcrd can use.
 
 ### <a id="verify.issuer_method_unsupported"></a>`verify.issuer_method_unsupported`
 
 - **Meaning.** The issuer identifier uses a URL scheme or DID method vcrd cannot resolve
-  to a key.
+  to a key, and no other key decides. When another key does, this is
+  `verify.issuer_key_not_obtained` instead.
 - **Attribution and severity.** `vcrd`, `error`.
 - **Detail.** `method`: the scheme, such as `https`, or the method, such as `did:web`.
 - **Standard.** None: vcrd resolves offline methods first, `did:key` alone in milestone 1,
   and methods that need the network only with the caller's opt-in ([REQUIREMENTS] §8,
   §10).
-- **Remedy.** Use a verifier that resolves `method`. Whether a caller-supplied key may
-  stand in for an issuer key vcrd cannot obtain is an open question of milestone 2
+- **Remedy.** Use a verifier that resolves `method`, or let another key decide: an
+  embedded key with `--allow-embedded-key`, or, in milestone 2, a key of your own
   ([DEVELOPMENT-PLAN.md]).
+
+### <a id="verify.issuer_key_not_obtained"></a>`verify.issuer_key_not_obtained`
+
+- **Meaning.** vcrd cannot obtain the issuer key, so another key decides, as
+  [ARCHITECTURE] §8's key and proof table has it, counting that issuer key as not
+  present. The deciding proof key is not compared with the issuer key.
+- **Attribution and severity.** `vcrd`, `warning`.
+- **Detail.** `issuer`: the issuer identifier. `method`: its scheme, such as `https`, or
+  its DID method, such as `did:web`. `reason`: `method_unsupported`, a scheme or method
+  vcrd does not resolve.
+- **Standard.** [ARCHITECTURE] §8, "Keys and proofs"; the decision of 2026-11-16
+  ([DEVELOPMENT-PLAN.md], milestone 2). [RFC 8725] §3.8 has the application check that
+  the keys belong to the issuer, which vcrd cannot do here.
+- **Remedy.** The result establishes that the deciding proof key's proof is correct,
+  not that the key is the issuer's. A trust layer that needs that binding must obtain the
+  issuer key another way.
 
 ### <a id="verify.did_key_undecodable"></a>`verify.did_key_undecodable`
 
@@ -890,8 +908,22 @@ repository; neither has a dated copy, so each is linked where it is published no
   "Keys and proofs". [RFC 7515] §4.1.3 defines `jwk`.
 - **Remedy.** The proof with the embedded key, its `proof` in `key_provenance.keys`,
   establishes only that whoever made the credential holds its private key;
-  `verify.non_deciding_key_proof_correct` says when that proof is correct. The opt-in
-  arrives in milestone 2 ([DEVELOPMENT-PLAN.md]).
+  `verify.non_deciding_key_proof_correct` says when that proof is correct. With
+  `--allow-embedded-key`, the embedded key decides.
+
+### <a id="verify.embedded_keys_differ"></a>`verify.embedded_keys_differ`
+
+- **Meaning.** The credential carries two embedded keys not known to be the same key,
+  the header's `jwk` and the `did:key` its `kid` names, and the caller opted in to an
+  embedded key alone. Neither may decide, so no key does.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `keys`: each embedded key, named as `key_provenance.keys` names it, by its
+  `kinds`, `location` and `thumbprint`.
+- **Standard.** [RFC 7515] §4.1.3 makes `jwk` the key that signed; the decision of
+  2026-11-16 ([DEVELOPMENT-PLAN.md], milestone 2). Two keys the credential asserts about
+  itself that disagree leave nothing to choose between them.
+- **Remedy.** The credential contradicts itself about the key that signed. Each key's
+  `proof` in `key_provenance.keys` says which, if either, gives a correct proof.
 
 ### <a id="verify.embedded_key_mismatch"></a>`verify.embedded_key_mismatch`
 
