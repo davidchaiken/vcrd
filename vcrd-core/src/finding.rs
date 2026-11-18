@@ -390,8 +390,16 @@ pub enum FindingDetail {
     },
     /// No key material was found; `consulted` lists where vcrd looked (ARCHITECTURE §8).
     NoKeyMaterial { consulted: Vec<KeySourceKind> },
-    /// The issuer identifier uses a scheme or DID method vcrd cannot resolve.
+    /// The issuer identifier uses a scheme or DID method vcrd cannot resolve, and no other
+    /// key decides.
     IssuerMethodUnsupported { method: String },
+    /// vcrd cannot obtain the issuer key, so another key decides, as ARCHITECTURE §8's
+    /// table has it, and the two keys are not compared. A warning.
+    IssuerKeyNotObtained {
+        issuer: String,
+        method: String,
+        reason: IssuerKeyUnobtainable,
+    },
     /// The issuer is a `did:key` that cannot be decoded.
     DidKeyUndecodable { problem: DidKeyProblem },
     /// The `did:key` names a key type vcrd cannot use (ARCHITECTURE §8).
@@ -412,6 +420,9 @@ pub enum FindingDetail {
     /// uses only on the caller's opt-in (REQUIREMENTS §10). Attributed to caller
     /// policy.
     EmbeddedKeyRefused { location: &'static str },
+    /// The credential carries two embedded keys not known to be the same key, so neither
+    /// may decide, though the caller opted in to an embedded key alone.
+    EmbeddedKeysDiffer { keys: Vec<KeyRef> },
     /// The embedded key is not the issuer key, though RFC 7515 §4.1.3 makes `jwk` the
     /// key that signed. A warning: it never changes the deciding proof key
     /// (ARCHITECTURE §8).
@@ -519,6 +530,8 @@ impl FindingDetail {
             FindingDetail::ProofIssuedInFuture { .. } => "verify.proof_issued_in_future",
             FindingDetail::NoKeyMaterial { .. } => "verify.no_key_material",
             FindingDetail::IssuerMethodUnsupported { .. } => "verify.issuer_method_unsupported",
+            FindingDetail::IssuerKeyNotObtained { .. } => "verify.issuer_key_not_obtained",
+            FindingDetail::EmbeddedKeysDiffer { .. } => "verify.embedded_keys_differ",
             FindingDetail::DidKeyUndecodable { .. } => "verify.did_key_undecodable",
             FindingDetail::DidKeyCodecUnsupported { .. } => "verify.did_key_codec_unsupported",
             FindingDetail::DidKeyNotForSigning { .. } => "verify.did_key_not_for_signing",
@@ -600,6 +613,13 @@ pub struct KeyRef {
     pub location: Option<&'static str>,
     /// Absent for a key vcrd names but cannot decode.
     pub thumbprint: Option<String>,
+}
+
+/// Why vcrd cannot obtain the issuer key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IssuerKeyUnobtainable {
+    /// vcrd does not resolve the identifier's scheme or DID method.
+    MethodUnsupported,
 }
 
 /// Why a key whose proof is correct does not decide the outcome (ARCHITECTURE §8).

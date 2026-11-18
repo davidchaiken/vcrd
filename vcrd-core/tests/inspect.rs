@@ -11,7 +11,7 @@ use vcrd_core::{
 
 use support::{
     codes, example_parts, inspect_token, inspected, token, token_text, verify_token, with_header,
-    with_member, with_payload,
+    with_member, with_member_and_no_kid, with_payload,
 };
 
 /// In a `#[cfg(test)]` module so that the workspace's panic lints exempt it, as
@@ -92,6 +92,21 @@ mod support {
         token(&header, &payload)
     }
 
+    /// As [`with_member`], with no `kid` either: the example's is a `did:key`, which
+    /// without an issuer key is a key the credential carries about itself, and verify
+    /// would run (DEVELOPMENT-PLAN.md, milestone 2, decided 2026-11-16).
+    pub fn with_member_and_no_kid(name: &str, value: Option<Value>) -> Vec<u8> {
+        let (mut header, mut payload) = example_parts();
+        header.as_object_mut().unwrap().remove("kid");
+        match value {
+            Some(value) => payload[name] = value,
+            None => {
+                payload.as_object_mut().unwrap().remove(name);
+            }
+        }
+        token(&header, &payload)
+    }
+
     /// Inspect's finding codes.
     pub fn codes(report: &Report) -> Vec<&'static str> {
         report.inspect.findings().iter().map(|f| f.code).collect()
@@ -148,7 +163,7 @@ fn an_issuer_that_is_not_a_url_is_an_input_error_that_blocks_verify() {
         json!(42),
         json!(["did:example:issuer"]),
     ] {
-        let report = verify_token(&with_member("issuer", Some(issuer.clone())));
+        let report = verify_token(&with_member_and_no_kid("issuer", Some(issuer.clone())));
         assert!(
             inspected(&report).contains(&ISSUER_INVALID),
             "{issuer}: {:?}",
@@ -186,7 +201,7 @@ fn a_url_issuer_vcrd_cannot_resolve_reaches_verify() {
 /// the environment, and verify is blocked rather than failed.
 #[test]
 fn a_missing_issuer_is_an_input_error_that_blocks_verify() {
-    let report = verify_token(&with_member("issuer", None));
+    let report = verify_token(&with_member_and_no_kid("issuer", None));
     assert!(
         inspected(&report).contains(&(
             "inspect.issuer_missing",
@@ -252,7 +267,7 @@ fn the_example_conforms() {
 /// what is missing, and where vcrd looked. The findings are the blocking phase's own.
 #[test]
 fn a_block_names_what_is_missing_and_why() {
-    let report = verify_token(&with_member("issuer", None));
+    let report = verify_token(&with_member_and_no_kid("issuer", None));
     let PhaseOutcome::NotReached(blocked) = &report.verify else {
         panic!("{:?}", report.verify)
     };

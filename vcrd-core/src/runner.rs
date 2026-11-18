@@ -3,11 +3,14 @@
 
 use crate::context::Context;
 use crate::document::{DeclaredAlgorithm, ProofDescriptor, ProofMaterial, ProofTime, ProofTimes};
-use crate::finding::{Attribution, Finding, FindingDetail, KeySourceKind, NotDeciding, Severity};
+use crate::finding::{
+    Attribution, Finding, FindingDetail, IssuerKeyUnobtainable, KeySourceKind, NotDeciding,
+    Severity,
+};
 use crate::json::{self, Json};
 use crate::keys::{
-    self, Condition, Decision, KeyAndProof, KeyPolicy, KeyProvenance, KeyReport, KeySource,
-    ProofKey, PublicKey, Refusal,
+    self, Condition, Decision, KeyAndProof, KeyProvenance, KeyReport, KeySource, ProofKey,
+    PublicKey, Refusal, Resolution,
 };
 use crate::registry::{CredentialFormat, Detection, ProofInput, Registry};
 use crate::report::{
@@ -127,17 +130,25 @@ fn blocked_by_inspect(
     inspect: &PhaseOutcome<InspectOutput>,
     parsed: &ParseOutput,
 ) -> Option<Blocked> {
-    if !inspect.output()?.no_issuer_identifier {
+    let inspected = inspect.output()?;
+    if !inspected.no_issuer_identifier {
         return None;
     }
     // A key the credential carries is a source, though one refused without the
     // caller's opt-in: verify runs, so that the refusal is reported rather than
-    // treated as "no key material" (REQUIREMENTS §10).
-    let carries_key = parsed
-        .document
-        .as_ref()
-        .is_some_and(|d| d.proofs.iter().any(|p| p.key_hints.embedded.is_some()));
-    if carries_key {
+    // treated as "no key material" (REQUIREMENTS §10). Not for a document vcrd does not
+    // read, whose keys it cannot use either.
+    let carries_key = parsed.document.as_ref().is_some_and(|d| {
+        d.proofs.iter().any(|p| {
+            p.key_hints.embedded.is_some()
+                || p.key_hints
+                    .kid
+                    .as_deref()
+                    .and_then(keys::did_key_kid)
+                    .is_some()
+        })
+    });
+    if carries_key && !inspected.unsupported_document {
         return None;
     }
     Some(Blocked {
@@ -202,6 +213,10 @@ fn verify_proofs(
     let mut proofs = Vec::with_capacity(descriptors.len());
     for descriptor in descriptors {
         let mut resolution = keys::resolve(&descriptor.key_hints);
+        let resolution_failed = resolution
+            .findings
+            .iter()
+            .any(|f| f.severity == Severity::Error);
         findings.append(&mut resolution.findings);
         let suite = registry.suite(descriptor.suite);
         // Each distinct key's proof, with the suite's findings for it. A refused key has
@@ -216,21 +231,9 @@ fn verify_proofs(
             .collect();
         let decision = keys::decide(
             &keys_and_proofs(&resolution.keys, &key_proofs),
-            KeyPolicy::default(),
+            ctx.key_policy(),
         );
-        if decision.unmet.contains(&Condition::EmbeddedKeyOptIn)
-            && let Some(embedded) = &descriptor.key_hints.embedded
-        {
-            // Refused, and reported as such rather than as "no key material"
-            // (REQUIREMENTS §10). The opt-in that would allow it is the caller's.
-            findings.push(Finding::error(
-                Phase::Verify,
-                Attribution::Policy,
-                FindingDetail::EmbeddedKeyRefused {
-                    location: embedded.location,
-                },
-            ));
-        }
+        findings.extend(decision_findings(&resolution, &decision, resolution_failed));
         let outcome = match suite {
             None => {
                 findings.push(Finding::error(
@@ -278,6 +281,93 @@ fn verify_proofs(
 /// A proof with one key, and the suite's findings for it.
 type Proof = (ProofOutcome, Vec<Finding>);
 
+/// The findings for the outcome of ARCHITECTURE §8's rules that no other finding states:
+/// the issuer key vcrd cannot obtain, an error only when no other key decides, and each
+/// unmet condition of the rules that key resolution, the suite or the proofs do not
+/// already report, so that verify never passes without a deciding proof key.
+fn decision_findings(
+    resolution: &Resolution,
+    decision: &Decision,
+    resolution_failed: bool,
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    if let Some(unobtained) = &resolution.unobtained {
+        findings.push(match decision.deciding {
+            // The table counts the issuer key as not present, so another key decides,
+            // and the two are not compared (DEVELOPMENT-PLAN.md, milestone 2).
+            Some(_) => Finding::new(
+                Phase::Verify,
+                Attribution::Vcrd,
+                Severity::Warning,
+                FindingDetail::IssuerKeyNotObtained {
+                    issuer: unobtained.issuer.clone(),
+                    method: unobtained.method.clone(),
+                    reason: IssuerKeyUnobtainable::MethodUnsupported,
+                },
+            ),
+            None => Finding::error(
+                Phase::Verify,
+                Attribution::Vcrd,
+                FindingDetail::IssuerMethodUnsupported {
+                    method: unobtained.method.clone(),
+                },
+            ),
+        });
+    }
+    let embedded: Vec<&KeyReport> = resolution
+        .keys
+        .iter()
+        .map(|k| &k.report)
+        .filter(|r| r.kinds.contains(&KeySource::CredentialEmbedded))
+        .collect();
+    for condition in &decision.unmet {
+        match condition {
+            // Refused, and reported as such rather than as "no key material"
+            // (REQUIREMENTS §10). The opt-in that would allow it is the caller's.
+            Condition::EmbeddedKeyOptIn => {
+                findings.extend(embedded.iter().filter_map(|r| {
+                    Some(Finding::error(
+                        Phase::Verify,
+                        Attribution::Policy,
+                        FindingDetail::EmbeddedKeyRefused {
+                            location: r.location?,
+                        },
+                    ))
+                }));
+            }
+            Condition::EmbeddedKeysAgree => findings.push(Finding::error(
+                Phase::Verify,
+                Attribution::Input,
+                FindingDetail::EmbeddedKeysDiffer {
+                    keys: embedded.iter().map(|r| *r.reference()).collect(),
+                },
+            )),
+            // An issuer key vcrd cannot obtain, or one it cannot decode, already says
+            // why there is no key.
+            Condition::KeyPresent if !resolution_failed && resolution.unobtained.is_none() => {
+                let mut consulted = vec![KeySourceKind::IssuerIdentifier];
+                if !embedded.is_empty() {
+                    consulted.push(KeySourceKind::CredentialEmbedded);
+                }
+                findings.push(Finding::error(
+                    Phase::Verify,
+                    Attribution::Environment,
+                    FindingDetail::NoKeyMaterial { consulted },
+                ));
+            }
+            // Reported by key resolution's findings of a refused key, and by the suite's
+            // of an incorrect proof. A caller-supplied key unlike the issuer key, and two
+            // different keys with correct proofs, need caller-supplied keys and ECDSA.
+            Condition::KeyPresent
+            | Condition::DecidingKeyNotRefused
+            | Condition::DecidingProofCorrect
+            | Condition::CallerKeyIsIssuerKey
+            | Condition::OneKeyCorrect => {}
+        }
+    }
+    findings
+}
+
 /// What ARCHITECTURE §8's rules consult about each key: its kinds, whether key
 /// resolution refused it, and whether its proof is correct.
 fn keys_and_proofs(keys: &[ProofKey], proofs: &[Option<Proof>]) -> Vec<KeyAndProof> {
@@ -307,7 +397,13 @@ fn key_reports(
     outcome: &ProofOutcome,
     proofs: &[Option<Proof>],
 ) -> (KeyProvenance, Vec<Finding>) {
-    let alone = decision.unmet.contains(&Condition::EmbeddedKeyOptIn);
+    let embedded_refusal = if decision.unmet.contains(&Condition::EmbeddedKeyOptIn) {
+        Some(Refusal::EmbeddedKeyAlone)
+    } else if decision.unmet.contains(&Condition::EmbeddedKeysAgree) {
+        Some(Refusal::EmbeddedKeysDiffer)
+    } else {
+        None
+    };
     let reports: Vec<KeyReport> = keys
         .into_iter()
         .zip(proofs)
@@ -319,11 +415,8 @@ fn key_reports(
                 Some((proof, _)) => proof.clone(),
                 None => ProofOutcome::NotAttempted,
             };
-            if alone
-                && report.refused.is_none()
-                && report.kinds.contains(&KeySource::CredentialEmbedded)
-            {
-                report.refused = Some(Refusal::EmbeddedKeyAlone);
+            if report.refused.is_none() && report.kinds.contains(&KeySource::CredentialEmbedded) {
+                report.refused = embedded_refusal;
             }
             report
         })

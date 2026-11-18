@@ -42,7 +42,7 @@ Last run end-to-end on 2026-11-11; `docs/reviews/milestone-1.md` records the com
 
 ## The launch configurations
 
-`.vscode/launch.json` holds two, in the Run and Debug view:
+`.vscode/launch.json` holds three, in the Run and Debug view:
 
 - **vcrd: pick an input** asks for a subcommand, `verify` or `inspect`, and an input
   from `examples/` or `fixtures/`; type to filter the list. It passes
@@ -50,14 +50,18 @@ Last run end-to-end on 2026-11-11; `docs/reviews/milestone-1.md` records the com
   `vcrd-cli/tests/support/mod.rs`), so that an input gives the result its tests expect.
   The set of inputs should be correct, because the test `vcrd-cli/tests/debugging.rs`
   fails when a file in either directory is missing from the list.
+- **vcrd: pick an input and an opt-in** does the same, and also asks for one of the
+  caller's opt-ins to the key and proof rules, such as `--allow-embedded-key`. With
+  `fixtures/embedded-jwk-https-issuer.jwt`, it shows an embedded key that is refused
+  without the opt-in deciding with it.
 - **vcrd: file in editor (current time)** runs the subcommand on the file in the active
   editor tab, with the system clock. Use it for a credential from outside the
   repository.
 
-Both build `vcrd` before each session, through their `cargo` member, so that a session
-never debugs a stale binary. Both set `"sourceLanguages": ["rust"]`, which has CodeLLDB
-load Rust's formatters. If you write your own configuration, it's best to keep
-both of these settings.
+All three build `vcrd` before each session, through their `cargo` member, so that a
+session never debugs a stale binary. All three set `"sourceLanguages": ["rust"]`, which
+has CodeLLDB load Rust's formatters. If you write your own configuration, it's best to
+keep both of these settings.
 
 ## A first session
 

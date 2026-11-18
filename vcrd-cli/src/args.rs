@@ -70,6 +70,11 @@ pub struct Options {
         value_parser = clap::value_parser!(u8).range(0..=2)
     )]
     pub unsafe_level: u8,
+    /// Let a key the credential carries about its own proof decide the outcome when
+    /// there is neither an issuer key nor a key of your own. Such a key is bound to
+    /// nothing: a correct proof shows only that the signer holds its private key.
+    #[arg(long, global = true)]
+    pub allow_embedded_key: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]

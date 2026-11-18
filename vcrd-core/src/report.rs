@@ -171,6 +171,9 @@ pub struct InspectOutput {
     /// identifier. The runner decides whether that blocks verify, with the caller's
     /// key material in hand (ARCHITECTURE §4).
     pub no_issuer_identifier: bool,
+    /// Whether vcrd does not read this kind of document yet, such as VCDM 1.1's JWT
+    /// encoding or a presentation, so that verify does not run whatever keys it carries.
+    pub unsupported_document: bool,
 }
 
 /// Where the injected clock falls relative to a validity period.

@@ -109,6 +109,10 @@ mod generate {
             ("fixtures/embedded-jwk.jwt", embedded_jwk()),
             ("fixtures/embedded-jwk-only.jwt", embedded_jwk_only()),
             (
+                "fixtures/embedded-jwk-https-issuer.jwt",
+                embedded_jwk_https_issuer(),
+            ),
+            (
                 "fixtures/embedded-jwk-only-tampered.jwt",
                 embedded_jwk_only_tampered(),
             ),
@@ -251,11 +255,15 @@ mod generate {
         sign(&key, &header, &payload)
     }
 
-    /// The example with no `issuer` (VCDM 2.0 §4.7): there is no identifier to derive
-    /// a key from, so verify is blocked. Correctly signed.
+    /// The example with no `issuer` (VCDM 2.0 §4.7) and no `kid`: there is no identifier
+    /// to derive a key from, and no key the credential carries, so verify is blocked.
+    /// Correctly signed.
     fn issuer_missing() -> Vec<u8> {
-        let (key, header, mut payload) = example_parts();
+        let (key, mut header, mut payload) = example_parts();
         payload.as_object_mut().unwrap().remove("issuer");
+        // A `did:key` `kid` would be a key the credential carries about itself, and
+        // verify would run (DEVELOPMENT-PLAN.md, milestone 2, decided 2026-11-16).
+        header.as_object_mut().unwrap().remove("kid");
         sign(&key, &header, &payload)
     }
 
@@ -415,6 +423,23 @@ mod generate {
     fn embedded_jwk_only_tampered() -> Vec<u8> {
         let (key, header, payload) = embedded_jwk_only_parts();
         sign_then_tamper(&key, &header, &payload)
+    }
+
+    /// An issuer whose key vcrd cannot obtain, an `https:` URL, and the signer's key in
+    /// the header's `jwk`, which `kid` names by its JWK Thumbprint URI (RFC 9278), as
+    /// VC-JOSE-COSE §4.2 recommends. Without the caller's opt-in the embedded key is
+    /// refused; with it, the embedded key decides, and the issuer key vcrd could not
+    /// obtain is a warning (ARCHITECTURE §8).
+    fn embedded_jwk_https_issuer() -> Vec<u8> {
+        let (_, mut header, mut payload) = example_parts();
+        let key = substitute_key();
+        let thumbprint = b64(&Sha256::digest(serde_json::to_vec(&jwk(&key)).unwrap()));
+        header["jwk"] = jwk(&key);
+        header["kid"] = json!(format!(
+            "urn:ietf:params:oauth:jwk-thumbprint:sha-256:{thumbprint}"
+        ));
+        payload["issuer"] = json!("https://issuer.example");
+        sign(&key, &header, &payload)
     }
 
     /// A key that is not the issuer's, for the fixtures that embed one.

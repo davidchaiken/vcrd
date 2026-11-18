@@ -904,7 +904,21 @@ the deciding proof key, absent when no key decides; the proof's `outcome`, besid
 decides, so that no other key can. A `did:key` of a type vcrd names, or does not know, but
 cannot use is the issuer key, refused (`type_unsupported`, or `not_for_signing` for a
 key-agreement key), with no thumbprint or JWK, since vcrd does not decode it; a malformed
-`did:key`, or an issuer whose method vcrd does not resolve, gives no issuer key.
+`did:key`, or an issuer whose method vcrd does not resolve, gives no issuer key. An issuer
+key vcrd cannot obtain is `verify.issuer_key_not_obtained`, a warning attributed to vcrd,
+when another key decides, and `verify.issuer_method_unsupported`, an error, when none
+does.
+
+The embedded keys are the header's `jwk` and, when there is no issuer key, the `did:key`
+the header's `kid` names, at `header.kid`; when the issuer key is present, `kid` is
+inspect's to check (VC-JOSE-COSE §4.1.1). A `jwk` and a `did:key` `kid` of the same key
+are one entry, at `header.jwk`. Two embedded keys not known to be the same key are both
+refused (`embedded_keys_differ`), since neither may decide even with the caller's
+opt-in; where that is why no key decides, `verify.embedded_keys_differ` is an error
+attributed to the input. A credential with no issuer identifier that carries an embedded
+key is not blocked for want of key material, unless it is a document vcrd does not read,
+such as VCDM 1.1's encoding. When no key may decide and no other finding says why,
+`verify.no_key_material` does, so that verify never passes without a deciding proof key.
 
 `kinds` takes its values from an open enumeration, so consumers must accept values they
 do not recognize. Its values and their guarantees:
@@ -921,8 +935,9 @@ are additional information: they apply the same algorithm policy and key-type bi
 decide the outcome only as the rules above say, and are `not_attempted` when they cannot
 be made, as for a key type vcrd does not implement. The same key gives the same result,
 so a key is proved once whatever its kinds. `refused` says why a key may not decide:
-`weak_key`, `not_for_signing`, `type_unsupported`, or `embedded_key_alone` for an embedded
-key alone without the caller's opt-in; a key's own property comes first.
+`weak_key`, `not_for_signing`, `type_unsupported`, `embedded_key_alone` for an embedded
+key alone without the caller's opt-in, or `embedded_keys_differ`; a key's own property
+comes first.
 
 An embedded key unlike the issuer key is a warning, `verify.embedded_key_mismatch`,
 attributed to the input: RFC 7515 §4.1.3 makes `jwk` the key that signed. An embedded
@@ -932,8 +947,9 @@ proof's findings already fail verify, and this one says what the embedded key sh
 other correct proof with a key that does not decide is
 `verify.non_deciding_key_proof_correct`, a warning attributed to the input, with the key
 and why its proof does not count: its refusal, or `another_key_decides`. When there is no
-issuer key, the embedded key is refused: `verify.embedded_key_refused`, attributed to the
-caller's policy (exit 5), since the opt-in that would allow it is the caller's. Findings
+issuer key, the embedded key is refused without the caller's opt-in,
+`--allow-embedded-key`: `verify.embedded_key_refused`, attributed to the caller's policy
+(exit 5), since the opt-in that would allow it is the caller's. Findings
 name each key as `keys` does, by its `kinds`, `method` or `location`, and `thumbprint`.
 
 Inspect reports a `jwk` that is not a public key vcrd can read (`inspect.jwk_invalid`), one
@@ -950,8 +966,9 @@ hash of the secret, and the output is often shared more widely than the input.
 | embedded key equals the `did:key` | one key, `issuer_identifier` and `credential_embedded` | that key |
 | embedded key differs, and signed | `issuer_identifier`, `proof: incorrect`; `credential_embedded`, `proof: correct`; the mismatch and key-substitution warnings | the issuer key |
 | `did:key` of a type vcrd cannot use, beside an embedded key that signed | `issuer_identifier`, `refused: type_unsupported`, no thumbprint; `credential_embedded`, `proof: correct`; `verify.non_deciding_key_proof_correct`, `another_key_decides` | the issuer key |
-| embedded only, caller opted in | `credential_embedded` | the embedded key |
+| embedded only, caller opted in | `credential_embedded`; with an issuer key vcrd cannot obtain, `verify.issuer_key_not_obtained` | the embedded key |
 | embedded only, no opt-in | `credential_embedded`, `refused: embedded_key_alone`; the refusal is its own finding, `verify.embedded_key_refused`, and a correct proof `verify.non_deciding_key_proof_correct` | absent |
+| two embedded keys that differ, caller opted in | two `credential_embedded` keys, `header.jwk` and `header.kid`, each `refused: embedded_keys_differ`; `verify.embedded_keys_differ` | absent |
 
 ### Algorithms
 

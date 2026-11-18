@@ -5,10 +5,11 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::VerifyingKey;
 use sha2::{Digest, Sha256};
 
+use crate::context::KeyPolicy;
 use crate::document::{EmbeddedKey, KeyHints};
 use crate::finding::{
-    Attribution, DidKeyProblem, Finding, FindingDetail, JwkProblem, KeyRef, KeySourceKind,
-    Severity, WeakKeyCriterion,
+    Attribution, DidKeyProblem, Finding, FindingDetail, JwkProblem, KeyRef, Severity,
+    WeakKeyCriterion,
 };
 use crate::json::Json;
 use crate::report::{Phase, ProofOutcome};
@@ -224,6 +225,9 @@ pub enum Refusal {
     TypeUnsupported,
     /// An embedded key alone, without the caller's opt-in (ARCHITECTURE §8, rule 2).
     EmbeddedKeyAlone,
+    /// One of two embedded keys not known to be the same key, which may not decide even
+    /// with the opt-in.
+    EmbeddedKeysDiffer,
 }
 
 /// An open set: consumers must accept values they do not recognize (ARCHITECTURE §8).
@@ -254,6 +258,17 @@ pub(crate) struct Resolution {
     pub findings: Vec<Finding>,
     /// Each distinct key, by RFC 7638 thumbprint, once, with every kind of key it is.
     pub keys: Vec<ProofKey>,
+    /// An issuer identifier whose key vcrd cannot obtain, such as an `https:` URL: the
+    /// table counts that issuer key as not present (ARCHITECTURE §8).
+    pub unobtained: Option<UnobtainedIssuer>,
+}
+
+/// An issuer identifier whose key vcrd cannot obtain.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct UnobtainedIssuer {
+    pub issuer: String,
+    /// The DID method or URL scheme, e.g. `did:web` or `https`.
+    pub method: String,
 }
 
 impl Resolution {
@@ -276,17 +291,6 @@ pub(crate) struct ProofKey {
     pub key: Option<PublicKey>,
 }
 
-/// The caller's opt-ins to ARCHITECTURE §8's rules. Neither can be set yet: milestone 2
-/// adds them to the `Context`, with caller-supplied keys.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct KeyPolicy {
-    /// The embedded key may decide when there is neither a caller-supplied key nor an
-    /// issuer key.
-    pub embedded_key_alone: bool,
-    /// A caller-supplied key unlike the issuer key decides in its place.
-    pub caller_key_override: bool,
-}
-
 /// What ARCHITECTURE §8's rules consult about one distinct key.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct KeyAndProof {
@@ -305,6 +309,8 @@ pub(crate) enum Condition {
     KeyPresent,
     /// The embedded key decides alone only with the caller's opt-in (rule 2).
     EmbeddedKeyOptIn,
+    /// The credential carries one embedded key, or embedded keys known to be one key.
+    EmbeddedKeysAgree,
     /// A caller-supplied key and an issuer key are the same key, unless the caller has
     /// opted in to the override (rule 1).
     CallerKeyIsIssuerKey,
@@ -332,34 +338,44 @@ pub(crate) fn decide(keys: &[KeyAndProof], policy: KeyPolicy) -> Decision {
     let find = |kind| keys.iter().position(|k| k.kinds.contains(&kind));
     let caller = find(KeySource::CallerSupplied);
     let issuer = find(KeySource::IssuerIdentifier);
-    let embedded = find(KeySource::CredentialEmbedded);
+    let embedded: Vec<usize> = (0..keys.len())
+        .filter(|&i| {
+            keys.get(i)
+                .is_some_and(|k| k.kinds.contains(&KeySource::CredentialEmbedded))
+        })
+        .collect();
     let mut unmet = Vec::new();
     // Rule 1: a caller-supplied key and an issuer key are the same key, unless the caller
     // has opted in to letting its key override the issuer key.
     let differ = matches!((caller, issuer), (Some(c), Some(i)) if c != i);
-    if differ && !policy.caller_key_override {
+    if differ && !policy.allow_caller_key_override {
         unmet.push(Condition::CallerKeyIsIssuerKey);
     }
     // Rule 2: the issuer key decides when it is present, and the caller-supplied key when
     // it is not or the caller has opted in to the override; the embedded key, only when
-    // neither is present and the caller has opted in. A refused embedded key is treated
-    // as not present.
+    // neither is present and the caller has opted in, and only when the credential
+    // carries one embedded key. A refused embedded key is treated as not present.
     let deciding = match (caller, issuer) {
-        (Some(c), Some(_)) if differ && policy.caller_key_override => Some(c),
+        (Some(c), Some(_)) if differ && policy.allow_caller_key_override => Some(c),
         (_, Some(i)) => Some(i),
         (Some(c), None) => Some(c),
-        (None, None) => match embedded {
-            Some(_) if !policy.embedded_key_alone => {
+        (None, None) => match embedded[..] {
+            [] => None,
+            [..] if !policy.allow_embedded_key_alone => {
                 unmet.push(Condition::EmbeddedKeyOptIn);
                 None
             }
-            Some(e) => Some(e).filter(|&e| keys.get(e).is_some_and(|k| !k.refused)),
-            None => None,
+            [e] => Some(e).filter(|&e| keys.get(e).is_some_and(|k| !k.refused)),
+            [..] => {
+                unmet.push(Condition::EmbeddedKeysAgree);
+                None
+            }
         },
     };
     // Rule 3: the deciding proof is correct.
+    let explained = [Condition::EmbeddedKeyOptIn, Condition::EmbeddedKeysAgree];
     match deciding.and_then(|d| keys.get(d)) {
-        None if !unmet.contains(&Condition::EmbeddedKeyOptIn) => {
+        None if !unmet.iter().any(|c| explained.contains(c)) => {
             unmet.push(Condition::KeyPresent);
         }
         None => {}
@@ -375,26 +391,66 @@ pub(crate) fn decide(keys: &[KeyAndProof], policy: KeyPolicy) -> Decision {
 }
 
 /// Finds the keys for one proof (REQUIREMENTS §10): the issuer key, when the issuer
-/// identifier is a `did:key`, and a key the credential carries, compared with it.
-/// Which key decides is [`decide`]'s question.
+/// identifier is a `did:key`, and the keys the credential carries, compared with it. A
+/// `did:key` `kid` is one of those only when there is no issuer key. Which key decides
+/// is [`decide`]'s question.
 pub(crate) fn resolve(hints: &KeyHints) -> Resolution {
-    let mut resolution = match (hints.issuer.as_deref(), &hints.embedded) {
-        (Some(issuer), _) => from_issuer(issuer),
-        (None, None) => {
-            return Resolution::failed(Finding::error(
-                Phase::Verify,
-                Attribution::Environment,
-                FindingDetail::NoKeyMaterial {
-                    consulted: vec![KeySourceKind::IssuerIdentifier],
-                },
-            ));
-        }
-        (None, Some(_)) => Resolution::default(),
+    let mut resolution = match hints.issuer.as_deref() {
+        Some(issuer) => from_issuer(issuer),
+        None => Resolution::default(),
     };
     if let Some(embedded) = &hints.embedded {
         compare_embedded(embedded, &mut resolution);
     }
+    let issuer_key = resolution
+        .keys
+        .iter()
+        .any(|k| k.report.kinds.contains(&KeySource::IssuerIdentifier));
+    if !issuer_key && let Some(identifier) = hints.kid.as_deref().and_then(did_key_kid) {
+        add_kid_key(identifier, &mut resolution);
+    }
     resolution
+}
+
+/// The method-specific identifier of a `kid` that is a `did:key` DID URL, such as
+/// `did:key:z6Mk…#z6Mk…`: the key is the DID's, whatever the fragment.
+pub(crate) fn did_key_kid(kid: &str) -> Option<&str> {
+    kid.strip_prefix("did:key:")?.split('#').next()
+}
+
+/// A `did:key` `kid` as an embedded key, at `header.kid` (DEVELOPMENT-PLAN.md, milestone
+/// 2, decided 2026-11-16): one key with the `jwk` when their thumbprints are equal,
+/// another embedded key otherwise. A `did:key` that does not decode gives no key.
+fn add_kid_key(identifier: &str, resolution: &mut Resolution) {
+    let (key, jwk, refused) = match decode_did_key(identifier) {
+        Err(_) => return,
+        Ok(DidKey::Usable(key, weak)) => {
+            let jwk = key.jwk();
+            let refused = weak.then_some(Refusal::WeakKey);
+            ((!weak).then_some(key), Some(jwk), refused)
+        }
+        Ok(DidKey::Unusable { .. }) => (None, None, Some(Refusal::TypeUnsupported)),
+        Ok(DidKey::NotForSigning { .. }) => (None, None, Some(Refusal::NotForSigning)),
+    };
+    let thumbprint = jwk.as_ref().map(PublicJwk::thumbprint);
+    let same_as_jwk = resolution.keys.iter().any(|k| {
+        k.report.kinds.contains(&KeySource::CredentialEmbedded)
+            && k.report.thumbprint.is_some()
+            && k.report.thumbprint == thumbprint
+    });
+    if same_as_jwk {
+        return;
+    }
+    resolution.keys.push(ProofKey {
+        report: KeyReport {
+            location: Some("header.kid"),
+            thumbprint,
+            jwk,
+            refused,
+            ..KeyReport::new(KeySource::CredentialEmbedded)
+        },
+        key,
+    });
 }
 
 /// Records the embedded key (ARCHITECTURE §8): one key with the issuer key when their
@@ -442,16 +498,18 @@ fn compare_embedded(embedded: &EmbeddedKey, resolution: &mut Resolution) {
     }
 }
 
-/// The key the issuer identifier encodes, when it is a `did:key`.
+/// The key the issuer identifier encodes, when it is a `did:key`. An issuer whose key
+/// vcrd cannot obtain is recorded, not reported: whether that is an error depends on
+/// whether another key decides, which is the runner's to say.
 fn from_issuer(issuer: &str) -> Resolution {
     let Some(identifier) = issuer.strip_prefix("did:key:") else {
-        return Resolution::failed(Finding::error(
-            Phase::Verify,
-            Attribution::Vcrd,
-            FindingDetail::IssuerMethodUnsupported {
+        return Resolution {
+            unobtained: Some(UnobtainedIssuer {
+                issuer: issuer.to_owned(),
                 method: method_of(issuer),
-            },
-        ));
+            }),
+            ..Resolution::default()
+        };
     };
     match decode_did_key(identifier) {
         Err(problem) => Resolution::failed(Finding::error(
@@ -499,6 +557,7 @@ fn from_issuer(issuer: &str) -> Resolution {
                 Resolution {
                     findings: vec![finding],
                     keys: vec![ProofKey { report, key: None }],
+                    unobtained: None,
                 }
             } else {
                 Resolution {
@@ -507,6 +566,7 @@ fn from_issuer(issuer: &str) -> Resolution {
                         report,
                         key: Some(key),
                     }],
+                    unobtained: None,
                 }
             }
         }
@@ -525,6 +585,7 @@ fn refused_did_key(refusal: Refusal, finding: Finding) -> Resolution {
             },
             key: None,
         }],
+        unobtained: None,
     }
 }
 
@@ -761,18 +822,18 @@ mod tests {
                 panic!("a row of nine cells: {row:?}")
             };
             let keys = row_keys(eic, [e_i, e_c, i_c], [e_proof, i_proof, c_proof]);
-            for (embedded_key_alone, caller_key_override) in
+            for (allow_embedded_key_alone, allow_caller_key_override) in
                 [(false, false), (true, false), (false, true), (true, true)]
             {
                 let policy = KeyPolicy {
-                    embedded_key_alone,
-                    caller_key_override,
+                    allow_embedded_key_alone,
+                    allow_caller_key_override,
                 };
                 let permitted = match success {
                     "Y" => true,
                     "N" => false,
-                    "E" => embedded_key_alone,
-                    "C" => caller_key_override,
+                    "E" => allow_embedded_key_alone,
+                    "C" => allow_caller_key_override,
                     other => panic!("S? is {other}: {row:?}"),
                 };
                 let decision = decide(&keys, policy);
@@ -881,8 +942,8 @@ mod tests {
         };
         let neither = KeyPolicy::default();
         let both = KeyPolicy {
-            embedded_key_alone: true,
-            caller_key_override: true,
+            allow_embedded_key_alone: true,
+            allow_caller_key_override: true,
         };
         assert_eq!(decide(&[], both), decision(None, &[KeyPresent]));
         // A refused issuer key decides, and prevents success.
@@ -921,6 +982,31 @@ mod tests {
         assert_eq!(
             decide(&caller_and_issuer, neither),
             decision(Some(1), &[CallerKeyIsIssuerKey, OneKeyCorrect])
+        );
+        // Two embedded keys not known to be one key: neither decides, even with the
+        // opt-in; without it, both are refused alone.
+        let two_embedded = [
+            key(&[CredentialEmbedded], false, true),
+            key(&[CredentialEmbedded], false, false),
+        ];
+        assert_eq!(
+            decide(&two_embedded, both),
+            decision(None, &[EmbeddedKeysAgree])
+        );
+        assert_eq!(
+            decide(&two_embedded, neither),
+            decision(None, &[EmbeddedKeyOptIn])
+        );
+        // Beside an issuer key, the embedded keys never decide, so it does not matter
+        // whether they agree.
+        let issuer_and_two_embedded = [
+            key(&[IssuerIdentifier], false, true),
+            key(&[CredentialEmbedded], false, false),
+            key(&[CredentialEmbedded], false, false),
+        ];
+        assert_eq!(
+            decide(&issuer_and_two_embedded, both),
+            decision(Some(0), &[])
         );
     }
 
@@ -1214,7 +1300,7 @@ mod tests {
             [Condition::EmbeddedKeyOptIn]
         );
         let opted_in = KeyPolicy {
-            embedded_key_alone: true,
+            allow_embedded_key_alone: true,
             ..KeyPolicy::default()
         };
         assert_eq!(

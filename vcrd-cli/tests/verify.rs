@@ -4,7 +4,7 @@
 #[cfg(test)]
 mod support;
 
-use helpers::{finding, verify_fixture};
+use helpers::{codes, finding, verify_fixture, verify_fixture_with};
 use serde_json::{Value, json};
 
 /// In a `#[cfg(test)]` module so that the workspace's panic lints exempt it, as they
@@ -17,7 +17,27 @@ mod helpers {
 
     /// Runs `vcrd verify` on a fixture and asserts the exit code.
     pub fn verify_fixture(name: &str, exit: i32) -> Value {
-        json(vcrd().args(["verify", &fixture(name), "--now", NOW]), exit)
+        verify_fixture_with(name, &[], exit)
+    }
+
+    /// As [`verify_fixture`], with further arguments, such as an opt-in.
+    pub fn verify_fixture_with(name: &str, args: &[&str], exit: i32) -> Value {
+        json(
+            vcrd()
+                .args(["verify", &fixture(name), "--now", NOW])
+                .args(args),
+            exit,
+        )
+    }
+
+    /// Every finding's code, in order.
+    pub fn codes(out: &Value) -> Vec<&str> {
+        out["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["code"].as_str().unwrap())
+            .collect()
     }
 
     /// The one finding with this code, asserting its attribution and severity.
@@ -258,6 +278,64 @@ fn a_key_the_credential_asserts_alone_is_refused() {
         "{out}"
     );
     assert_eq!(out["status"], "inspect_failed");
+}
+
+/// ARCHITECTURE §8, rule 2, with an issuer whose key vcrd cannot obtain: without the
+/// caller's opt-in the embedded key is refused, and vcrd's limit with the issuer is an
+/// error; with it, the embedded key decides, and the issuer key not obtained is a
+/// warning (DEVELOPMENT-PLAN.md, milestone 2, decided 2026-11-16).
+#[test]
+fn an_embedded_key_alone_decides_with_the_opt_in() {
+    let fixture = "embedded-jwk-https-issuer.jwt";
+    let refused = verify_fixture(fixture, 6);
+    finding(
+        &refused,
+        "verify.issuer_method_unsupported",
+        "vcrd",
+        "error",
+    );
+    finding(&refused, "verify.embedded_key_refused", "policy", "error");
+    finding(
+        &refused,
+        "verify.non_deciding_key_proof_correct",
+        "input",
+        "warning",
+    );
+    let provenance = &refused["proofs"][0]["key_provenance"];
+    assert!(provenance.get("deciding").is_none(), "{refused}");
+    assert_eq!(provenance["keys"][0]["refused"], "embedded_key_alone");
+
+    let accepted = verify_fixture_with(fixture, &["--allow-embedded-key"], 0);
+    let not_obtained = finding(
+        &accepted,
+        "verify.issuer_key_not_obtained",
+        "vcrd",
+        "warning",
+    );
+    assert_eq!(
+        not_obtained["detail"],
+        json!({
+            "type": "issuer_key_not_obtained",
+            "issuer": "https://issuer.example",
+            "method": "https",
+            "reason": "method_unsupported",
+        })
+    );
+    for code in [
+        "verify.issuer_method_unsupported",
+        "verify.embedded_key_refused",
+        "verify.non_deciding_key_proof_correct",
+    ] {
+        assert!(!codes(&accepted).contains(&code), "{code}: {accepted}");
+    }
+    let proof = &accepted["proofs"][0];
+    assert_eq!(proof["outcome"], "correct");
+    assert_eq!(proof["key_provenance"]["deciding"], 0);
+    let key = &proof["key_provenance"]["keys"][0];
+    assert_eq!(key["kinds"], json!(["credential_embedded"]));
+    assert_eq!(key["location"], "header.jwk");
+    assert!(key.get("refused").is_none(), "{accepted}");
+    assert_eq!(accepted["status"], "passed");
 }
 
 /// [S6]: the signature's own expiry, RFC 7519 §4.1.4, distinct from `validUntil`.

@@ -6,10 +6,14 @@
 use serde_json::json;
 use time::macros::datetime;
 use vcrd_core::{
-    Attribution, FindingDetail, KeySource, NotDeciding, ProofOutcome, Refusal, Severity, Validity,
+    Attribution, FindingDetail, KeySource, KeySourceKind, NotDeciding, ProofOutcome, Refusal,
+    Severity, Validity,
 };
 
-use support::{NOW, issuer_jwk, proof_of, signed, verified, verified_with_skew};
+use support::{
+    NOW, ed448_jwk, issuer_jwk, other_jwk, proof_of, signed, verified, verified_opted_in,
+    verified_with_skew,
+};
 
 /// In a `#[cfg(test)]` module so that the workspace's panic lints exempt it, as
 /// they do test functions (docs/reviews/milestone-0.md, gap 1).
@@ -24,7 +28,8 @@ mod support {
     use sha2::{Digest as _, Sha256};
     use time::macros::datetime;
     use vcrd_core::{
-        Attribution, Context, FixedClock, ProofResult, Registry, Report, Severity, verify,
+        Attribution, Context, FixedClock, KeyPolicy, ProofResult, Registry, Report, Severity,
+        verify,
     };
 
     /// The tests' clock, 2026-10-01T00:00:00Z, in seconds since the Unix epoch.
@@ -41,6 +46,18 @@ mod support {
     /// The issuer's key as a JWK (RFC 8037 §2).
     pub fn issuer_jwk() -> Value {
         json!({"kty": "OKP", "crv": "Ed25519", "x": b64(key().verifying_key().as_bytes())})
+    }
+
+    /// Another key, which signs nothing, as a JWK.
+    pub fn other_jwk() -> Value {
+        let other =
+            SigningKey::from_bytes(&Sha256::digest(b"vcrd-core verify tests: other").into());
+        json!({"kty": "OKP", "crv": "Ed25519", "x": b64(other.verifying_key().as_bytes())})
+    }
+
+    /// An Ed448 public key as a JWK (RFC 8037 §2): a key type vcrd names and cannot use.
+    pub fn ed448_jwk() -> Value {
+        json!({"kty": "OKP", "crv": "Ed448", "x": b64(&[9; 57])})
     }
 
     /// A credential with a `did:key` issuer, its header and payload changed by `edit`,
@@ -83,6 +100,19 @@ mod support {
     pub fn verified_with_skew(bytes: &[u8], skew_seconds: u64) -> Report {
         let ctx = Context::builder(FixedClock(datetime!(2026-10-01 0:00 UTC)))
             .clock_skew(Duration::from_secs(skew_seconds))
+            .build();
+        verify(bytes, &ctx, &Registry::builtin())
+    }
+
+    /// Verified with the caller's opt-in to an embedded key alone (ARCHITECTURE §8,
+    /// rule 2).
+    pub fn verified_opted_in(bytes: &[u8]) -> Report {
+        let policy = KeyPolicy {
+            allow_embedded_key_alone: true,
+            ..KeyPolicy::default()
+        };
+        let ctx = Context::builder(FixedClock(datetime!(2026-10-01 0:00 UTC)))
+            .key_policy(policy)
             .build();
         verify(bytes, &ctx, &Registry::builtin())
     }
@@ -372,6 +402,172 @@ fn a_malformed_jwk_does_not_stop_verify() {
         panic!("the issuer key alone: {proof:?}")
     };
     assert_eq!(key.kinds, [KeySource::IssuerIdentifier]);
+}
+
+const HTTPS_ISSUER: &str = "https://issuer.example";
+
+/// A `did:key` `kid`, when there is no issuer key, is a key the credential carries about
+/// itself, at `header.kid`: refused alone without the caller's opt-in, and deciding with
+/// it, the issuer key vcrd cannot obtain then a warning (DEVELOPMENT-PLAN.md, milestone
+/// 2, decided 2026-11-16).
+#[test]
+fn a_did_key_kid_is_an_embedded_key_when_there_is_no_issuer_key() {
+    let input = signed(|_, p| p["issuer"] = json!(HTTPS_ISSUER));
+    let kid_without_thumbprint = (
+        "inspect.kid_without_thumbprint",
+        Attribution::Input,
+        Severity::Warning,
+    );
+
+    let report = verified(&input);
+    let (proof, findings) = proof_of(&report);
+    assert_eq!(
+        findings,
+        [
+            kid_without_thumbprint,
+            (
+                "verify.issuer_method_unsupported",
+                Attribution::Vcrd,
+                Severity::Error
+            ),
+            (
+                "verify.embedded_key_refused",
+                Attribution::Policy,
+                Severity::Error
+            ),
+            (
+                "verify.non_deciding_key_proof_correct",
+                Attribution::Input,
+                Severity::Warning
+            ),
+        ]
+    );
+    let [key] = proof.key_provenance.keys.as_slice() else {
+        panic!("one key: {proof:?}")
+    };
+    assert_eq!(key.kinds, [KeySource::CredentialEmbedded]);
+    assert_eq!(key.location, Some("header.kid"));
+    assert_eq!(key.refused, Some(Refusal::EmbeddedKeyAlone));
+    assert!(matches!(key.proof, ProofOutcome::Correct { .. }));
+
+    let report = verified_opted_in(&input);
+    let (proof, findings) = proof_of(&report);
+    assert_eq!(
+        findings,
+        [
+            kid_without_thumbprint,
+            (
+                "verify.issuer_key_not_obtained",
+                Attribution::Vcrd,
+                Severity::Warning
+            ),
+        ]
+    );
+    assert_eq!(proof.key_provenance.deciding, Some(0));
+    assert!(matches!(proof.outcome, ProofOutcome::Correct { .. }));
+}
+
+/// A credential with no issuer that carries a `did:key` `kid` is not blocked for want
+/// of key material: verify runs, and refuses the key without the caller's opt-in
+/// (DEVELOPMENT-PLAN.md, milestone 2; docs/reviews/milestone-1.md, slice 5, N12).
+#[test]
+fn a_did_key_kid_lets_verify_run_without_an_issuer() {
+    let report = verified(&signed(|_, p| {
+        p.as_object_mut().unwrap().remove("issuer");
+    }));
+    let (proof, findings) = proof_of(&report);
+    assert!(
+        findings.contains(&(
+            "verify.embedded_key_refused",
+            Attribution::Policy,
+            Severity::Error
+        )),
+        "{findings:?}"
+    );
+    let [key] = proof.key_provenance.keys.as_slice() else {
+        panic!("one key: {proof:?}")
+    };
+    assert_eq!(key.location, Some("header.kid"));
+    assert_eq!(key.refused, Some(Refusal::EmbeddedKeyAlone));
+}
+
+/// A `did:key` `kid` and a `jwk` of the same key are one embedded key, at `header.jwk`.
+#[test]
+fn a_did_key_kid_and_a_jwk_of_one_key_are_one_embedded_key() {
+    let report = verified_opted_in(&signed(|h, p| {
+        p["issuer"] = json!(HTTPS_ISSUER);
+        h["jwk"] = issuer_jwk();
+    }));
+    let (proof, _) = proof_of(&report);
+    let [key] = proof.key_provenance.keys.as_slice() else {
+        panic!("one key: {proof:?}")
+    };
+    assert_eq!(key.kinds, [KeySource::CredentialEmbedded]);
+    assert_eq!(key.location, Some("header.jwk"));
+    assert_eq!(proof.key_provenance.deciding, Some(0));
+    assert!(matches!(proof.outcome, ProofOutcome::Correct { .. }));
+}
+
+/// A credential that carries two embedded keys not known to be one key: neither
+/// decides, even with the opt-in, and that is why no key decides.
+#[test]
+fn two_embedded_keys_that_differ_decide_nothing() {
+    let report = verified_opted_in(&signed(|h, p| {
+        p["issuer"] = json!(HTTPS_ISSUER);
+        h["jwk"] = other_jwk();
+    }));
+    let (proof, findings) = proof_of(&report);
+    assert!(
+        findings.contains(&(
+            "verify.embedded_keys_differ",
+            Attribution::Input,
+            Severity::Error
+        )),
+        "{findings:?}"
+    );
+    assert_eq!(proof.key_provenance.deciding, None);
+    let locations: Vec<_> = proof
+        .key_provenance
+        .keys
+        .iter()
+        .map(|k| (k.location, k.refused))
+        .collect();
+    assert_eq!(
+        locations,
+        [
+            (Some("header.jwk"), Some(Refusal::EmbeddedKeysDiffer)),
+            (Some("header.kid"), Some(Refusal::EmbeddedKeysDiffer)),
+        ]
+    );
+}
+
+/// No key that may decide, and no finding of key resolution's to say why: here the only
+/// key is an embedded key of a type vcrd cannot use, and the caller opted in. So that
+/// verify never passes with no deciding proof key, `verify.no_key_material` says so.
+#[test]
+fn no_key_that_may_decide_is_no_key_material() {
+    let report = verified_opted_in(&signed(|h, p| {
+        p.as_object_mut().unwrap().remove("issuer");
+        h.as_object_mut().unwrap().remove("kid");
+        h["jwk"] = ed448_jwk();
+    }));
+    let (proof, _) = proof_of(&report);
+    assert_eq!(proof.key_provenance.deciding, None);
+    let no_key = report
+        .verify
+        .findings()
+        .iter()
+        .find(|f| f.code == "verify.no_key_material")
+        .unwrap_or_else(|| panic!("no verify.no_key_material: {report:?}"));
+    assert!(
+        matches!(
+            &no_key.detail,
+            FindingDetail::NoKeyMaterial { consulted }
+                if consulted == &[KeySourceKind::IssuerIdentifier, KeySourceKind::CredentialEmbedded]
+        ),
+        "{no_key:?}"
+    );
+    assert!(report.verify.is_failed(), "{report:?}");
 }
 
 /// A key type vcrd does not know may be one a later standard defines, so it is

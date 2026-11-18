@@ -11,10 +11,10 @@ use time::format_description::well_known::Rfc3339;
 use vcrd_core::{
     Attribution, Base64urlProblem, BlockReason, Check, ClaimLocation, Context, CritProblem,
     DateField, DeclaredAlgorithm, DidKeyProblem, Document, DocumentKind, Finding, FindingDetail,
-    IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment, KeyRef, KeySourceKind,
-    LanguageValueProblem, LeafClass, Missing, NotDeciding, NotEvaluatedReason, Phase, PhaseOutcome,
-    ProofOutcome, PublicJwk, Refusal, Rendered, RenderedJson, Report, RevealLocation, Revealed,
-    Severity, Treatment, Validity, ValueKind, WeakKeyCriterion, render,
+    IssuerKeyUnobtainable, IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment, KeyRef,
+    KeySourceKind, LanguageValueProblem, LeafClass, Missing, NotDeciding, NotEvaluatedReason,
+    Phase, PhaseOutcome, ProofOutcome, PublicJwk, Refusal, Rendered, RenderedJson, Report,
+    RevealLocation, Revealed, Severity, Treatment, Validity, ValueKind, WeakKeyCriterion, render,
 };
 
 /// `0` until the schema is declared stable (REQUIREMENTS §9).
@@ -852,6 +852,18 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
         FindingDetail::IssuerMethodUnsupported { method } => {
             json!({"type": "issuer_method_unsupported", "method": method})
         }
+        FindingDetail::IssuerKeyNotObtained {
+            issuer,
+            method,
+            reason,
+        } => json!({
+            "type": "issuer_key_not_obtained",
+            "issuer": issuer,
+            "method": method,
+            "reason": match reason {
+                IssuerKeyUnobtainable::MethodUnsupported => "method_unsupported",
+            },
+        }),
         FindingDetail::DidKeyUndecodable { problem } => {
             json!({"type": "did_key_undecodable", "problem": did_key_problem(*problem)})
         }
@@ -875,6 +887,10 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
         FindingDetail::EmbeddedKeyRefused { location } => {
             json!({"type": "embedded_key_refused", "location": location})
         }
+        FindingDetail::EmbeddedKeysDiffer { keys } => json!({
+            "type": "embedded_keys_differ",
+            "keys": keys.iter().map(key_ref).collect::<Vec<_>>(),
+        }),
         FindingDetail::EmbeddedKeyMismatch { embedded_key, key } => json!({
             "type": "embedded_key_mismatch",
             "embedded_key": key_ref(embedded_key),
@@ -903,6 +919,7 @@ fn refusal_name(refusal: Refusal) -> &'static str {
         Refusal::NotForSigning => "not_for_signing",
         Refusal::TypeUnsupported => "type_unsupported",
         Refusal::EmbeddedKeyAlone => "embedded_key_alone",
+        Refusal::EmbeddedKeysDiffer => "embedded_keys_differ",
     }
 }
 

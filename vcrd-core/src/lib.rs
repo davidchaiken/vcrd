@@ -27,7 +27,7 @@ mod vcdm;
 
 #[cfg(feature = "std-clock")]
 pub use context::SystemClock;
-pub use context::{Clock, Context, ContextBuilder, FixedClock, Limits};
+pub use context::{Clock, Context, ContextBuilder, FixedClock, KeyPolicy, Limits};
 pub use document::{
     ClassedJson, ContainedInput, ContextEntry, DateTimeProblem, DeclaredAlgorithm, Document,
     DocumentKind, EmbeddedKey, KeyHints, Leaf, LeafClass, NumericDate, ProofDescriptor,
@@ -35,8 +35,8 @@ pub use document::{
 };
 pub use finding::{
     Attribution, Base64urlProblem, ClaimLocation, CritProblem, DateField, DidKeyProblem, Finding,
-    FindingDetail, IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment, KeyRef, KeySourceKind,
-    LanguageValueProblem, NotDeciding, Severity, WeakKeyCriterion,
+    FindingDetail, IssuerKeyUnobtainable, IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment,
+    KeyRef, KeySourceKind, LanguageValueProblem, NotDeciding, Severity, WeakKeyCriterion,
 };
 pub use json::{DuplicateName, Json, Member, nesting_depth};
 pub use keys::{Jwk, KeyProvenance, KeyReport, KeySource, PublicJwk, PublicKey, Refusal};
