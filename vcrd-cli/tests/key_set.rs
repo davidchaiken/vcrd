@@ -7,7 +7,7 @@ mod support;
 
 use std::path::PathBuf;
 
-use helpers::{caller_error, key_set_file};
+use helpers::{caller_error, example_issuer_key_and_kid, key_set_file, verified};
 use serde_json::{Value, json};
 use support::{EXAMPLE, NOW, json, vcrd};
 use vcrd_core::Limits;
@@ -18,6 +18,8 @@ use vcrd_core::Limits;
 mod helpers {
     use std::path::{Path, PathBuf};
 
+    use serde_json::Value;
+
     use super::support::{EXAMPLE, NOW, json, vcrd};
 
     /// Writes `contents` to a file of this name in the tests' scratch directory, which
@@ -26,6 +28,36 @@ mod helpers {
         let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
         std::fs::write(&path, contents).unwrap();
         path
+    }
+
+    /// `vcrd verify` of the curated example with `--key-set`, in the output format given,
+    /// with any further arguments: standard output, whatever the exit code.
+    pub fn verified(key_set: &Path, format: &str, extra: &[&str]) -> String {
+        let output = vcrd()
+            .args(["verify", EXAMPLE, "--now", NOW, "--format", format])
+            .args(extra)
+            .arg("--key-set")
+            .arg(key_set)
+            .output()
+            .unwrap();
+        String::from_utf8(output.stdout).unwrap()
+    }
+
+    /// The curated example's issuer key as a JWK, and its header's `kid`, as vcrd reports
+    /// them.
+    pub fn example_issuer_key_and_kid() -> (Value, String) {
+        let out = json(vcrd().args(["verify", EXAMPLE, "--now", NOW]), 0);
+        let jwk = out["proofs"][0]["key_provenance"]["keys"][0]["jwk"].clone();
+        let kid = out["format"]["header"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|leaf| leaf["path"] == "kid")
+            .unwrap()["value"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        (jwk, kid)
     }
 
     /// The caller error a command line with `--key-set` gives: its code and message.
@@ -142,4 +174,73 @@ fn verify_reports_an_ignored_entry() {
         })],
         "{out}"
     );
+}
+
+/// A matched caller-supplied key says which entry it is and how it was matched, in each
+/// output format (docs/output.md).
+#[test]
+fn a_matched_caller_key_shows_its_kid_and_how_it_was_matched() {
+    let (mut jwk, kid) = example_issuer_key_and_kid();
+    jwk["kid"] = json!(kid);
+    let set = json!({"keys": [jwk]}).to_string();
+    let path = key_set_file("example-issuer-key.json", set.as_bytes());
+    let out: Value = serde_json::from_str(&verified(&path, "json", &[])).unwrap();
+    assert_eq!(out["exit_code"], 0, "{out}");
+    let key = &out["proofs"][0]["key_provenance"]["keys"][0];
+    assert_eq!(
+        key["kinds"],
+        json!(["caller_supplied", "issuer_identifier"]),
+        "{out}"
+    );
+    assert_eq!(
+        (&key["kid"], &key["matched_by"]),
+        (&json!(kid), &json!("kid"))
+    );
+    let plain = verified(&path, "plain", &[]);
+    for line in [
+        format!("proofs[0].key_provenance.keys[0].kid: {kid}"),
+        "proofs[0].key_provenance.keys[0].matched_by: kid".to_owned(),
+    ] {
+        assert!(plain.lines().any(|l| l == line), "{line}\n{plain}");
+    }
+    let text = verified(&path, "text", &[]);
+    assert!(text.contains("matched by kid, and issuer key"), "{text}");
+}
+
+/// An `oct` key's `k` is a secret: left out of `jwk` and listed in `masked` below
+/// `--unsafe=2`, shown and listed in `reveals` at it (DEVELOPMENT-PLAN.md, milestone 2,
+/// decided 2026-11-16).
+#[test]
+fn an_oct_keys_secret_is_shown_only_at_unsafe_2() {
+    const K: &str = "c2VjcmV0IGtleSBtYXRlcmlhbA";
+    let set = json!({"keys": [{"kty": "oct", "k": K}]}).to_string();
+    let path = key_set_file("oct.json", set.as_bytes());
+    let key_reveal = json!({
+        "path": "[0].key_provenance.keys[0].jwk.k",
+        "location": "proofs",
+        "visibility": "revealed",
+    });
+    for (unsafe_level, jwk, masked, revealed) in [
+        ("--unsafe=1", json!({"kty": "oct"}), json!(["k"]), false),
+        (
+            "--unsafe=2",
+            json!({"kty": "oct", "k": K}),
+            Value::Null,
+            true,
+        ),
+    ] {
+        let out: Value = serde_json::from_str(&verified(&path, "json", &[unsafe_level])).unwrap();
+        let key = &out["proofs"][0]["key_provenance"]["keys"][0];
+        assert_eq!(
+            (&key["jwk"], &key["masked"]),
+            (&jwk, &masked),
+            "{unsafe_level}: {out}"
+        );
+        let reveals = out["reveals"].as_array().unwrap();
+        assert_eq!(
+            reveals.contains(&key_reveal),
+            revealed,
+            "{unsafe_level}: {out}"
+        );
+    }
 }

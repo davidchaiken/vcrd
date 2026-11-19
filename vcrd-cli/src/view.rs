@@ -10,12 +10,12 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use vcrd_core::{
     Attribution, Base64urlProblem, BlockReason, Check, ClaimLocation, Context, CritProblem,
-    DateField, DeclaredAlgorithm, DidKeyProblem, Document, DocumentKind, Finding, FindingDetail,
-    IssuerKeyUnobtainable, IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment, KeyRef,
-    KeySetEntryProblem, KeySourceKind, LanguageValueProblem, LeafClass, Missing, NotDeciding,
-    NotEvaluatedReason, Phase, PhaseOutcome, ProofOutcome, PublicJwk, Refusal, Rendered,
-    RenderedJson, Report, RevealLocation, Revealed, Severity, Treatment, Validity, ValueKind,
-    WeakKeyCriterion, render,
+    DateField, DeclaredAlgorithm, DidKeyProblem, Document, DocumentKind, EntryExclusion, Finding,
+    FindingDetail, IssuerKeyUnobtainable, IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment,
+    KeyRef, KeySecret, KeySetEntryProblem, KeySourceKind, LanguageValueProblem, LeafClass,
+    MatchedBy, Missing, NotDeciding, NotEvaluatedReason, Phase, PhaseOutcome, ProofOutcome,
+    PublicJwk, Refusal, Rendered, RenderedJson, Report, RevealLocation, Revealed, Severity,
+    Treatment, Validity, ValueKind, WeakKeyCriterion, render,
 };
 
 /// `0` until the schema is declared stable (REQUIREMENTS §9).
@@ -93,7 +93,8 @@ pub struct ResultView {
 #[derive(Debug, Serialize)]
 pub struct RevealView {
     pub path: String,
-    /// The key the path is relative to: `credential.claims` or `format.header`.
+    /// The key the path is relative to: `credential.claims`, `format.header`, or
+    /// `proofs`, for a caller-supplied symmetric key's secret.
     pub location: &'static str,
     /// As on the value itself: `revealed`. Milestone 3's hashed designation adds
     /// `hashed` (REQUIREMENTS §8).
@@ -172,12 +173,23 @@ pub struct KeyView {
     /// Where the credential carries the embedded key, e.g. `header.jwk`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<&'static str>,
-    /// The RFC 7638 thumbprint; absent for a key vcrd names but cannot decode.
+    /// The key set entry's own `kid`, for a caller-supplied key that has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kid: Option<String>,
+    /// How matching found the caller-supplied key: `kid` or `sole_entry`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched_by: Option<&'static str>,
+    /// The RFC 7638 thumbprint; absent for a key vcrd names but cannot decode, a
+    /// symmetric key, and a caller-supplied key that matching did not find.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thumbprint: Option<String>,
-    /// The members the thumbprint covers.
+    /// The members the thumbprint covers, or a symmetric key's `kty`, with its `k` when
+    /// that is shown.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jwk: Option<Value>,
+    /// A symmetric key's secret members left out of `jwk`, such as `k`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub masked: Vec<&'static str>,
     /// The proof's result with it as the proof key.
     pub proof: &'static str,
     /// Why it may not decide the outcome, when it may not.
@@ -262,7 +274,7 @@ fn leaf_view(path: &str, class: LeafClass, kind: ValueKind, value: Option<&Revea
 pub fn envelope(report: &Report, ctx: &Context, size: Option<u64>) -> Envelope {
     let (exit_code, status) = crate::exit::exit_code(report);
     let rendered = report.parse.output().map(|parsed| render(parsed, ctx));
-    let reveals = rendered.as_ref().map_or_else(Vec::new, |r| {
+    let mut reveals = rendered.as_ref().map_or_else(Vec::new, |r| {
         r.reveals
             .iter()
             .map(|r| RevealView {
@@ -277,6 +289,26 @@ pub fn envelope(report: &Report, ctx: &Context, size: Option<u64>) -> Envelope {
             })
             .collect()
     });
+    // A caller-supplied symmetric key's secret, shown at `--unsafe=2`.
+    let proofs = report
+        .verify
+        .output()
+        .map_or(&[][..], |v| v.proofs.as_slice());
+    for (p, proof) in proofs.iter().enumerate() {
+        for (k, key) in proof.key_provenance.keys.iter().enumerate() {
+            if let Some(KeySecret {
+                member,
+                value: Some(_),
+            }) = &key.secret
+            {
+                reveals.push(RevealView {
+                    path: key_secret_path(p, k, member),
+                    location: "proofs",
+                    visibility: "revealed",
+                });
+            }
+        }
+    }
     Envelope {
         schema_version: SCHEMA_VERSION,
         status,
@@ -440,8 +472,19 @@ fn proofs(report: &Report) -> Vec<ProofView> {
                             kinds: k.kinds.iter().map(|kind| kind.as_str()).collect(),
                             method: k.method,
                             location: k.location,
+                            kid: k.kid.clone(),
+                            matched_by: k.matched_by.map(|m| match m {
+                                MatchedBy::Kid => "kid",
+                                MatchedBy::SoleEntry => "sole_entry",
+                            }),
                             thumbprint: k.thumbprint.clone(),
-                            jwk: k.jwk.as_ref().map(jwk),
+                            jwk: k.jwk.as_ref().map(|j| jwk(j, k.secret.as_ref())),
+                            masked: k
+                                .secret
+                                .iter()
+                                .filter(|s| s.value.is_none())
+                                .map(|s| s.member)
+                                .collect(),
                             proof: proof_outcome(&k.proof),
                             refused: k.refused.map(refusal_name),
                         })
@@ -932,6 +975,52 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
             "members",
             json!(members),
         ),
+        FindingDetail::CallerKeyNotFound { kid } => {
+            json!({"type": "caller_key_not_found", "kid": kid})
+        }
+        FindingDetail::CallerKeyAmbiguous { kid, candidates } => json!({
+            "type": "caller_key_ambiguous",
+            "kid": kid,
+            "candidates": candidates.iter().map(key_ref).collect::<Vec<_>>(),
+        }),
+        FindingDetail::CallerKeyExcluded {
+            key,
+            exclusion,
+            algorithm,
+        } => {
+            let (member, value) = match exclusion {
+                EntryExclusion::Alg { alg } => ("alg", json!(alg)),
+                EntryExclusion::Use { value } => ("use", json!(value)),
+                EntryExclusion::KeyOps { ops } => ("key_ops", json!(ops)),
+            };
+            json!({
+                "type": "caller_key_excluded",
+                "key": key_ref(key),
+                "member": member,
+                "value": value,
+                "algorithm": algorithm,
+            })
+        }
+        FindingDetail::CallerKeyTypeUnsupported { key, kty, crv } => json!({
+            "type": "caller_key_type_unsupported",
+            "key": key_ref(key),
+            "kty": kty,
+            "crv": crv,
+        }),
+        FindingDetail::CallerKeyAlgAlias { key, alg, declared } => json!({
+            "type": "caller_key_alg_alias",
+            "key": key_ref(key),
+            "alg": alg,
+            "declared": declared,
+        }),
+        FindingDetail::CallerKeyNotIssuerKey {
+            caller_key,
+            issuer_key,
+        } => json!({
+            "type": "caller_key_not_issuer_key",
+            "caller_key": key_ref(caller_key),
+            "issuer_key": key_ref(issuer_key),
+        }),
     }
 }
 
@@ -968,6 +1057,10 @@ fn refusal_name(refusal: Refusal) -> &'static str {
         Refusal::TypeUnsupported => "type_unsupported",
         Refusal::EmbeddedKeyAlone => "embedded_key_alone",
         Refusal::EmbeddedKeysDiffer => "embedded_keys_differ",
+        Refusal::CallerKeyNotFound => "not_found",
+        Refusal::CallerKeyAmbiguous => "ambiguous",
+        Refusal::EntryNotMatched => "entry_not_matched",
+        Refusal::ExcludedByEntry => "excluded_by_entry",
     }
 }
 
@@ -983,20 +1076,36 @@ fn key_ref(key: &KeyRef) -> Value {
     if let Some(location) = key.location {
         members.insert("location".to_owned(), json!(location));
     }
+    if let Some(kid) = &key.kid {
+        members.insert("kid".to_owned(), json!(kid));
+    }
     if let Some(thumbprint) = &key.thumbprint {
         members.insert("thumbprint".to_owned(), json!(thumbprint));
     }
     Value::Object(members)
 }
 
-/// A public key's JWK members as a JSON object.
-fn jwk(jwk: &PublicJwk) -> Value {
-    Value::Object(
-        jwk.members
-            .iter()
-            .map(|(name, value)| ((*name).to_owned(), Value::String(value.clone())))
-            .collect(),
-    )
+/// A key's JWK members as a JSON object, with a symmetric key's secret when it is
+/// shown.
+fn jwk(jwk: &PublicJwk, secret: Option<&KeySecret>) -> Value {
+    let mut members: serde_json::Map<String, Value> = jwk
+        .members
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), Value::String(value.clone())))
+        .collect();
+    if let Some(KeySecret {
+        member,
+        value: Some(value),
+    }) = secret
+    {
+        members.insert((*member).to_owned(), revealed(value));
+    }
+    Value::Object(members)
+}
+
+/// Where a key's shown secret is, relative to `proofs`, for `reveals`.
+fn key_secret_path(proof: usize, key: usize, member: &str) -> String {
+    format!("[{proof}].key_provenance.keys[{key}].jwk.{member}")
 }
 
 /// A proof's time and the clock it was compared with. `value` is the JSON number as

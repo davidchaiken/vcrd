@@ -9,8 +9,9 @@ use crate::finding::{
     Attribution, Finding, FindingDetail, JwkProblem, KeySetEntryProblem, Severity,
 };
 use crate::json::{self, Json};
-use crate::keys::{Jwk, PRIVATE_MEMBERS};
+use crate::keys::{Jwk, MatchedBy, PRIVATE_MEMBERS};
 use crate::redact::ClaimValue;
+use crate::registry::KeyType;
 use crate::report::Phase;
 
 /// A JWK Set the caller supplies (RFC 7517 §5): the entries vcrd keeps, and those RFC
@@ -23,10 +24,6 @@ pub struct KeySet {
 
 /// One entry vcrd keeps, with the members that constrain its use (RFC 7517 §4.2–4.4).
 #[derive(Clone)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "read by matching, in slice 3b's round (b)")
-)]
 pub(crate) struct KeySetEntry {
     /// Its position in `keys`, from 0.
     pub index: usize,
@@ -42,10 +39,6 @@ pub(crate) struct KeySetEntry {
 
 /// An entry's key.
 #[derive(Clone)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "read by matching, in slice 3b's round (b)")
-)]
 pub(crate) enum EntryKey {
     /// An asymmetric key's public members, and the key, when vcrd can use it. Boxed, as
     /// it is many times the size of the other variant.
@@ -186,6 +179,81 @@ impl KeySet {
                 )
             })
             .collect()
+    }
+}
+
+/// What matching found in the caller's key set (DEVELOPMENT-PLAN.md, milestone 2,
+/// decided 2026-11-18).
+pub(crate) enum CallerMatch<'a> {
+    Matched(&'a KeySetEntry, MatchedBy),
+    NotFound,
+    /// The entries left: those with the `kid`, or, with no `kid`, every entry.
+    Ambiguous(Vec<&'a KeySetEntry>),
+}
+
+impl KeySet {
+    /// The entry that is the caller-supplied key. `kid` is the header's, resolved as
+    /// inspect resolves it; `takes` says whether the declared algorithm takes a key of
+    /// a type, and only breaks ties among entries with the `kid`.
+    pub(crate) fn find(
+        &self,
+        kid: Option<&str>,
+        takes: impl Fn(KeyType<'_>) -> bool,
+    ) -> CallerMatch<'_> {
+        if let Some(kid) = kid {
+            let equal: Vec<&KeySetEntry> = self
+                .entries
+                .iter()
+                .filter(|e| e.kid.as_deref() == Some(kid))
+                .collect();
+            match equal.as_slice() {
+                [] => {}
+                [one] => return CallerMatch::Matched(one, MatchedBy::Kid),
+                several => {
+                    let fitting: Vec<&KeySetEntry> = several
+                        .iter()
+                        .copied()
+                        .filter(|e| takes(e.key_type()))
+                        .collect();
+                    return match fitting.as_slice() {
+                        [one] => CallerMatch::Matched(one, MatchedBy::Kid),
+                        _ => CallerMatch::Ambiguous(equal),
+                    };
+                }
+            }
+        }
+        match self.entries.as_slice() {
+            [only] if kid.is_none() || only.kid.is_none() => {
+                CallerMatch::Matched(only, MatchedBy::SoleEntry)
+            }
+            [_, _, ..] if kid.is_none() => CallerMatch::Ambiguous(self.entries.iter().collect()),
+            _ => CallerMatch::NotFound,
+        }
+    }
+}
+
+impl KeySetEntry {
+    /// The entry's key type: its `kty`, and its `crv` where it has one.
+    pub(crate) fn key_type(&self) -> KeyType<'_> {
+        match &self.key {
+            EntryKey::Public(jwk) => {
+                let member = |name| {
+                    jwk.public
+                        .members
+                        .iter()
+                        .find(|(n, _)| *n == name)
+                        .map(|(_, v)| v.as_str())
+                };
+                KeyType {
+                    kty: member("kty").unwrap_or_default(),
+                    crv: member("crv"),
+                }
+            }
+            EntryKey::Symmetric { .. } => KeyType {
+                kty: "oct",
+                crv: None,
+            },
+        }
     }
 }
 
@@ -510,6 +578,67 @@ mod tests {
                 problem: KeySetEntryProblem::MemberMissing { member: "k" },
             }]
         );
+    }
+
+    /// A set of Ed25519 entries (`true`) and EC entries (`false`), each with the `kid`
+    /// given, if any.
+    fn set_of(entries: &[(Option<&str>, bool)]) -> KeySet {
+        let entries: Vec<String> = entries
+            .iter()
+            .map(|(kid, ed25519)| {
+                let kid = kid.map_or_else(String::new, |k| format!(r#", "kid": "{k}""#));
+                if *ed25519 {
+                    format!(r#"{{"kty": "OKP", "crv": "Ed25519", "x": "{X}"{kid}}}"#)
+                } else {
+                    format!(r#"{{"kty": "EC", "crv": "P-256", "x": "x", "y": "y"{kid}}}"#)
+                }
+            })
+            .collect();
+        let set = parse(&format!(r#"{{"keys": [{}]}}"#, entries.join(", "))).unwrap();
+        assert!(set.ignored.is_empty(), "{set:?}");
+        set
+    }
+
+    /// The rules of matching (DEVELOPMENT-PLAN.md, milestone 2, decided 2026-11-13 and
+    /// 2026-11-18), for an algorithm that takes Ed25519 keys alone: the `kid`; among
+    /// entries that share it, the key type; otherwise the sole entry, when it or the
+    /// header has no `kid`.
+    #[test]
+    fn matching_takes_the_kid_then_the_key_type_then_the_sole_entry() {
+        let takes = |t: KeyType<'_>| t.kty == "OKP" && t.crv == Some("Ed25519");
+        let (a, b, c) = (Some("a"), Some("b"), Some("c"));
+        let (ed, ec) = (true, false);
+        for (entries, kid, expected) in [
+            (&[(a, ed)][..], a, ("kid", vec![0])),
+            (&[(a, ec), (a, ed)], a, ("kid", vec![1])),
+            (&[(a, ed), (a, ed)], a, ("ambiguous", vec![0, 1])),
+            (&[(a, ec), (a, ec)], a, ("ambiguous", vec![0, 1])),
+            // One entry with the `kid` is the match, whatever its type: whether it fits
+            // the algorithm is the suite's check.
+            (&[(a, ec)], a, ("kid", vec![0])),
+            (&[(None, ed)], a, ("sole_entry", vec![0])),
+            (&[(b, ed)], None, ("sole_entry", vec![0])),
+            (&[(None, ed)], None, ("sole_entry", vec![0])),
+            (&[(b, ed)], a, ("not_found", vec![])),
+            (&[(b, ed), (c, ed)], a, ("not_found", vec![])),
+            (&[(a, ed), (None, ed)], c, ("not_found", vec![])),
+            (&[(a, ed), (b, ed)], None, ("ambiguous", vec![0, 1])),
+            (&[], a, ("not_found", vec![])),
+            (&[], None, ("not_found", vec![])),
+        ] {
+            let set = set_of(entries);
+            let found = match set.find(kid, takes) {
+                CallerMatch::Matched(entry, MatchedBy::Kid) => ("kid", vec![entry.index]),
+                CallerMatch::Matched(entry, MatchedBy::SoleEntry) => {
+                    ("sole_entry", vec![entry.index])
+                }
+                CallerMatch::NotFound => ("not_found", vec![]),
+                CallerMatch::Ambiguous(left) => {
+                    ("ambiguous", left.iter().map(|e| e.index).collect())
+                }
+            };
+            assert_eq!(found, expected, "{entries:?}, kid {kid:?}");
+        }
     }
 
     /// The caller's secrets stay out of debug output, as the credential's claims do

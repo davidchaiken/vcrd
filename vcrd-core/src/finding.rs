@@ -462,6 +462,46 @@ pub enum FindingDetail {
         kid: Option<String>,
         members: Vec<&'static str>,
     },
+    /// No entry of the caller's key set matches: none has the `kid`, resolved as inspect
+    /// resolves it, and the set has no sole entry to match instead. Attributed to caller
+    /// policy; never a fall back to the issuer key alone.
+    CallerKeyNotFound { kid: Option<String> },
+    /// More than one entry of the caller's key set is left: several with the `kid` that
+    /// the algorithm's key type does not narrow to one, or, with no `kid`, more than one
+    /// entry. Attributed to caller policy.
+    CallerKeyAmbiguous {
+        kid: Option<String>,
+        candidates: Vec<KeyRef>,
+    },
+    /// The matched entry's own `alg`, `use` or `key_ops` excludes the declared algorithm,
+    /// so no proof is made with it (RFC 8725 §3.1). Attributed to caller policy.
+    CallerKeyExcluded {
+        key: Box<KeyRef>,
+        exclusion: EntryExclusion,
+        algorithm: String,
+    },
+    /// The matched entry is a key of a type vcrd cannot use. Attributed to vcrd.
+    CallerKeyTypeUnsupported {
+        key: Box<KeyRef>,
+        kty: String,
+        crv: Option<String>,
+    },
+    /// The matched entry's `alg` names the declared algorithm by its other name, `EdDSA`
+    /// for `Ed25519` or the reverse, with an Ed25519 key: one algorithm (RFC 8037 §3.1;
+    /// RFC 9864 §2.2), which a verifier that compares the names refuses. A warning
+    /// attributed to caller policy.
+    CallerKeyAlgAlias {
+        key: Box<KeyRef>,
+        alg: String,
+        declared: String,
+    },
+    /// The caller-supplied key is not the issuer key, and the caller has not opted in to
+    /// letting it decide in the issuer key's place (ARCHITECTURE §8, rule 1). Attributed
+    /// to caller policy.
+    CallerKeyNotIssuerKey {
+        caller_key: Box<KeyRef>,
+        issuer_key: Box<KeyRef>,
+    },
 }
 
 impl FindingDetail {
@@ -558,6 +598,12 @@ impl FindingDetail {
             FindingDetail::EmbeddedKeyProofCorrect { .. } => "verify.embedded_key_proof_correct",
             FindingDetail::KeySetEntryIgnored { .. } => "verify.key_set_entry_ignored",
             FindingDetail::KeySetPrivateKey { .. } => "verify.key_set_private_key",
+            FindingDetail::CallerKeyNotFound { .. } => "verify.caller_key_not_found",
+            FindingDetail::CallerKeyAmbiguous { .. } => "verify.caller_key_ambiguous",
+            FindingDetail::CallerKeyExcluded { .. } => "verify.caller_key_excluded",
+            FindingDetail::CallerKeyTypeUnsupported { .. } => "verify.caller_key_type_unsupported",
+            FindingDetail::CallerKeyAlgAlias { .. } => "verify.caller_key_alg_alias",
+            FindingDetail::CallerKeyNotIssuerKey { .. } => "verify.caller_key_not_issuer_key",
             FindingDetail::NonDecidingKeyProofCorrect { .. } => {
                 "verify.non_deciding_key_proof_correct"
             }
@@ -630,8 +676,23 @@ pub struct KeyRef {
     pub method: Option<&'static str>,
     /// Where the credential carries it, e.g. `header.jwk`, when it is an embedded key.
     pub location: Option<&'static str>,
-    /// Absent for a key vcrd names but cannot decode.
+    /// The key set entry's own `kid`, when the key is a caller-supplied key that has one.
+    pub kid: Option<String>,
+    /// Absent for a key vcrd names but cannot decode, a symmetric key, and a
+    /// caller-supplied key that matching did not find.
     pub thumbprint: Option<String>,
+}
+
+/// What, in a key set entry's own members, excludes the declared algorithm (RFC 8725
+/// §3.1; RFC 7517 §4.2–4.4).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EntryExclusion {
+    /// `alg` names another algorithm.
+    Alg { alg: String },
+    /// `use` is not `sig`.
+    Use { value: String },
+    /// `key_ops` does not list `verify`.
+    KeyOps { ops: Vec<String> },
 }
 
 /// Why vcrd cannot obtain the issuer key.

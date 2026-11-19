@@ -618,6 +618,12 @@ fn proof_section(index: usize, proof: &ProofView, full: bool) -> Section {
         if let Some(location) = key.location {
             fields.push(field(&member("location"), "Location", location).plain_only());
         }
+        if let Some(kid) = &key.kid {
+            fields.push(field(&member("kid"), "Kid", kid.clone()).plain_only());
+        }
+        if let Some(matched_by) = key.matched_by {
+            fields.push(field(&member("matched_by"), "Matched by", matched_by).plain_only());
+        }
         if let Some(thumbprint) = key.thumbprint.as_ref().filter(|_| full) {
             fields.push(field(
                 &member("thumbprint"),
@@ -627,6 +633,9 @@ fn proof_section(index: usize, proof: &ProofView, full: bool) -> Section {
         }
         if full && let Some(jwk) = &key.jwk {
             fields.push(field(&member("jwk"), "JWK", jwk.to_string()));
+        }
+        if full && !key.masked.is_empty() {
+            fields.push(field(&member("masked"), "Masked", key.masked.join(", ")));
         }
         fields.push(field(&member("proof"), "Proof", key.proof).plain_only());
         if let Some(refused) = key.refused {
@@ -656,7 +665,18 @@ fn key_phrase(key: &KeyView, with_proof: bool) -> String {
                 Some(location) => format!("embedded key, at {location}"),
                 None => "embedded key".to_owned(),
             },
-            "caller_supplied" => "caller-supplied key".to_owned(),
+            "caller_supplied" => {
+                let kid = key
+                    .kid
+                    .as_deref()
+                    .map_or_else(String::new, |k| format!(" {k}"));
+                match key.matched_by {
+                    Some("kid") => format!("caller-supplied key{kid}, matched by kid"),
+                    Some("sole_entry") => format!("caller-supplied key{kid}, the sole entry"),
+                    _ if key.kid.is_some() => format!("key set entry{kid}, not matched"),
+                    _ => "caller-supplied key".to_owned(),
+                }
+            }
             other => other.to_owned(),
         })
         .collect();
@@ -671,6 +691,10 @@ fn key_phrase(key: &KeyView, with_proof: bool) -> String {
             "type_unsupported" => "a type vcrd cannot use",
             "embedded_key_alone" => "alone, without the opt-in",
             "embedded_keys_differ" => "one of two embedded keys that differ",
+            "not_found" => "no key set entry matched",
+            "ambiguous" => "more than one key set entry left",
+            "entry_not_matched" => "a key set entry not matched",
+            "excluded_by_entry" => "the entry's own alg, use or key_ops excludes the algorithm",
             other => other,
         };
         phrase.push_str(&format!("; refused: {why}"));

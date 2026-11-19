@@ -35,20 +35,23 @@ pub use document::{
     ProofMaterial, ProofTime, ProofTimes, Timestamp,
 };
 pub use finding::{
-    Attribution, Base64urlProblem, ClaimLocation, CritProblem, DateField, DidKeyProblem, Finding,
-    FindingDetail, IssuerKeyUnobtainable, IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment,
-    KeyRef, KeySetEntryProblem, KeySourceKind, LanguageValueProblem, NotDeciding, Severity,
-    WeakKeyCriterion,
+    Attribution, Base64urlProblem, ClaimLocation, CritProblem, DateField, DidKeyProblem,
+    EntryExclusion, Finding, FindingDetail, IssuerKeyUnobtainable, IssuerProblem, JwkProblem,
+    JwsJsonSyntax, JwsSegment, KeyRef, KeySetEntryProblem, KeySourceKind, LanguageValueProblem,
+    NotDeciding, Severity, WeakKeyCriterion,
 };
 pub use json::{DuplicateName, Json, Member, nesting_depth};
 pub use key_set::{KeySet, KeySetError, NotJwkSet};
-pub use keys::{Jwk, KeyProvenance, KeyReport, KeySource, PublicJwk, PublicKey, Refusal};
+pub use keys::{
+    Jwk, KeyProvenance, KeyReport, KeySecret, KeySource, MatchedBy, PublicJwk, PublicKey, Refusal,
+};
 pub use redact::{
     ClaimValue, Designations, Rendered, RenderedJson, RenderedLeaf, Reveal, RevealLocation,
     Revealed, Treatment, ValueKind, render,
 };
 pub use registry::{
-    CredentialFormat, Detection, FormatId, ProfileId, ProofInput, ProofSuite, Registry, SuiteId,
+    CredentialFormat, Detection, FormatId, KeyType, ProfileId, ProofInput, ProofSuite, Registry,
+    SuiteId,
 };
 pub use report::{
     BlockReason, Blocked, Check, Disclosure, FormatDetail, InputSummary, InspectOutput, Missing,

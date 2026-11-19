@@ -964,10 +964,11 @@ repository; neither has a dated copy, so each is linked where it is published no
   instead.
 - **Attribution and severity.** `input`, `warning`.
 - **Detail.** `key`: the key, named as `key_provenance.keys` names it, by its `kinds`,
-  `method` or `location`, and `thumbprint`. `why`: why its proof does not count, either
-  the reason it is refused, such as `embedded_key_alone` for an embedded key alone
-  without the caller's opt-in, or `another_key_decides`, as when the issuer key decides
-  but vcrd cannot compare it with this key.
+  `method`, `location` or `kid`, and `thumbprint`. `why`: why its proof does not count,
+  either the reason it is refused, such as `embedded_key_alone` for an embedded key alone
+  without the caller's opt-in, or `entry_not_matched` for an entry of the caller's key
+  set tried only because none matched, or `another_key_decides`, as when the issuer key
+  decides but vcrd cannot compare it with this key.
 - **Standard.** [ARCHITECTURE] §8, "Keys and proofs": the rules that say which key
   decides, and the proofs with the other keys, made for information.
 - **Remedy.** Nothing fails because of it. It says what the credential's signature
@@ -1011,6 +1012,97 @@ repository; neither has a dated copy, so each is linked where it is published no
   members; a verifier needs only the public ones.
 - **Remedy.** Give vcrd a key set of public keys only, and keep the private key where its
   holder alone can read it.
+
+### <a id="verify.caller_key_not_found"></a>`verify.caller_key_not_found`
+
+- **Meaning.** No entry of the key set passed with `--key-set` matches: none has the
+  header's `kid`, resolved as inspect resolves it, and the set has no sole entry to match
+  instead (one where it or the header has no `kid`). A refused caller-supplied key stands
+  in `key_provenance.keys`, `refused: not_found`, so that vcrd never falls back to the
+  issuer key alone. Each entry that could have signed is then tried, and those whose
+  proofs are correct are listed.
+- **Attribution and severity.** `policy`, `error`.
+- **Detail.** `kid`: the `kid` looked for, resolved; `null` when the header has none.
+- **Standard.** [RFC 7517] §4.5: `kid` selects a key within a JWK Set. [RFC 8725] §3.8:
+  a key set bound to no issuer identifier binds its keys to no issuer, so vcrd uses only
+  the key the credential names. The decisions of 2026-11-13 and 2026-11-18
+  ([DEVELOPMENT-PLAN.md], milestone 2).
+- **Remedy.** Give the entry the header's `kid`, or pass a key set with the one key.
+  An entry listed with `refused: entry_not_matched` and a correct proof is a key that
+  signed the credential under another `kid`.
+
+### <a id="verify.caller_key_ambiguous"></a>`verify.caller_key_ambiguous`
+
+- **Meaning.** More than one entry of the key set passed with `--key-set` is left: several
+  entries have the header's `kid`, and the key type the algorithm takes does not narrow
+  them to one, or the header has no `kid` and the set has more than one entry. A refused
+  caller-supplied key stands in `key_provenance.keys`, `refused: ambiguous`, and each
+  entry that could have signed is tried, as for `verify.caller_key_not_found`.
+- **Attribution and severity.** `policy`, `error`.
+- **Detail.** `kid`: the `kid` looked for, resolved; `null` when the header has none.
+  `candidates`: the entries left, each by `kinds`, `kid` and `thumbprint`.
+- **Standard.** [RFC 7517] §4.5: keys within a set should have distinct `kid`s, except
+  keys of different types. The decisions of 2026-11-13 and 2026-11-18
+  ([DEVELOPMENT-PLAN.md], milestone 2).
+- **Remedy.** Give each entry a distinct `kid`, or pass a key set with the one key.
+
+### <a id="verify.caller_key_excluded"></a>`verify.caller_key_excluded`
+
+- **Meaning.** The matched entry's own `alg`, `use` or `key_ops` excludes the algorithm the
+  credential declares, so vcrd makes no proof with it: the key is refused,
+  `refused: excluded_by_entry`. An entry whose `alg` is `EdDSA` with a header's
+  `Ed25519`, or the reverse, with an Ed25519 key, is not excluded; see
+  `verify.caller_key_alg_alias`.
+- **Attribution and severity.** `policy`, `error`: an entry's members are the caller's
+  policy.
+- **Detail.** `key`: the key, as `key_provenance.keys` names it. `member`: `alg`, `use` or
+  `key_ops`. `value`: the member's value, an array for `key_ops`. `algorithm`: the
+  declared algorithm.
+- **Standard.** [RFC 8725] §3.1: each key is used with exactly one algorithm, checked
+  when the cryptographic operation is done. [RFC 7517] §4.2–4.4: `use` (`sig` for a
+  signature), `key_ops` (`verify`) and `alg`.
+- **Remedy.** If the key is meant to verify this credential, correct the entry's member;
+  otherwise the credential is signed with an algorithm the key's holder did not intend.
+
+### <a id="verify.caller_key_alg_alias"></a>`verify.caller_key_alg_alias`
+
+- **Meaning.** The matched entry's `alg` names the declared algorithm by its other name:
+  `EdDSA` for `Ed25519`, or the reverse, with an Ed25519 key. The two are one algorithm,
+  so vcrd uses the key; a verifier that compares the names would refuse it.
+- **Attribution and severity.** `policy`, `warning`.
+- **Detail.** `key`: the key, as `key_provenance.keys` names it. `alg`: the entry's.
+  `declared`: the credential's.
+- **Standard.** [RFC 8037] §3.1 defines `EdDSA`, whose curve the key gives; [RFC 9864]
+  §2.2 defines `Ed25519` and deprecates the polymorphic name. The decision of 2026-11-19
+  ([DEVELOPMENT-PLAN.md], milestone 2).
+- **Remedy.** Write the entry's `alg` as the credential's header does, `Ed25519` by
+  preference, if other verifiers will use the set.
+
+### <a id="verify.caller_key_type_unsupported"></a>`verify.caller_key_type_unsupported`
+
+- **Meaning.** The matched entry is a key of a type vcrd cannot use, such as an EC, RSA,
+  Ed448 or `oct` key in this release: the key is refused, `refused: type_unsupported`.
+  A refused caller-supplied key may still decide, so that no other key can.
+- **Attribution and severity.** `vcrd`, `error`.
+- **Detail.** `key`: the key, as `key_provenance.keys` names it. `kty`, and `crv` when the
+  key type has one.
+- **Standard.** None: what vcrd supports ([DEVELOPMENT-PLAN.md], milestone 2, adds the
+  RFC 7518 signature algorithms).
+- **Remedy.** Use a verifier that supports the key type, or a release of vcrd that does.
+
+### <a id="verify.caller_key_not_issuer_key"></a>`verify.caller_key_not_issuer_key`
+
+- **Meaning.** The caller-supplied key is not the issuer key. The issuer key decides, and
+  the caller-supplied key may not take its place. An issuer key vcrd cannot decode is
+  not known to be the same key, so this applies to it too.
+- **Attribution and severity.** `policy`, `error`.
+- **Detail.** `caller_key` and `issuer_key`: the two keys, as `key_provenance.keys` names
+  them.
+- **Standard.** [ARCHITECTURE] §8, "Keys and proofs", rule 1: a caller-supplied key and an
+  issuer key, when both are present, must be the same key, unless the caller opts in to
+  the override.
+- **Remedy.** Check that the key set holds the issuer's key. The proof with the
+  caller-supplied key, in its `proof`, says whether that key signed the credential.
 
 ## Checks not evaluated
 

@@ -364,9 +364,9 @@ In the prototype the corresponding path was traced to the arithmetic: for ES256 
   only if the caller also supplied no key material. The format reports whether its
   findings leave no usable issuer identifier (`InspectOutput`); the runner blocks verify
   as `Impossible { missing: KeyMaterial { consulted } }` when no other key source remains
-  (`vcrd-core/src/runner.rs`, `blocked_by_inspect`). Milestone 1 has no other source, so
-  those findings always block; milestone 2's caller-supplied keys are consulted at that
-  point. The findings are a missing `issuer`, one that is neither a URL nor an object
+  (`vcrd-core/src/runner.rs`, `blocked_by_inspect`). The caller's key set is such a
+  source whatever it holds, so with one those findings never block; nor does a key the
+  credential carries about itself. The findings are a missing `issuer`, one that is neither a URL nor an object
   whose `id` is a URL, VCDM 1.1's JWT encoding (§10 [F2]), and a presentation, which
   names a holder rather than an issuer and which vcrd reads from milestone 4
   (`inspect.presentation_unsupported`). A well-formed issuer vcrd
@@ -555,7 +555,10 @@ read (finding 4).
 ### Injected traits
 
 - **`Clock`** — the current time. A system implementation exists behind `std-clock` (§2).
-- **`KeyStore`** — caller-supplied key material, by key identifier or as the sole key.
+- **`KeySet`** — caller-supplied key material, matched by key identifier or as the sole
+  key: a value in the `Context` rather than a trait, a JWK Set parsed by `KeySet::parse`
+  (milestone 2, DEVELOPMENT-PLAN.md, decided 2026-11-16). A trait comes back if keys
+  must come from somewhere a value cannot hold, such as a key-management service.
 - **Still to come** (REQUIREMENTS §6, §12): a DID resolver, a JSON-LD context loader, an
   HTTPS trust anchor, and a random source for proof generation.
 
@@ -736,8 +739,17 @@ The terms, used in this sense in the output and its documentation:
   the holder.
 - **Issuer key** — the key the issuer identifier gives. A `did:key` encodes it; other DID
   methods and URL issuers need resolution, which REQUIREMENTS §8's network opt-in governs.
-- **Caller-supplied key** — key material the caller passes in, through the API, a CLI
-  argument or a configuration file (milestone 2).
+- **Caller-supplied key** — the key matched in a JWK Set (RFC 7517 §5) the caller passes
+  in: `ContextBuilder::key_set`, or `--key-set`. Matching takes the entry whose `kid` is
+  the header's, resolved as inspect resolves it; among entries that share it, the one
+  of the key type the declared algorithm takes (`ProofSuite::takes_key`); otherwise the
+  set's sole entry, when it or the header has no `kid`. No entry, or more than one left,
+  is a refused caller-supplied key, which stands in the list so that the rules never
+  fall back to the issuer key alone; each entry that could have signed is then tried for
+  information, and those whose proofs are correct are listed, refused as not matched.
+  An entry's own `alg`, `use` and `key_ops` are the caller's policy: one that excludes
+  the declared algorithm refuses the key, and no proof is made with it (RFC 8725 §3.1).
+  DEVELOPMENT-PLAN.md, milestone 2, records the decisions.
 - **Proof key** — a key the runner passes to a suite in `ProofInput` (§3), which carries no
   provenance: the suite does not know which kind of key it has.
 - **Deciding proof key** — the proof key whose proof decides the outcome and the exit code.
@@ -747,8 +759,11 @@ The terms, used in this sense in the output and its documentation:
   attempted when the check was not made, with findings that say why. vcrd says *valid*
   only of time periods.
 - **Refused** — a key that key resolution will not let decide the outcome: because of a
-  property of the key (weak, not a signing key, or a type vcrd does not support), or
-  because it is an embedded key alone and the caller has not opted in.
+  property of the key (weak, not a signing key, or a type vcrd does not support); because
+  it is an embedded key alone and the caller has not opted in, or one of two embedded
+  keys that differ; or, for a caller-supplied key, because matching did not find one
+  entry, because the entry's own members exclude the algorithm, or because it is an entry
+  tried only when none matched.
 
 The rules, which together make the table below:
 

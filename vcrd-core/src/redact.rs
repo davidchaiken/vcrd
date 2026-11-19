@@ -69,9 +69,7 @@ impl ClaimValue {
         }
     }
 
-    /// Plaintext, for checks inside core. Not public (ARCHITECTURE §7). Only formats
-    /// call it, and a core built with none has none.
-    #[cfg_attr(not(feature = "vc-jose"), allow(dead_code))]
+    /// Plaintext, for checks inside core. Not public (ARCHITECTURE §7).
     pub(crate) fn as_str(&self) -> Option<&str> {
         match &self.0 {
             Scalar::String(s) => Some(s),
@@ -80,7 +78,7 @@ impl ClaimValue {
     }
 
     /// A number's JSON text and value, for checks inside core. Not public
-    /// (ARCHITECTURE §7), for the reason given on [`ClaimValue::as_str`].
+    /// (ARCHITECTURE §7). Only formats call it, and a core built with none has none.
     #[cfg_attr(not(feature = "vc-jose"), allow(dead_code))]
     pub(crate) fn as_number(&self) -> Option<(String, f64)> {
         match &self.0 {
@@ -89,7 +87,7 @@ impl ClaimValue {
         }
     }
 
-    fn reveal(&self) -> Revealed {
+    pub(crate) fn reveal(&self) -> Revealed {
         match &self.0 {
             Scalar::Null => Revealed::Null,
             Scalar::Bool(b) => Revealed::Bool(*b),
@@ -137,7 +135,7 @@ impl Designations {
         }
     }
 
-    fn shows(self, class: LeafClass) -> bool {
+    pub(crate) fn shows(self, class: LeafClass) -> bool {
         match class {
             LeafClass::Metadata => true,
             LeafClass::Claim => self.show_claims,
@@ -185,7 +183,7 @@ pub enum RenderedJson {
 }
 
 /// A shown value.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Revealed {
     Null,
     Bool(bool),

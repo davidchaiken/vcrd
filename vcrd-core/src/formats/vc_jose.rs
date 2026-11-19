@@ -15,7 +15,7 @@ use crate::finding::{
     JwsJsonSyntax, JwsSegment, Severity,
 };
 use crate::json::{Json, Step, nesting_depth, path_string};
-use crate::keys::{Jwk, PRIVATE_MEMBERS};
+use crate::keys::{self, Jwk, PRIVATE_MEMBERS};
 use crate::registry::{CredentialFormat, Detection, FormatId, ProfileId};
 use crate::report::{
     Check, FormatDetail, InspectOutput, NotEvaluated, NotEvaluatedReason, ParseOutput, Phase,
@@ -555,11 +555,9 @@ fn check_kid(header: &JoseHeader, payload: &Json, issuer: &str, findings: &mut V
         }));
     }
     if did {
-        // A relative DID URL is resolved against the DID (DID Core §3.2.2).
-        let resolved = match kid.strip_prefix('#') {
-            Some(_) => format!("{issuer}{kid}"),
-            None => kid.to_owned(),
-        };
+        // A relative DID URL is resolved against the DID (DID Core §3.2.2), as matching
+        // a caller's key set resolves it.
+        let resolved = keys::resolve_kid(kid, Some(issuer));
         // `did:key` names its one key by the method-specific identifier.
         let expected = issuer
             .strip_prefix("did:key:")

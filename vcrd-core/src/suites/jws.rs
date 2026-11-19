@@ -11,7 +11,7 @@ use crate::context::Context;
 use crate::document::DeclaredAlgorithm;
 use crate::finding::{Attribution, Finding, FindingDetail, Severity};
 use crate::keys::PublicKey;
-use crate::registry::{ProofInput, ProofSuite, SuiteId};
+use crate::registry::{KeyType, ProofInput, ProofSuite, SuiteId};
 use crate::report::{Phase, ProofOutcome};
 
 /// The suite.
@@ -25,6 +25,29 @@ const EDDSA: &str = "EdDSA";
 /// §4.1.11). None yet.
 const EXTENSIONS: &[&str] = &[];
 
+/// Each signature algorithm and the key types it takes, `kty` and `crv`, as its
+/// definition names them, whether or not the suite implements it: RFC 7518 §3.2–3.5
+/// with §6.2.1.1, RFC 8037 §3.1, RFC 8812 §3.2 and RFC 9864 §2.2.
+const KEY_TYPES: &[(&str, &str, Option<&str>)] = &[
+    ("HS256", "oct", None),
+    ("HS384", "oct", None),
+    ("HS512", "oct", None),
+    ("RS256", "RSA", None),
+    ("RS384", "RSA", None),
+    ("RS512", "RSA", None),
+    ("PS256", "RSA", None),
+    ("PS384", "RSA", None),
+    ("PS512", "RSA", None),
+    ("ES256", "EC", Some("P-256")),
+    ("ES384", "EC", Some("P-384")),
+    ("ES512", "EC", Some("P-521")),
+    ("ES256K", "EC", Some("secp256k1")),
+    (EDDSA, "OKP", Some("Ed25519")),
+    (EDDSA, "OKP", Some("Ed448")),
+    (ED25519, "OKP", Some("Ed25519")),
+    ("Ed448", "OKP", Some("Ed448")),
+];
+
 impl ProofSuite for Jws {
     fn id(&self) -> SuiteId {
         super::JWS
@@ -32,6 +55,12 @@ impl ProofSuite for Jws {
 
     fn algorithms(&self) -> &'static [&'static str] {
         &[ED25519, EDDSA]
+    }
+
+    fn takes_key(&self, algorithm: &str, key: KeyType<'_>) -> bool {
+        KEY_TYPES
+            .iter()
+            .any(|&(a, kty, crv)| a == algorithm && kty == key.kty && crv == key.crv)
     }
 
     fn verify(&self, input: &ProofInput<'_>, _ctx: &Context) -> (ProofOutcome, Vec<Finding>) {
@@ -341,6 +370,39 @@ mod tests {
         };
         assert_eq!(finding.code, "verify.crit_unsupported");
         assert_eq!(finding.attribution, Attribution::Vcrd);
+    }
+
+    /// The key type each algorithm takes, as its definition names it, whether or not the
+    /// suite implements it: RFC 7518 §3.1 and §6, RFC 8037 §3.1, RFC 8812 §3.2 and RFC
+    /// 9864 §2.2.
+    #[test]
+    fn takes_the_key_type_each_algorithms_definition_names() {
+        for (algorithm, kty, crv, takes) in [
+            ("Ed25519", "OKP", Some("Ed25519"), true),
+            ("Ed25519", "OKP", Some("Ed448"), false),
+            ("Ed25519", "EC", Some("Ed25519"), false),
+            ("Ed448", "OKP", Some("Ed448"), true),
+            ("EdDSA", "OKP", Some("Ed25519"), true),
+            ("EdDSA", "OKP", Some("Ed448"), true),
+            ("EdDSA", "OKP", Some("X25519"), false),
+            ("ES256", "EC", Some("P-256"), true),
+            ("ES256", "EC", Some("P-384"), false),
+            ("ES384", "EC", Some("P-384"), true),
+            ("ES512", "EC", Some("P-521"), true),
+            ("ES256K", "EC", Some("secp256k1"), true),
+            ("RS256", "RSA", None, true),
+            ("PS512", "RSA", None, true),
+            ("RS256", "oct", None, false),
+            ("HS256", "oct", None, true),
+            ("HS512", "RSA", None, false),
+            ("none", "oct", None, false),
+        ] {
+            assert_eq!(
+                Jws.takes_key(algorithm, KeyType { kty, crv }),
+                takes,
+                "{algorithm} {kty} {crv:?}"
+            );
+        }
     }
 
     /// Unsupported and rejected are reported independently (ARCHITECTURE §8).

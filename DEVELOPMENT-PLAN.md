@@ -526,8 +526,11 @@ CodeLLDB's memory grow without bound, and 1.101 brings rust-lang/rust#165113.
 - *The matched key's own members* (RFC 8725 §3.1; RFC 7517 §4.2–4.4): an `alg` that is
   not the declared algorithm, a `use` that is not `sig`, or `key_ops` without `verify`
   refuses it as `excluded_by_entry`, with no proof, and `verify.caller_key_excluded
-  {key, member, value, algorithm}`, an error attributed to caller policy. Whether `EdDSA`
-  and `Ed25519` count as one algorithm here is open. A matched key vcrd cannot use is
+  {key, member, value, algorithm}`, an error attributed to caller policy. `EdDSA` and
+  `Ed25519` are one algorithm when the entry's `crv` is `Ed25519` (RFC 8037 §3.1; RFC 9864
+  §2.2), with `verify.caller_key_alg_alias {key, alg, declared}`, a warning attributed
+  to caller policy, since a verifier that compares the names refuses the key (decided
+  2026-11-19; slice 5's allowlist treats the names alike). A matched key vcrd cannot use is
   refused as `type_unsupported`, with `verify.caller_key_type_unsupported {key, kty,
   crv}`, an error attributed to vcrd: a refused caller-supplied key decides, so
   something must say why.
@@ -563,9 +566,13 @@ CodeLLDB's memory grow without bound, and 1.101 brings rust-lang/rust#165113.
   "vcrd: allow-key-override"), and `fixtures/key-set-kid.jwt` and its `.jwks.json`, three
   entries, the second the signer ("vcrd: key-set"). Neither is in the input picker,
   which cannot pass `--key-set`.
-- *To reconsider before slice 3b's pull request:* a setting that makes key set checking
+- *`verify.caller_key_not_issuer_key` in round (b)*, not (c) (decided 2026-11-19): once
+  caller-supplied keys exist, a key unlike the issuer key leaves a condition unmet, and
+  without the finding a round committed alone would let verify pass.
+- *To check before slice 3b's pull request:* a setting that makes key set checking
   strict, any entry's failure rejecting the whole set, and whether strict should be the
-  default, with a flag for lenient checking.
+  default, with a flag for lenient checking; and every `dead_code` annotation left in
+  the workspace.
 
 **Delivers.** `vcrd verify` for RFC 7518's signature algorithms, with caller keys, the
 embedded-key opt-in, the override opt-in and the allowlist; the keys and their proofs'

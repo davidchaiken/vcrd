@@ -8,10 +8,13 @@ use sha2::{Digest, Sha256};
 use crate::context::KeyPolicy;
 use crate::document::{EmbeddedKey, KeyHints};
 use crate::finding::{
-    Attribution, DidKeyProblem, Finding, FindingDetail, JwkProblem, KeyRef, Severity,
-    WeakKeyCriterion,
+    Attribution, DidKeyProblem, EntryExclusion, Finding, FindingDetail, JwkProblem, KeyRef,
+    Severity, WeakKeyCriterion,
 };
 use crate::json::Json;
+use crate::key_set::{CallerMatch, EntryKey, KeySet, KeySetEntry};
+use crate::redact::Revealed;
+use crate::registry::KeyType;
 use crate::report::{Phase, ProofOutcome};
 
 /// A resolved public key.
@@ -176,14 +179,41 @@ pub struct KeyReport {
     /// Where the credential carries it, e.g. `header.jwk`; present when the key is an
     /// embedded key.
     pub location: Option<&'static str>,
-    /// The RFC 7638 thumbprint; absent for a key vcrd names but cannot decode.
+    /// The key set entry's own `kid`, when the key is a caller-supplied key that has one.
+    pub kid: Option<String>,
+    /// How matching found the caller-supplied key; absent for an entry tried only because
+    /// none matched.
+    pub matched_by: Option<MatchedBy>,
+    /// The RFC 7638 thumbprint; absent for a key vcrd names but cannot decode, a
+    /// symmetric key, and a caller-supplied key that matching did not find.
     pub thumbprint: Option<String>,
-    /// The key as a JWK: what the thumbprint is of.
+    /// The key as a JWK: what the thumbprint is of, or a symmetric key's `kty`.
     pub jwk: Option<PublicJwk>,
+    /// A symmetric key's secret, shown only as the caller's designations allow.
+    pub secret: Option<KeySecret>,
     /// The proof's result with it as the proof key.
     pub proof: ProofOutcome,
     /// Why it may not decide the outcome, when it may not.
     pub refused: Option<Refusal>,
+}
+
+/// How matching found the caller-supplied key in the caller's key set
+/// (DEVELOPMENT-PLAN.md, milestone 2, decided 2026-11-18).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MatchedBy {
+    /// The entry's `kid` is the header's, resolved as inspect resolves it.
+    Kid,
+    /// The set's sole entry, where it or the header has no `kid`.
+    SoleEntry,
+}
+
+/// A symmetric key's secret member, such as an `oct` key's `k` (RFC 7518 §6.4.1): its
+/// value only when the caller's designations show cryptographic secrets.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeySecret {
+    pub member: &'static str,
+    /// `None` where the value is masked.
+    pub value: Option<Revealed>,
 }
 
 impl KeyReport {
@@ -194,6 +224,7 @@ impl KeyReport {
             kinds: self.kinds.clone(),
             method: self.method,
             location: self.location,
+            kid: self.kid.clone(),
             thumbprint: self.thumbprint.clone(),
         })
     }
@@ -203,8 +234,11 @@ impl KeyReport {
             kinds: vec![kind],
             method: None,
             location: None,
+            kid: None,
+            matched_by: None,
             thumbprint: None,
             jwk: None,
+            secret: None,
             proof: ProofOutcome::NotAttempted,
             refused: None,
         }
@@ -226,6 +260,16 @@ pub enum Refusal {
     /// One of two embedded keys not known to be the same key, which may not decide even
     /// with the opt-in.
     EmbeddedKeysDiffer,
+    /// The caller-supplied key, which no entry of the caller's key set matched. It
+    /// stands in the list so that the rules never fall back to the issuer key alone.
+    CallerKeyNotFound,
+    /// The caller-supplied key, of which more than one entry is left.
+    CallerKeyAmbiguous,
+    /// An entry of the caller's key set tried only because none matched.
+    EntryNotMatched,
+    /// The matched entry's own `alg`, `use` or `key_ops` excludes the declared
+    /// algorithm (RFC 8725 §3.1).
+    ExcludedByEntry,
 }
 
 /// An open set: consumers must accept values they do not recognize (ARCHITECTURE §8).
@@ -287,6 +331,18 @@ pub(crate) struct ProofKey {
     /// The key, when it may be a proof key; `None` when key resolution refused it for a
     /// property of its own, as `report.refused` says.
     pub key: Option<PublicKey>,
+    /// What it is to the rules as a caller-supplied key, when it is one.
+    pub caller: Option<CallerPart>,
+}
+
+/// What a caller-supplied key is to ARCHITECTURE §8's rules.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CallerPart {
+    /// The matched entry, or the refused key that stands in when none matched: the
+    /// caller-supplied key the rules consult.
+    Consulted,
+    /// An entry tried only because none matched: reported, not consulted.
+    Unmatched,
 }
 
 /// What ARCHITECTURE §8's rules consult about one distinct key.
@@ -410,6 +466,298 @@ pub(crate) fn resolve(hints: &KeyHints) -> Resolution {
     resolution
 }
 
+/// What the caller's key set gives one proof: the declared algorithm, by name, whether
+/// it takes a key of a type, and whether cryptographic secrets may be shown.
+pub(crate) struct CallerKeys<'a, F: Fn(KeyType<'_>) -> bool> {
+    pub set: &'a KeySet,
+    pub algorithm: Option<&'a str>,
+    pub takes: F,
+    pub show_secrets: bool,
+}
+
+/// Adds the caller-supplied key to the keys resolution found (DEVELOPMENT-PLAN.md,
+/// milestone 2, decided 2026-11-18): the matched entry, first, joined with the key it is
+/// the same as; or, with no match or several entries left, a refused key that stands in
+/// for it, and each entry the algorithm and its own members allow, to be tried.
+pub(crate) fn add_caller_keys<F: Fn(KeyType<'_>) -> bool>(
+    hints: &KeyHints,
+    caller: &CallerKeys<'_, F>,
+    resolution: &mut Resolution,
+) {
+    let kid = hints
+        .kid
+        .as_deref()
+        .map(|kid| resolve_kid(kid, hints.issuer.as_deref()));
+    let (refusal, detail) = match caller.set.find(kid.as_deref(), &caller.takes) {
+        CallerMatch::Matched(entry, matched_by) => {
+            add_matched(entry, matched_by, caller, resolution);
+            return;
+        }
+        CallerMatch::NotFound => (
+            Refusal::CallerKeyNotFound,
+            FindingDetail::CallerKeyNotFound { kid },
+        ),
+        CallerMatch::Ambiguous(left) => (
+            Refusal::CallerKeyAmbiguous,
+            FindingDetail::CallerKeyAmbiguous {
+                kid,
+                candidates: left
+                    .iter()
+                    .map(|entry| *entry_report(entry, false).reference())
+                    .collect(),
+            },
+        ),
+    };
+    resolution
+        .findings
+        .push(Finding::error(Phase::Verify, Attribution::Policy, detail));
+    resolution.keys.insert(
+        0,
+        ProofKey {
+            report: KeyReport {
+                refused: Some(refusal),
+                ..KeyReport::new(KeySource::CallerSupplied)
+            },
+            key: None,
+            caller: Some(CallerPart::Consulted),
+        },
+    );
+    // Each entry that could have signed is tried, for information; the runner keeps
+    // those whose proofs are correct.
+    for entry in &caller.set.entries {
+        let allowed = !matches!(
+            check_entry(entry, caller.algorithm),
+            EntryCheck::Excluded(_)
+        );
+        if let (true, true, Some(key)) =
+            ((caller.takes)(entry.key_type()), allowed, entry_key(entry))
+        {
+            let report = KeyReport {
+                refused: Some(Refusal::EntryNotMatched),
+                ..entry_report(entry, caller.show_secrets)
+            };
+            join(resolution, report, Some(key), CallerPart::Unmatched);
+        }
+    }
+}
+
+/// The matched entry, joined with the key it is the same as, first in the list; refused
+/// when its own members exclude the declared algorithm or vcrd cannot use it, with the
+/// finding that says why.
+fn add_matched<F: Fn(KeyType<'_>) -> bool>(
+    entry: &KeySetEntry,
+    matched_by: MatchedBy,
+    caller: &CallerKeys<'_, F>,
+    resolution: &mut Resolution,
+) {
+    let mut report = KeyReport {
+        matched_by: Some(matched_by),
+        ..entry_report(entry, caller.show_secrets)
+    };
+    let mut key = entry_key(entry);
+    let check = check_entry(entry, caller.algorithm);
+    if let EntryCheck::Excluded(_) = check {
+        report.refused = Some(Refusal::ExcludedByEntry);
+        key = None;
+    } else if key.is_none() {
+        report.refused = Some(Refusal::TypeUnsupported);
+    }
+    let index = join(resolution, report, key, CallerPart::Consulted);
+    let Some(joined) = resolution.keys.get(index) else {
+        return;
+    };
+    let reference = joined.report.reference();
+    let declared = caller.algorithm.unwrap_or_default().to_owned();
+    let finding = match check {
+        EntryCheck::Excluded(exclusion) => Finding::error(
+            Phase::Verify,
+            Attribution::Policy,
+            FindingDetail::CallerKeyExcluded {
+                key: reference,
+                exclusion,
+                algorithm: declared,
+            },
+        ),
+        EntryCheck::Alias { alg } => Finding::new(
+            Phase::Verify,
+            Attribution::Policy,
+            Severity::Warning,
+            FindingDetail::CallerKeyAlgAlias {
+                key: reference,
+                alg,
+                declared,
+            },
+        ),
+        EntryCheck::Allowed if joined.report.refused == Some(Refusal::TypeUnsupported) => {
+            let key_type = entry.key_type();
+            Finding::error(
+                Phase::Verify,
+                Attribution::Vcrd,
+                FindingDetail::CallerKeyTypeUnsupported {
+                    key: reference,
+                    kty: key_type.kty.to_owned(),
+                    crv: key_type.crv.map(str::to_owned),
+                },
+            )
+        }
+        EntryCheck::Allowed => return,
+    };
+    resolution.findings.push(finding);
+}
+
+/// Adds a caller-supplied key to the list, or joins it to the key with the same
+/// thumbprint: one key, with every kind it is. The consulted caller-supplied key goes
+/// first, in the order of precedence; an entry tried for information goes last. Returns
+/// where the key is.
+fn join(
+    resolution: &mut Resolution,
+    report: KeyReport,
+    key: Option<PublicKey>,
+    part: CallerPart,
+) -> usize {
+    let same = report.thumbprint.as_ref().and_then(|thumbprint| {
+        resolution
+            .keys
+            .iter()
+            .position(|k| k.report.thumbprint.as_ref() == Some(thumbprint))
+    });
+    let Some(index) = same else {
+        let added = ProofKey {
+            report,
+            key,
+            caller: Some(part),
+        };
+        return match part {
+            CallerPart::Consulted => {
+                resolution.keys.insert(0, added);
+                0
+            }
+            CallerPart::Unmatched => {
+                resolution.keys.push(added);
+                resolution.keys.len().saturating_sub(1)
+            }
+        };
+    };
+    let Some(existing) = resolution.keys.get_mut(index) else {
+        return index;
+    };
+    if existing.report.kinds.contains(&KeySource::CallerSupplied) {
+        // An entry that repeats a key already listed adds nothing.
+        return index;
+    }
+    existing.report.kinds.insert(0, KeySource::CallerSupplied);
+    existing.report.kid = report.kid;
+    existing.caller = Some(part);
+    if part == CallerPart::Unmatched {
+        return index;
+    }
+    existing.report.matched_by = report.matched_by;
+    // The key's own property, such as a weak key, comes before the entry's exclusion.
+    if existing.report.refused.is_none() && report.refused.is_some() {
+        existing.report.refused = report.refused;
+        existing.key = None;
+    }
+    let joined = resolution.keys.remove(index);
+    resolution.keys.insert(0, joined);
+    0
+}
+
+/// An entry as a caller-supplied key: its `kid`, its thumbprint and JWK, or, for a
+/// symmetric key, its `kty` and its secret, shown only when `show_secrets`.
+fn entry_report(entry: &KeySetEntry, show_secrets: bool) -> KeyReport {
+    let report = KeyReport {
+        kid: entry.kid.clone(),
+        ..KeyReport::new(KeySource::CallerSupplied)
+    };
+    match &entry.key {
+        EntryKey::Public(jwk) => KeyReport {
+            thumbprint: Some(jwk.thumbprint.clone()),
+            jwk: Some(jwk.public.clone()),
+            ..report
+        },
+        // No thumbprint: it would be a hash of the secret.
+        EntryKey::Symmetric { k } => KeyReport {
+            jwk: Some(PublicJwk {
+                members: vec![("kty", "oct".to_owned())],
+            }),
+            secret: Some(KeySecret {
+                member: "k",
+                value: show_secrets.then(|| k.reveal()),
+            }),
+            ..report
+        },
+    }
+}
+
+/// The entry's key, when vcrd can use it.
+fn entry_key(entry: &KeySetEntry) -> Option<PublicKey> {
+    match &entry.key {
+        EntryKey::Public(jwk) => jwk.key.clone(),
+        EntryKey::Symmetric { .. } => None,
+    }
+}
+
+/// What an entry's own members say of the declared algorithm.
+enum EntryCheck {
+    Allowed,
+    /// `alg` names the declared algorithm by its other name.
+    Alias {
+        alg: String,
+    },
+    Excluded(EntryExclusion),
+}
+
+/// An entry's own `use`, `key_ops` and `alg` against the declared algorithm (RFC 8725
+/// §3.1; RFC 7517 §4.2–4.4). With an Ed25519 key, `EdDSA` and `Ed25519` name one
+/// algorithm (RFC 8037 §3.1; RFC 9864 §2.2; DEVELOPMENT-PLAN.md, milestone 2, decided
+/// 2026-11-19). With no declared algorithm, `alg` is not compared: the suite already
+/// refuses the proof.
+fn check_entry(entry: &KeySetEntry, algorithm: Option<&str>) -> EntryCheck {
+    if let Some(value) = entry.key_use.as_ref().filter(|u| *u != "sig") {
+        return EntryCheck::Excluded(EntryExclusion::Use {
+            value: value.clone(),
+        });
+    }
+    if let Some(ops) = entry
+        .key_ops
+        .as_ref()
+        .filter(|ops| !ops.iter().any(|op| op == "verify"))
+    {
+        return EntryCheck::Excluded(EntryExclusion::KeyOps { ops: ops.clone() });
+    }
+    let (Some(alg), Some(declared)) = (entry.alg.as_deref(), algorithm) else {
+        return EntryCheck::Allowed;
+    };
+    let ed25519 = entry.key_type()
+        == KeyType {
+            kty: "OKP",
+            crv: Some("Ed25519"),
+        };
+    let names = [alg, declared];
+    if alg == declared {
+        EntryCheck::Allowed
+    } else if ed25519 && names.contains(&"EdDSA") && names.contains(&"Ed25519") {
+        EntryCheck::Alias {
+            alg: alg.to_owned(),
+        }
+    } else {
+        EntryCheck::Excluded(EntryExclusion::Alg {
+            alg: alg.to_owned(),
+        })
+    }
+}
+
+/// A `kid` as inspect resolves it against the issuer: a relative DID URL against a DID
+/// issuer (DID Core §3.2.2), anything else as written.
+pub(crate) fn resolve_kid(kid: &str, issuer: Option<&str>) -> String {
+    match issuer {
+        Some(issuer) if issuer.starts_with("did:") && kid.starts_with('#') => {
+            format!("{issuer}{kid}")
+        }
+        _ => kid.to_owned(),
+    }
+}
+
 /// The method-specific identifier of a `kid` that is a `did:key` DID URL, such as
 /// `did:key:z6Mk…#z6Mk…`: the key is the DID's, whatever the fragment.
 pub(crate) fn did_key_kid(kid: &str) -> Option<&str> {
@@ -448,6 +796,7 @@ fn add_kid_key(identifier: &str, resolution: &mut Resolution) {
             ..KeyReport::new(KeySource::CredentialEmbedded)
         },
         key,
+        caller: None,
     });
 }
 
@@ -491,6 +840,7 @@ fn compare_embedded(embedded: &EmbeddedKey, resolution: &mut Resolution) {
             resolution.keys.push(ProofKey {
                 report,
                 key: embedded.jwk.key.clone(),
+                caller: None,
             });
         }
     }
@@ -554,7 +904,11 @@ fn from_issuer(issuer: &str) -> Resolution {
                 );
                 Resolution {
                     findings: vec![finding],
-                    keys: vec![ProofKey { report, key: None }],
+                    keys: vec![ProofKey {
+                        report,
+                        key: None,
+                        caller: None,
+                    }],
                     unobtained: None,
                 }
             } else {
@@ -563,6 +917,7 @@ fn from_issuer(issuer: &str) -> Resolution {
                     keys: vec![ProofKey {
                         report,
                         key: Some(key),
+                        caller: None,
                     }],
                     unobtained: None,
                 }
@@ -582,6 +937,7 @@ fn refused_did_key(refusal: Refusal, finding: Finding) -> Resolution {
                 ..KeyReport::new(KeySource::IssuerIdentifier)
             },
             key: None,
+            caller: None,
         }],
         unobtained: None,
     }

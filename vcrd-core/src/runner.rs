@@ -2,6 +2,7 @@
 //! dispatches proofs to suites, and lists what was not evaluated.
 
 use crate::context::Context;
+use crate::document::LeafClass;
 use crate::document::{DeclaredAlgorithm, ProofDescriptor, ProofMaterial, ProofTime, ProofTimes};
 use crate::finding::{
     Attribution, Finding, FindingDetail, IssuerKeyUnobtainable, KeySourceKind, NotDeciding,
@@ -9,8 +10,8 @@ use crate::finding::{
 };
 use crate::json::{self, Json};
 use crate::keys::{
-    self, Condition, Decision, KeyAndProof, KeyProvenance, KeyReport, KeySource, ProofKey,
-    PublicKey, Refusal, Resolution,
+    self, CallerPart, Condition, Decision, KeyAndProof, KeyProvenance, KeyReport, KeySource,
+    ProofKey, PublicKey, Refusal, Resolution,
 };
 use crate::registry::{CredentialFormat, Detection, ProofInput, Registry};
 use crate::report::{
@@ -77,7 +78,7 @@ pub(crate) fn run(bytes: &[u8], ctx: &Context, registry: &Registry, last: Phase)
             let inspect = format.inspect(output, ctx);
             let verify = if last < Phase::Verify {
                 PhaseOutcome::NotRequested
-            } else if let Some(blocked) = blocked_by_inspect(&inspect, output) {
+            } else if let Some(blocked) = blocked_by_inspect(&inspect, output, ctx) {
                 PhaseOutcome::NotReached(blocked)
             } else {
                 verify_proofs(output, ctx, registry)
@@ -124,30 +125,32 @@ pub(crate) fn run(bytes: &[u8], ctx: &Context, registry: &Registry, last: Phase)
 
 /// REQUIREMENTS §4's blocking rule for inspect: verify is impossible when the input
 /// names no usable issuer identifier and no other source of key material remains.
-/// Milestone 2's caller-supplied keys are consulted here, which is why the runner
-/// decides and not the format (ARCHITECTURE §4).
+/// The caller's key set is consulted here, which is why the runner decides and not the
+/// format (ARCHITECTURE §4).
 fn blocked_by_inspect(
     inspect: &PhaseOutcome<InspectOutput>,
     parsed: &ParseOutput,
+    ctx: &Context,
 ) -> Option<Blocked> {
     let inspected = inspect.output()?;
     if !inspected.no_issuer_identifier {
         return None;
     }
-    // A key the credential carries is a source, though one refused without the
-    // caller's opt-in: verify runs, so that the refusal is reported rather than
-    // treated as "no key material" (REQUIREMENTS §10). Not for a document vcrd does not
-    // read, whose keys it cannot use either.
-    let carries_key = parsed.document.as_ref().is_some_and(|d| {
-        d.proofs.iter().any(|p| {
-            p.key_hints.embedded.is_some()
-                || p.key_hints
-                    .kid
-                    .as_deref()
-                    .and_then(keys::did_key_kid)
-                    .is_some()
-        })
-    });
+    // The caller's key set is a source, and so is a key the credential carries, though
+    // one refused without the caller's opt-in: verify runs, so that the refusal is
+    // reported rather than treated as "no key material" (REQUIREMENTS §10). Not for a
+    // document vcrd does not read, whose keys it cannot use either.
+    let carries_key = ctx.key_set().is_some()
+        || parsed.document.as_ref().is_some_and(|d| {
+            d.proofs.iter().any(|p| {
+                p.key_hints.embedded.is_some()
+                    || p.key_hints
+                        .kid
+                        .as_deref()
+                        .and_then(keys::did_key_kid)
+                        .is_some()
+            })
+        });
     if carries_key && !inspected.unsupported_document {
         return None;
     }
@@ -213,16 +216,33 @@ fn verify_proofs(
     }
     let mut proofs = Vec::with_capacity(descriptors.len());
     for descriptor in descriptors {
+        let suite = registry.suite(descriptor.suite);
+        let algorithm = descriptor
+            .algorithm
+            .as_ref()
+            .and_then(DeclaredAlgorithm::name);
         let mut resolution = keys::resolve(&descriptor.key_hints);
+        if let Some(set) = ctx.key_set() {
+            let caller = keys::CallerKeys {
+                set,
+                algorithm,
+                takes: |key_type| {
+                    suite
+                        .zip(algorithm)
+                        .is_some_and(|(s, a)| s.takes_key(a, key_type))
+                },
+                show_secrets: ctx.designations().shows(LeafClass::Secret),
+            };
+            keys::add_caller_keys(&descriptor.key_hints, &caller, &mut resolution);
+        }
         let resolution_failed = resolution
             .findings
             .iter()
             .any(|f| f.severity == Severity::Error);
         findings.append(&mut resolution.findings);
-        let suite = registry.suite(descriptor.suite);
         // Each distinct key's proof, with the suite's findings for it. A refused key has
         // none, and without the suite no key has one.
-        let mut key_proofs: Vec<Option<Proof>> = resolution
+        let proved: Vec<Option<Proof>> = resolution
             .keys
             .iter()
             .map(|k| {
@@ -230,6 +250,18 @@ fn verify_proofs(
                 Some(suite?.verify(&proof_input(descriptor, Some(key)), ctx))
             })
             .collect();
+        // A key set entry tried only because none matched is listed only when its proof
+        // is correct (DEVELOPMENT-PLAN.md, milestone 2, decided 2026-11-18).
+        let (kept, mut key_proofs): (Vec<ProofKey>, Vec<Option<Proof>>) =
+            std::mem::take(&mut resolution.keys)
+                .into_iter()
+                .zip(proved)
+                .filter(|(key, proof)| {
+                    key.caller != Some(CallerPart::Unmatched)
+                        || matches!(proof, Some((ProofOutcome::Correct { .. }, _)))
+                })
+                .unzip();
+        resolution.keys = kept;
         let decision = keys::decide(
             &keys_and_proofs(&resolution.keys, &key_proofs),
             ctx.key_policy(),
@@ -266,11 +298,7 @@ fn verify_proofs(
         let validity = proof_validity(&descriptor.times, ctx, &mut findings);
         proofs.push(ProofResult {
             suite: descriptor.suite,
-            algorithm: descriptor
-                .algorithm
-                .as_ref()
-                .and_then(DeclaredAlgorithm::name)
-                .map(str::to_owned),
+            algorithm: algorithm.map(str::to_owned),
             outcome,
             key_provenance,
             validity,
@@ -356,13 +384,38 @@ fn decision_findings(
                     FindingDetail::NoKeyMaterial { consulted },
                 ));
             }
+            // The caller-supplied key the rules consult, unless matching did not find it,
+            // which its own finding already says (DEVELOPMENT-PLAN.md, milestone 2,
+            // decided 2026-11-18).
+            Condition::CallerKeyIsIssuerKey => {
+                let found = |k: &&ProofKey| {
+                    k.caller == Some(CallerPart::Consulted)
+                        && !matches!(
+                            k.report.refused,
+                            Some(Refusal::CallerKeyNotFound | Refusal::CallerKeyAmbiguous)
+                        )
+                };
+                let caller = resolution.keys.iter().find(found);
+                let issuer = resolution
+                    .keys
+                    .iter()
+                    .find(|k| k.report.kinds.contains(&KeySource::IssuerIdentifier));
+                if let (Some(caller), Some(issuer)) = (caller, issuer) {
+                    findings.push(Finding::error(
+                        Phase::Verify,
+                        Attribution::Policy,
+                        FindingDetail::CallerKeyNotIssuerKey {
+                            caller_key: caller.report.reference(),
+                            issuer_key: issuer.report.reference(),
+                        },
+                    ));
+                }
+            }
             // Reported by key resolution's findings of a refused key, and by the suite's
-            // of an incorrect proof. A caller-supplied key unlike the issuer key, and two
-            // different keys with correct proofs, need caller-supplied keys and ECDSA.
+            // of an incorrect proof. Two different keys with correct proofs need ECDSA.
             Condition::KeyPresent
             | Condition::DecidingKeyNotRefused
             | Condition::DecidingProofCorrect
-            | Condition::CallerKeyIsIssuerKey
             | Condition::OneKeyCorrect => {}
         }
     }
@@ -370,12 +423,21 @@ fn decision_findings(
 }
 
 /// What ARCHITECTURE §8's rules consult about each key: its kinds, whether key
-/// resolution refused it, and whether its proof is correct.
+/// resolution refused it, and whether its proof is correct. An entry of the caller's
+/// key set that was not matched is not the caller-supplied key the rules consult.
 fn keys_and_proofs(keys: &[ProofKey], proofs: &[Option<Proof>]) -> Vec<KeyAndProof> {
     keys.iter()
         .zip(proofs)
         .map(|(key, proof)| KeyAndProof {
-            kinds: key.report.kinds.clone(),
+            kinds: key
+                .report
+                .kinds
+                .iter()
+                .copied()
+                .filter(|&kind| {
+                    kind != KeySource::CallerSupplied || key.caller != Some(CallerPart::Unmatched)
+                })
+                .collect(),
             refused: key.key.is_none(),
             correct: matches!(proof, Some((ProofOutcome::Correct { .. }, _))),
         })
