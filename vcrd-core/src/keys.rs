@@ -88,13 +88,11 @@ const REQUIRED_MEMBERS: &[(&str, &[&str])] = &[
 
 /// The members that hold private or secret key material (RFC 7518 §6.2.2, §6.3.2,
 /// §6.4.1; RFC 8037 §2).
-#[cfg_attr(not(feature = "vc-jose"), allow(dead_code))]
 pub(crate) const PRIVATE_MEMBERS: &[&str] = &["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
 
 impl Jwk {
     /// Reads a JWK's public members. Whether it also carries private ones is
-    /// inspect's question ([`PRIVATE_MEMBERS`]).
-    #[cfg_attr(not(feature = "vc-jose"), allow(dead_code))]
+    /// inspect's question, or the key set's ([`PRIVATE_MEMBERS`]).
     pub(crate) fn parse(json: &Json) -> Result<Jwk, JwkProblem> {
         if json.members().is_none() {
             return Err(JwkProblem::NotObject);

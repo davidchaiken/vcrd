@@ -15,6 +15,7 @@ mod document;
 mod finding;
 pub mod formats;
 mod json;
+mod key_set;
 mod keys;
 mod redact;
 mod registry;
@@ -36,9 +37,11 @@ pub use document::{
 pub use finding::{
     Attribution, Base64urlProblem, ClaimLocation, CritProblem, DateField, DidKeyProblem, Finding,
     FindingDetail, IssuerKeyUnobtainable, IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment,
-    KeyRef, KeySourceKind, LanguageValueProblem, NotDeciding, Severity, WeakKeyCriterion,
+    KeyRef, KeySetEntryProblem, KeySourceKind, LanguageValueProblem, NotDeciding, Severity,
+    WeakKeyCriterion,
 };
 pub use json::{DuplicateName, Json, Member, nesting_depth};
+pub use key_set::{KeySet, KeySetError, NotJwkSet};
 pub use keys::{Jwk, KeyProvenance, KeyReport, KeySource, PublicJwk, PublicKey, Refusal};
 pub use redact::{
     ClaimValue, Designations, Rendered, RenderedJson, RenderedLeaf, Reveal, RevealLocation,

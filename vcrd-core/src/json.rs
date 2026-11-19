@@ -55,8 +55,7 @@ impl Json {
     }
 
     /// A string scalar's plaintext, for checks inside core. Not public
-    /// (ARCHITECTURE §7). Only formats call it, and a core built with none has none.
-    #[cfg_attr(not(feature = "vc-jose"), allow(dead_code))]
+    /// (ARCHITECTURE §7).
     pub(crate) fn as_str(&self) -> Option<&str> {
         match self {
             Json::Scalar(value) => value.as_str(),
@@ -66,7 +65,6 @@ impl Json {
 
     /// The value's JSON type, as findings name it: `null`, `bool`, `number`, `string`,
     /// `array` or `object`.
-    #[cfg_attr(not(feature = "vc-jose"), allow(dead_code))]
     pub(crate) fn type_name(&self) -> &'static str {
         match self {
             Json::Scalar(value) => value.kind().as_str(),

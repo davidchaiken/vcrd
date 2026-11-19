@@ -202,7 +202,8 @@ fn verify_proofs(
         .document
         .as_ref()
         .map_or(&[][..], |d| d.proofs.as_slice());
-    let mut findings = Vec::new();
+    // The caller's key set's own warnings, once, before any proof's findings.
+    let mut findings = ctx.key_set().map_or_else(Vec::new, |set| set.findings());
     if descriptors.is_empty() {
         findings.push(Finding::error(
             Phase::Verify,

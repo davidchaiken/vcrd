@@ -6,13 +6,13 @@
 use serde_json::json;
 use time::macros::datetime;
 use vcrd_core::{
-    Attribution, FindingDetail, KeySource, KeySourceKind, NotDeciding, ProofOutcome, Refusal,
-    Severity, Validity,
+    Attribution, FindingDetail, KeySetEntryProblem, KeySource, KeySourceKind, NotDeciding,
+    ProofOutcome, Refusal, Severity, Validity,
 };
 
 use support::{
     NOW, ed448_jwk, issuer_jwk, other_jwk, proof_of, signed, verified, verified_opted_in,
-    verified_with_skew,
+    verified_with_key_set, verified_with_skew,
 };
 
 /// In a `#[cfg(test)]` module so that the workspace's panic lints exempt it, as
@@ -28,8 +28,8 @@ mod support {
     use sha2::{Digest as _, Sha256};
     use time::macros::datetime;
     use vcrd_core::{
-        Attribution, Context, FixedClock, KeyPolicy, ProofResult, Registry, Report, Severity,
-        verify,
+        Attribution, Context, FixedClock, KeyPolicy, KeySet, Limits, ProofResult, Registry, Report,
+        Severity, verify,
     };
 
     /// The tests' clock, 2026-10-01T00:00:00Z, in seconds since the Unix epoch.
@@ -113,6 +113,17 @@ mod support {
         };
         let ctx = Context::builder(FixedClock(datetime!(2026-10-01 0:00 UTC)))
             .key_policy(policy)
+            .build();
+        verify(bytes, &ctx, &Registry::builtin())
+    }
+
+    /// Verified with `key_set`, a JWK Set (RFC 7517 §5), as the caller's keys.
+    pub fn verified_with_key_set(bytes: &[u8], key_set: &Value) -> Report {
+        let limits = Limits::default();
+        let key_set = KeySet::parse(key_set.to_string().as_bytes(), &limits).unwrap();
+        let ctx = Context::builder(FixedClock(datetime!(2026-10-01 0:00 UTC)))
+            .limits(limits)
+            .key_set(key_set)
             .build();
         verify(bytes, &ctx, &Registry::builtin())
     }
@@ -607,4 +618,62 @@ fn a_registered_name_in_crit_is_not_an_extension() {
         [("inspect.crit_invalid", Attribution::Input, Severity::Error)]
     );
     assert!(matches!(proof.outcome, ProofOutcome::Correct { .. }));
+}
+
+/// An entry of the caller's key set that RFC 7517 §5 says to ignore, and one with
+/// private members, are warnings attributed to caller policy, reported once, before the
+/// proof's findings, and only by verify (DEVELOPMENT-PLAN.md, milestone 2, decided
+/// 2026-11-18).
+#[test]
+fn key_set_warnings_come_once_before_the_proofs_findings() {
+    let mut private = issuer_jwk();
+    private["d"] = json!("nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A");
+    private["kid"] = json!("with-d");
+    let key_set = json!({"keys": [{"kty": "XYZ", "kid": "unknown"}, private]});
+    let report = verified_with_key_set(&signed(|_, _| {}), &key_set);
+    assert!(
+        report
+            .inspect
+            .findings()
+            .iter()
+            .all(|f| !f.code.starts_with("verify.")),
+        "{report:?}"
+    );
+    let findings = report.verify.findings();
+    let [ignored, private, ..] = findings else {
+        panic!("two findings at least: {findings:?}")
+    };
+    for finding in [ignored, private] {
+        assert_eq!(
+            (finding.attribution, finding.severity),
+            (Attribution::Policy, Severity::Warning),
+            "{finding:?}"
+        );
+    }
+    assert!(
+        matches!(
+            &ignored.detail,
+            FindingDetail::KeySetEntryIgnored {
+                index: 0,
+                kid: Some(kid),
+                problem: KeySetEntryProblem::KtyUnknown { kty },
+            } if kid == "unknown" && kty == "XYZ"
+        ),
+        "{ignored:?}"
+    );
+    assert!(
+        matches!(
+            &private.detail,
+            FindingDetail::KeySetPrivateKey {
+                index: 1,
+                kid: Some(kid),
+                members,
+            } if kid == "with-d" && members == &["d"]
+        ),
+        "{private:?}"
+    );
+    let codes: Vec<_> = findings.iter().map(|f| f.code).collect();
+    for code in ["verify.key_set_entry_ignored", "verify.key_set_private_key"] {
+        assert_eq!(codes.iter().filter(|&&c| c == code).count(), 1, "{codes:?}");
+    }
 }

@@ -75,6 +75,11 @@ pub struct Options {
     /// nothing: a correct proof shows only that the signer holds its private key.
     #[arg(long, global = true)]
     pub allow_embedded_key: bool,
+    /// A JWK Set (RFC 7517 §5) of keys of your own. The entry the credential's `kid`
+    /// names, or the set's sole entry, is your key, which must be the issuer key when
+    /// vcrd can obtain that.
+    #[arg(long, global = true, value_name = "FILE")]
+    pub key_set: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]

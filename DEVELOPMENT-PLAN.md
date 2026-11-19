@@ -489,6 +489,84 @@ CodeLLDB's memory grow without bound, and 1.101 brings rust-lang/rust#165113.
   `did:key` issuer key, failing without the override and deciding with it; and a
   caller-supplied key for an `https:` issuer, matched by `kid` among several (3b).
 
+**Decided 2026-11-18**, slice 3b's details:
+
+- *Rounds.* (a) the key set, its limit, `--key-set` and its caller errors; (b) matching
+  and refusals; (c) `--allow-key-override` and the decision findings; (d) the table
+  through the binary, the committed examples, the launch configurations and the
+  documentation. `make ci-ok` after each.
+- *The key set.* `KeySet::parse(bytes, &Limits)` and `ContextBuilder::key_set`;
+  `KeySet`'s `Debug` shows no key material. Caller errors (exit 1): `key_set_unreadable`,
+  `key_set_too_large`, `key_set_too_deep`, and `key_set_invalid`, whose message says what
+  was found (not JSON, an array, a single JWK, no `keys`, `keys` not an array, `keys`
+  repeated). Read for both subcommands, so that a bad file is always reported; consulted
+  by verify only.
+- *Its limit.* `Limits::max_key_set_bytes`, 64 KiB by default, provisional as the others
+  are ([T6]); the CLI reads at most one byte past it. No CLI flag changes a limit: limits
+  wait for milestone 3's configuration file. A core test raises it; a CLI test writes
+  the oversize file at run time.
+- *Entries.* An entry RFC 7517 §5 says to ignore is `verify.key_set_entry_ignored {index,
+  kid, reason}`: not an object; `kty` missing or unknown; a required member missing or
+  not a string; a key that does not decode; `alg` or `use` not a string, `key_ops` not
+  an array of strings; a member name repeated (RFC 7517 §4). Private members are
+  `verify.key_set_private_key {index, kid, members}`, names only. Both are warnings
+  attributed to caller policy, once per verify, before any proof's findings. An `oct`
+  entry is kept, with no thumbprint; below `--unsafe=2` its `jwk` is `{"kty":"oct"}` and
+  the key says `"masked": ["k"]`; at `--unsafe=2`, `k` is shown and listed in `reveals`.
+  An empty set, or one whose entries are all ignored, finds no key.
+- *Matching.* The header's `kid`, resolved as inspect resolves it, compared exactly with
+  each entry's: one equal is `matched_by: kid`; several are narrowed by
+  `ProofSuite::takes_key(algorithm, KeyType {kty, crv})`, which follows each algorithm's
+  definition rather than vcrd's support (`EdDSA` takes OKP Ed25519 and Ed448, RFC 8037
+  §3.1), and one left is a match, otherwise ambiguous. With no equal `kid`, the sole
+  entry, when the set has one and it or the header has no `kid`, is `matched_by:
+  sole_entry`; no header `kid` and several entries is ambiguous; anything else is not
+  found. The key type only breaks ties: whether the matched key fits the algorithm stays
+  the suite's check (ARCHITECTURE §5), so that a mismatch is reported as one.
+- *The matched key's own members* (RFC 8725 §3.1; RFC 7517 §4.2–4.4): an `alg` that is
+  not the declared algorithm, a `use` that is not `sig`, or `key_ops` without `verify`
+  refuses it as `excluded_by_entry`, with no proof, and `verify.caller_key_excluded
+  {key, member, value, algorithm}`, an error attributed to caller policy. Whether `EdDSA`
+  and `Ed25519` count as one algorithm here is open. A matched key vcrd cannot use is
+  refused as `type_unsupported`, with `verify.caller_key_type_unsupported {key, kty,
+  crv}`, an error attributed to vcrd: a refused caller-supplied key decides, so
+  something must say why.
+- *No match, or several left.* A refused caller-supplied key with no thumbprint stands in
+  the list, `refused` `not_found` or `ambiguous`, so that the rules see a caller key and
+  never fall back to the issuer key; `verify.caller_key_not_found {kid}` and
+  `verify.caller_key_ambiguous {kid, candidates}`. Each entry the algorithm and its own
+  members allow is then tried; those with correct proofs are listed, refused as
+  `entry_not_matched`, with `verify.non_deciding_key_proof_correct`. An entry that is the
+  same key as a listed key joins it (`kinds` gains `caller_supplied`, with its `kid` and
+  no `matched_by`) and is not the caller-supplied key the rules consult.
+- *Output.* A caller-supplied key has `kid`, the entry's own, and `matched_by`; a
+  finding's key reference gains `kid`. `keys` is in the order of precedence, the
+  caller-supplied key first.
+- *The override.* `--allow-key-override`. Without it, `verify.caller_key_not_issuer_key
+  {caller_key, issuer_key}`, an error attributed to caller policy; with it,
+  `verify.issuer_key_overridden {issuer_key, proof}`, a warning attributed to caller
+  policy. An issuer key with no thumbprint is not known to be the same key. A finding
+  that refuses a key that does not decide is a warning, so that the outcome follows
+  `keys::decide`, as `verify.issuer_key_not_obtained` does; `did_key_undecodable` stays
+  an error.
+- *Two different keys correct.* `verify.different_keys_correct {keys}`, an error
+  attributed to the input, tested with a synthetic decision until slice 6's fixture.
+- *The table through the binary.* Every row with each of the four settings of the
+  opt-ins, with inputs a generator in `vcrd-cli/tests/support` builds at run time: a
+  `did:key` issuer when the issuer key is present and an `https:` one otherwise, a header
+  `jwk` for the embedded key, a one-entry key set without `kid` for the caller-supplied
+  key, and the row's correct key, or a fourth key, as signer. vcrd-cli dev-dependencies:
+  `ed25519-dalek`, `bs58`, `sha2` and `base64`.
+- *The committed examples*, from the same generator, with an ignored `regenerate` test
+  and a test that the committed bytes are what it produces:
+  `fixtures/caller-key-unlike-issuer.jwt` and its `.jwks.json` (launch configuration
+  "vcrd: allow-key-override"), and `fixtures/key-set-kid.jwt` and its `.jwks.json`, three
+  entries, the second the signer ("vcrd: key-set"). Neither is in the input picker,
+  which cannot pass `--key-set`.
+- *To reconsider before slice 3b's pull request:* a setting that makes key set checking
+  strict, any entry's failure rejecting the whole set, and whether strict should be the
+  default, with a flag for lenient checking.
+
 **Delivers.** `vcrd verify` for RFC 7518's signature algorithms, with caller keys, the
 embedded-key opt-in, the override opt-in and the allowlist; the keys and their proofs'
 results for every row of ARCHITECTURE §8's key and proof table.

@@ -974,6 +974,44 @@ repository; neither has a dated copy, so each is linked where it is published no
   establishes beside the outcome: a trust layer that accepts this key on other grounds,
   or a caller that opts in to it, would find the signature correct.
 
+### <a id="verify.key_set_entry_ignored"></a>`verify.key_set_entry_ignored`
+
+- **Meaning.** An entry of the key set passed with `--key-set` is ignored, and the rest of
+  the set is used. Reported once per verify, before the proof's findings.
+- **Attribution and severity.** `policy`, `warning`: the key set is the caller's.
+- **Detail.** `index`: the entry's position in `keys`, from 0. `kid`: its `kid`, when that
+  is a string. `problem`, one of:
+  - `not_object`: the entry is not a JSON object;
+  - `{"member_repeated": name}`: a member name appears more than once;
+  - `kty_missing`: no `kty`, or one that is not a string;
+  - `{"kty_unknown": kty}`: a key type vcrd does not know;
+  - `{"member_missing": name}`: a member the key type requires is absent or not a
+    string;
+  - `{"member_invalid": name}`: `kid`, `alg` or `use` is not a string, or `key_ops` is
+    not an array of strings;
+  - `key_invalid`: the members do not decode to a key, such as an Ed25519 `x` that is
+    not a point.
+- **Standard.** [RFC 7517] §5: an implementation should ignore an entry whose `kty` it
+  does not understand, that lacks required members, or whose values are out of range.
+  §4 lets a parser reject a JWK whose member names repeat; §4.2–4.5 define `use`,
+  `key_ops`, `alg` and `kid`.
+- **Remedy.** Correct the entry, or remove it if it is not meant for vcrd.
+
+### <a id="verify.key_set_private_key"></a>`verify.key_set_private_key`
+
+- **Meaning.** An entry of the key set passed with `--key-set` carries private-key members,
+  such as `d`, which verifying does not need: whoever has the file has the private key.
+  vcrd uses the entry's public members, and never shows the private ones. An `oct`
+  key's `k` is the key itself, and is not reported here. Reported once per verify,
+  before the proof's findings.
+- **Attribution and severity.** `policy`, `warning`: the key set is the caller's.
+- **Detail.** `index`: the entry's position in `keys`, from 0. `kid`: its `kid`, when that
+  is a string. `members`: the private members present.
+- **Standard.** [RFC 7518] §6.2.2 and §6.3.2, and [RFC 8037] §2, define the private
+  members; a verifier needs only the public ones.
+- **Remedy.** Give vcrd a key set of public keys only, and keep the private key where its
+  holder alone can read it.
+
 ## Checks not evaluated
 
 A result's `not_evaluated` lists the checks vcrd did not make, each as `what`, the check,

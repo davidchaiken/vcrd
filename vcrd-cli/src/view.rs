@@ -12,9 +12,10 @@ use vcrd_core::{
     Attribution, Base64urlProblem, BlockReason, Check, ClaimLocation, Context, CritProblem,
     DateField, DeclaredAlgorithm, DidKeyProblem, Document, DocumentKind, Finding, FindingDetail,
     IssuerKeyUnobtainable, IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment, KeyRef,
-    KeySourceKind, LanguageValueProblem, LeafClass, Missing, NotDeciding, NotEvaluatedReason,
-    Phase, PhaseOutcome, ProofOutcome, PublicJwk, Refusal, Rendered, RenderedJson, Report,
-    RevealLocation, Revealed, Severity, Treatment, Validity, ValueKind, WeakKeyCriterion, render,
+    KeySetEntryProblem, KeySourceKind, LanguageValueProblem, LeafClass, Missing, NotDeciding,
+    NotEvaluatedReason, Phase, PhaseOutcome, ProofOutcome, PublicJwk, Refusal, Rendered,
+    RenderedJson, Report, RevealLocation, Revealed, Severity, Treatment, Validity, ValueKind,
+    WeakKeyCriterion, render,
 };
 
 /// `0` until the schema is declared stable (REQUIREMENTS §9).
@@ -909,6 +910,53 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
                 NotDeciding::AnotherKeyDecides => "another_key_decides",
             },
         }),
+        FindingDetail::KeySetEntryIgnored {
+            index,
+            kid,
+            problem,
+        } => key_set_entry(
+            "key_set_entry_ignored",
+            *index,
+            kid.as_deref(),
+            "problem",
+            key_set_entry_problem(problem),
+        ),
+        FindingDetail::KeySetPrivateKey {
+            index,
+            kid,
+            members,
+        } => key_set_entry(
+            "key_set_private_key",
+            *index,
+            kid.as_deref(),
+            "members",
+            json!(members),
+        ),
+    }
+}
+
+/// A finding about one entry of the caller's key set: its position in `keys`, its
+/// `kid` when it has one, and one more member.
+fn key_set_entry(kind: &str, index: usize, kid: Option<&str>, name: &str, value: Value) -> Value {
+    let mut members = serde_json::Map::new();
+    members.insert("type".to_owned(), json!(kind));
+    members.insert("index".to_owned(), json!(index));
+    if let Some(kid) = kid {
+        members.insert("kid".to_owned(), json!(kid));
+    }
+    members.insert(name.to_owned(), value);
+    Value::Object(members)
+}
+
+fn key_set_entry_problem(problem: &KeySetEntryProblem) -> Value {
+    match problem {
+        KeySetEntryProblem::NotObject => json!("not_object"),
+        KeySetEntryProblem::MemberRepeated { member } => json!({"member_repeated": member}),
+        KeySetEntryProblem::KtyMissing => json!("kty_missing"),
+        KeySetEntryProblem::KtyUnknown { kty } => json!({"kty_unknown": kty}),
+        KeySetEntryProblem::MemberMissing { member } => json!({"member_missing": member}),
+        KeySetEntryProblem::MemberInvalid { member } => json!({"member_invalid": member}),
+        KeySetEntryProblem::KeyInvalid => json!("key_invalid"),
     }
 }
 

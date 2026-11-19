@@ -598,6 +598,19 @@ printf 'not.a.jws' | vcrd verify --format json | jq '{phases, findings: [.findin
 A caller error: no phase ran, so no phase has `blocked_by`. `error.code` names the kind
 of error; `error.message` has the text, which vcrd also writes to standard error.
 
+| `error.code` | The error |
+|---|---|
+| `usage` | The command line is invalid: an unknown flag, or a value a flag does not take. |
+| `no_input` | No file was named and standard input is a terminal. |
+| `input_unreadable` | The credential's file, or standard input, cannot be read. |
+| `key_set_unreadable` | The file `--key-set` names cannot be read. |
+| `key_set_too_large` | The key set is over its size limit, 64 KiB, checked before it is parsed. No flag changes the limit before milestone 3's configuration file. |
+| `key_set_too_deep` | The key set is nested deeper than the depth limit, checked before it is parsed. |
+| `key_set_invalid` | The key set is not JSON, or not a JWK Set (RFC 7517 §5): the message says what was found, such as a single JWK, which belongs in `{"keys": [...]}`. |
+
+The key set is read whichever subcommand runs, so that a file vcrd cannot use is always
+reported; only verify consults it.
+
 ```bash
 vcrd --format json --no-such-flag 2>/dev/null | jq '{status, exit_code, error: .error.code, verify: .phases.verify}'
 ```

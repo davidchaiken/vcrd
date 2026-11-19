@@ -445,6 +445,23 @@ pub enum FindingDetail {
     /// substitution, where the deciding proof is not correct, is
     /// `EmbeddedKeyProofCorrect` instead.
     NonDecidingKeyProofCorrect { key: Box<KeyRef>, why: NotDeciding },
+    /// An entry of the caller's key set that RFC 7517 §5 says to ignore. A warning
+    /// attributed to caller policy.
+    KeySetEntryIgnored {
+        /// Its position in `keys`, from 0.
+        index: usize,
+        kid: Option<String>,
+        problem: KeySetEntryProblem,
+    },
+    /// An entry of the caller's key set carries private or secret members, which a
+    /// verifier does not need: whoever has the file has the private key. A warning
+    /// attributed to caller policy.
+    KeySetPrivateKey {
+        /// Its position in `keys`, from 0.
+        index: usize,
+        kid: Option<String>,
+        members: Vec<&'static str>,
+    },
 }
 
 impl FindingDetail {
@@ -539,6 +556,8 @@ impl FindingDetail {
             FindingDetail::EmbeddedKeyRefused { .. } => "verify.embedded_key_refused",
             FindingDetail::EmbeddedKeyMismatch { .. } => "verify.embedded_key_mismatch",
             FindingDetail::EmbeddedKeyProofCorrect { .. } => "verify.embedded_key_proof_correct",
+            FindingDetail::KeySetEntryIgnored { .. } => "verify.key_set_entry_ignored",
+            FindingDetail::KeySetPrivateKey { .. } => "verify.key_set_private_key",
             FindingDetail::NonDecidingKeyProofCorrect { .. } => {
                 "verify.non_deciding_key_proof_correct"
             }
@@ -656,6 +675,26 @@ pub enum JwkProblem {
     /// string.
     MemberMissing { member: &'static str },
     /// An Ed25519 key's `x` is not 32 bytes of strict base64url, or not a point.
+    KeyInvalid,
+}
+
+/// Why an entry of the caller's key set is ignored (RFC 7517 §5).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KeySetEntryProblem {
+    /// Not a JSON object.
+    NotObject,
+    /// A member name appears more than once (RFC 7517 §4).
+    MemberRepeated { member: String },
+    /// No `kty`, or one that is not a string.
+    KtyMissing,
+    /// A key type vcrd does not know.
+    KtyUnknown { kty: String },
+    /// A member the key type requires is absent or not a string.
+    MemberMissing { member: &'static str },
+    /// `kid`, `alg` or `use` is not a string, or `key_ops` is not an array of strings
+    /// (RFC 7517 §4.2–4.5).
+    MemberInvalid { member: &'static str },
+    /// The members do not decode to a key, such as an Ed25519 `x` that is not a point.
     KeyInvalid,
 }
 
