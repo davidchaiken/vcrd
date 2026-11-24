@@ -739,17 +739,21 @@ The terms, used in this sense in the output and its documentation:
   the holder.
 - **Issuer key** — the key the issuer identifier gives. A `did:key` encodes it; other DID
   methods and URL issuers need resolution, which REQUIREMENTS §8's network opt-in governs.
-- **Caller-supplied key** — the key matched in a JWK Set (RFC 7517 §5) the caller passes
-  in: `ContextBuilder::key_set`, or `--key-set`. Matching takes the entry whose `kid` is
-  the header's, resolved as inspect resolves it; among entries that share it, the one
+- **Key set member** — one JWK of a JWK Set (RFC 7517 §5) the caller passes in: one key,
+  with parameters, RFC 7517 §4's name for a JWK's JSON members, such as `kid`, `alg`,
+  `use` and `key_ops`. The set is unordered.
+- **Caller-supplied key** — the key matched in the caller's key set:
+  `ContextBuilder::key_set`, or `--key-set`. Matching takes the member whose `kid` is
+  the header's, resolved as inspect resolves it; among members that share it, the one
   of the key type the declared algorithm takes (`ProofSuite::takes_key`); otherwise the
-  set's sole entry, when it or the header has no `kid`. No entry, or more than one left,
-  is a refused caller-supplied key, which stands in the list so that the rules never
-  fall back to the issuer key alone; each entry that could have signed is then tried for
-  information, and those whose proofs are correct are listed, refused as not matched.
-  An entry's own `alg`, `use` and `key_ops` are the caller's policy: one that excludes
-  the declared algorithm refuses the key, and no proof is made with it (RFC 8725 §3.1).
-  DEVELOPMENT-PLAN.md, milestone 2, records the decisions.
+  set's sole member, when it or the header has no `kid`. No member, or more than one
+  left, is a refused caller-supplied key, which stands in the list so that the rules
+  never fall back to the issuer key alone; each member whose key could have signed is
+  then tried for information, and those keys whose proofs are correct are listed,
+  refused as not matched. A member's own `alg`, `use` and `key_ops` are the caller's
+  policy: one that excludes the declared algorithm refuses the key, and no proof is made
+  with it (RFC 8725 §3.1). DEVELOPMENT-PLAN.md, milestone 2, records the decisions;
+  those of 2026-11-24 replace this matching.
 - **Proof key** — a key the runner passes to a suite in `ProofInput` (§3), which carries no
   provenance: the suite does not know which kind of key it has.
 - **Deciding proof key** — the proof key whose proof decides the outcome and the exit code.
@@ -762,18 +766,19 @@ The terms, used in this sense in the output and its documentation:
   property of the key (weak, not a signing key, or a type vcrd does not support); because
   it is an embedded key alone and the caller has not opted in, or one of two embedded
   keys that differ; or, for a caller-supplied key, because matching did not find one
-  entry, because the entry's own members exclude the algorithm, or because it is an entry
-  tried only when none matched.
+  member, because the member's own parameters exclude the algorithm, or because it is
+  the key of a member tried only when none matched.
 
 The rules, which together make the table below:
 
 1. When a caller-supplied key and an issuer key are both present, they must be the same
    key, whatever the issuer key's source; otherwise vcrd does not succeed, unless the
-   caller opts in to letting its key override the issuer key (milestone 2). When the
-   credential names an issuer key, a caller-supplied key is thus a constraint on it, and
-   adds no other way to succeed; when there is no issuer key, the caller-supplied key
-   decides. RFC 8725 §3.8 has an application reject a JWT whose keys do not belong to
-   its issuer.
+   caller opts in to letting its key override the issuer key (`KeyPolicy`,
+   `--allow-key-override`), when a warning names the issuer key and its proof's
+   result. When the credential names an issuer key, a caller-supplied key is thus a
+   constraint on it, and adds no other way to succeed; when there is no issuer key, the
+   caller-supplied key decides. RFC 8725 §3.8 has an application reject a JWT whose keys
+   do not belong to its issuer.
 2. The deciding proof key is the issuer key when it is present, and the caller-supplied
    key when the issuer key is not present or the caller has opted in to the override. The
    embedded key decides only when neither is present, and then only with the caller's
@@ -781,7 +786,10 @@ The rules, which together make the table below:
 3. vcrd may succeed only when the deciding proof is correct.
 
 A refused caller-supplied key or a refused issuer key prevents success; the findings say
-why. A refused embedded key is reported and otherwise treated as not present. A proof not
+why. A refused embedded key is reported and otherwise treated as not present. A finding
+that refuses a key that does not decide, such as an issuer key the override sets aside,
+is a warning, so that the outcome is the rules' (`ProofKey::refusals` in
+`vcrd-core/src/keys.rs`). A proof not
 attempted for a reason specific to its key counts, for success, as incorrect. One not
 attempted for a reason independent of the key, such as an `alg` vcrd does not implement
 or a signature of the wrong length, means no proof is attempted with any key, and vcrd

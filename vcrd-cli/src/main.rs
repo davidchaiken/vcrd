@@ -64,7 +64,7 @@ fn main() -> ExitCode {
     let skew = Duration::from_secs(cli.options.clock_skew);
     let key_policy = KeyPolicy {
         allow_embedded_key_alone: cli.options.allow_embedded_key,
-        ..KeyPolicy::default()
+        allow_caller_key_override: cli.options.allow_key_override,
     };
     // No flag changes a limit until milestone 3's configuration file
     // (DEVELOPMENT-PLAN.md, milestone 2, decided 2026-11-18).

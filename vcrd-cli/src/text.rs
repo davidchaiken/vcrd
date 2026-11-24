@@ -672,8 +672,8 @@ fn key_phrase(key: &KeyView, with_proof: bool) -> String {
                     .map_or_else(String::new, |k| format!(" {k}"));
                 match key.matched_by {
                     Some("kid") => format!("caller-supplied key{kid}, matched by kid"),
-                    Some("sole_entry") => format!("caller-supplied key{kid}, the sole entry"),
-                    _ if key.kid.is_some() => format!("key set entry{kid}, not matched"),
+                    Some("sole_member") => format!("caller-supplied key{kid}, the sole member"),
+                    _ if key.kid.is_some() => format!("key set member{kid}, not matched"),
                     _ => "caller-supplied key".to_owned(),
                 }
             }
@@ -691,10 +691,10 @@ fn key_phrase(key: &KeyView, with_proof: bool) -> String {
             "type_unsupported" => "a type vcrd cannot use",
             "embedded_key_alone" => "alone, without the opt-in",
             "embedded_keys_differ" => "one of two embedded keys that differ",
-            "not_found" => "no key set entry matched",
-            "ambiguous" => "more than one key set entry left",
-            "entry_not_matched" => "a key set entry not matched",
-            "excluded_by_entry" => "the entry's own alg, use or key_ops excludes the algorithm",
+            "not_found" => "no key set member matched",
+            "ambiguous" => "more than one key set member left",
+            "member_not_matched" => "a key set member not matched",
+            "excluded_by_member" => "the member's own alg, use or key_ops excludes the algorithm",
             other => other,
         };
         phrase.push_str(&format!("; refused: {why}"));

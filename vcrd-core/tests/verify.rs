@@ -6,13 +6,13 @@
 use serde_json::json;
 use time::macros::datetime;
 use vcrd_core::{
-    Attribution, EntryExclusion, FindingDetail, KeySecret, KeySetEntryProblem, KeySource,
-    KeySourceKind, MatchedBy, NotDeciding, ProofOutcome, PublicJwk, Refusal, Severity, Validity,
+    Attribution, FindingDetail, KeySecret, KeySetMemberProblem, KeySource, KeySourceKind,
+    MatchedBy, MemberExclusion, NotDeciding, ProofOutcome, PublicJwk, Refusal, Severity, Validity,
 };
 
 use support::{
-    NOW, ed448_jwk, issuer_did_and_kid, issuer_jwk, other_jwk, proof_of, signed, verified,
-    verified_opted_in, verified_with_key_set, verified_with_skew,
+    NOW, ed448_jwk, issuer_did_and_kid, issuer_jwk, other_jwk, proof_of, signed, signed_by_other,
+    verified, verified_opted_in, verified_overriding, verified_with_key_set, verified_with_skew,
 };
 
 /// In a `#[cfg(test)]` module so that the workspace's panic lints exempt it, as
@@ -61,11 +61,13 @@ mod support {
         (issuer, kid)
     }
 
-    /// Another key, which signs nothing, as a JWK.
+    fn other_key() -> SigningKey {
+        SigningKey::from_bytes(&Sha256::digest(b"vcrd-core verify tests: other").into())
+    }
+
+    /// Another key, which signs only what [`signed_by_other`] signs, as a JWK.
     pub fn other_jwk() -> Value {
-        let other =
-            SigningKey::from_bytes(&Sha256::digest(b"vcrd-core verify tests: other").into());
-        json!({"kty": "OKP", "crv": "Ed25519", "x": b64(other.verifying_key().as_bytes())})
+        json!({"kty": "OKP", "crv": "Ed25519", "x": b64(other_key().verifying_key().as_bytes())})
     }
 
     /// An Ed448 public key as a JWK (RFC 8037 §2): a key type vcrd names and cannot use.
@@ -77,7 +79,15 @@ mod support {
     /// signed by the issuer's key. Its `alg` is `Ed25519`, not the deprecated `EdDSA`,
     /// so that each test's findings are those of its own condition (RFC 9864).
     pub fn signed(edit: impl FnOnce(&mut Value, &mut Value)) -> Vec<u8> {
-        let key = key();
+        signed_by(&key(), edit)
+    }
+
+    /// As [`signed`], signed by the other key rather than the issuer's.
+    pub fn signed_by_other(edit: impl FnOnce(&mut Value, &mut Value)) -> Vec<u8> {
+        signed_by(&other_key(), edit)
+    }
+
+    fn signed_by(key: &SigningKey, edit: impl FnOnce(&mut Value, &mut Value)) -> Vec<u8> {
         let (issuer, kid) = issuer_did_and_kid();
         let mut header = json!({
             "alg": "Ed25519",
@@ -127,11 +137,30 @@ mod support {
 
     /// Verified with `key_set`, a JWK Set (RFC 7517 §5), as the caller's keys.
     pub fn verified_with_key_set(bytes: &[u8], key_set: &Value) -> Report {
+        verified_with_key_set_and_policy(bytes, key_set, KeyPolicy::default())
+    }
+
+    /// Verified with the caller's opt-in to letting its key override the issuer key
+    /// (ARCHITECTURE §8, rule 1), or without it.
+    pub fn verified_overriding(bytes: &[u8], key_set: &Value, override_: bool) -> Report {
+        let policy = KeyPolicy {
+            allow_caller_key_override: override_,
+            ..KeyPolicy::default()
+        };
+        verified_with_key_set_and_policy(bytes, key_set, policy)
+    }
+
+    fn verified_with_key_set_and_policy(
+        bytes: &[u8],
+        key_set: &Value,
+        policy: KeyPolicy,
+    ) -> Report {
         let limits = Limits::default();
         let key_set = KeySet::parse(key_set.to_string().as_bytes(), &limits).unwrap();
         let ctx = Context::builder(FixedClock(datetime!(2026-10-01 0:00 UTC)))
             .limits(limits)
             .key_set(key_set)
+            .key_policy(policy)
             .build();
         verify(bytes, &ctx, &Registry::builtin())
     }
@@ -628,8 +657,8 @@ fn a_registered_name_in_crit_is_not_an_extension() {
     assert!(matches!(proof.outcome, ProofOutcome::Correct { .. }));
 }
 
-/// An entry of the caller's key set that RFC 7517 §5 says to ignore, and one with
-/// private members, are warnings attributed to caller policy, reported once, before the
+/// A member of the caller's key set that RFC 7517 §5 says to ignore, and one with
+/// private parameters, are warnings attributed to caller policy, reported once, before the
 /// proof's findings, and only by verify (DEVELOPMENT-PLAN.md, milestone 2, decided
 /// 2026-11-18).
 #[test]
@@ -661,10 +690,10 @@ fn key_set_warnings_come_once_before_the_proofs_findings() {
     assert!(
         matches!(
             &ignored.detail,
-            FindingDetail::KeySetEntryIgnored {
+            FindingDetail::KeySetMemberIgnored {
                 index: 0,
                 kid: Some(kid),
-                problem: KeySetEntryProblem::KtyUnknown { kty },
+                problem: KeySetMemberProblem::KtyUnknown { kty },
             } if kid == "unknown" && kty == "XYZ"
         ),
         "{ignored:?}"
@@ -675,13 +704,16 @@ fn key_set_warnings_come_once_before_the_proofs_findings() {
             FindingDetail::KeySetPrivateKey {
                 index: 1,
                 kid: Some(kid),
-                members,
-            } if kid == "with-d" && members == &["d"]
+                parameters,
+            } if kid == "with-d" && parameters == &["d"]
         ),
         "{private:?}"
     );
     let codes: Vec<_> = findings.iter().map(|f| f.code).collect();
-    for code in ["verify.key_set_entry_ignored", "verify.key_set_private_key"] {
+    for code in [
+        "verify.key_set_member_ignored",
+        "verify.key_set_private_key",
+    ] {
         assert_eq!(codes.iter().filter(|&&c| c == code).count(), 1, "{codes:?}");
     }
 }
@@ -705,9 +737,9 @@ const NOT_ISSUER_KEY: (&str, Attribution, Severity) = (
 #[test]
 fn a_caller_key_matched_by_kid_that_is_the_issuer_key_decides() {
     let (_, kid) = issuer_did_and_kid();
-    let mut entry = issuer_jwk();
-    entry["kid"] = json!(kid);
-    let report = verified_with_key_set(&signed(|_, _| {}), &json!({"keys": [entry]}));
+    let mut member = issuer_jwk();
+    member["kid"] = json!(kid);
+    let report = verified_with_key_set(&signed(|_, _| {}), &json!({"keys": [member]}));
     let (proof, findings) = proof_of(&report);
     assert!(findings.is_empty(), "{findings:?}");
     let provenance = &proof.key_provenance;
@@ -730,37 +762,37 @@ fn a_caller_key_matched_by_kid_that_is_the_issuer_key_decides() {
 fn a_relative_kid_is_resolved_against_the_did_issuer_before_matching() {
     let (issuer, kid) = issuer_did_and_kid();
     let fragment = kid.strip_prefix(&issuer).unwrap().to_owned();
-    let mut entry = issuer_jwk();
-    entry["kid"] = json!(kid);
+    let mut member = issuer_jwk();
+    member["kid"] = json!(kid);
     let credential = signed(|h, p| {
         h["kid"] = json!(fragment);
         p["iss"] = json!(issuer);
     });
-    let report = verified_with_key_set(&credential, &json!({"keys": [entry]}));
+    let report = verified_with_key_set(&credential, &json!({"keys": [member]}));
     let (proof, _) = proof_of(&report);
     let key = &proof.key_provenance.keys[0];
     assert_eq!(key.matched_by, Some(MatchedBy::Kid), "{key:?}");
     assert_eq!(proof.key_provenance.deciding, Some(0));
 }
 
-/// The set's sole entry matches when it, or the header, has no `kid`.
+/// The set's sole member matches when it, or the header, has no `kid`.
 #[test]
-fn the_sole_entry_without_a_kid_matches() {
+fn the_sole_member_without_a_kid_matches() {
     let report = verified_with_key_set(&signed(|_, _| {}), &json!({"keys": [issuer_jwk()]}));
     let (proof, findings) = proof_of(&report);
     assert!(findings.is_empty(), "{findings:?}");
     let [key] = proof.key_provenance.keys.as_slice() else {
         panic!("one key: {:?}", proof.key_provenance)
     };
-    assert_eq!(key.matched_by, Some(MatchedBy::SoleEntry));
+    assert_eq!(key.matched_by, Some(MatchedBy::SoleMember));
     assert_eq!(key.kid, None);
 }
 
-/// No entry with the header's `kid` is a refused caller-supplied key, never a fall back to
-/// the issuer key alone. Each entry is then tried: one that is the issuer key joins it,
+/// No member with the header's `kid` is a refused caller-supplied key, never a fall back to
+/// the issuer key alone. Each member is then tried: one that is the issuer key joins it,
 /// not matched; one whose proof is incorrect is not listed.
 #[test]
-fn a_kid_no_entry_has_is_not_found_and_never_falls_back_to_the_issuer_key() {
+fn a_kid_no_member_has_is_not_found_and_never_falls_back_to_the_issuer_key() {
     let (_, kid) = issuer_did_and_kid();
     let mut issuers = issuer_jwk();
     issuers["kid"] = json!("elsewhere");
@@ -799,10 +831,10 @@ fn a_kid_no_entry_has_is_not_found_and_never_falls_back_to_the_issuer_key() {
     assert_eq!(provenance.deciding, Some(1));
 }
 
-/// Several entries with the header's `kid`, of the key type the algorithm takes, leave
+/// Several members with the header's `kid`, of the key type the algorithm takes, leave
 /// the caller-supplied key ambiguous.
 #[test]
-fn several_entries_with_the_kid_are_ambiguous() {
+fn several_members_with_the_kid_are_ambiguous() {
     let (_, kid) = issuer_did_and_kid();
     let mut issuers = issuer_jwk();
     issuers["kid"] = json!(kid);
@@ -830,10 +862,10 @@ fn several_entries_with_the_kid_are_ambiguous() {
     assert_eq!(stand_in.refused, Some(Refusal::CallerKeyAmbiguous));
 }
 
-/// Among entries that share the `kid`, the key type the declared algorithm takes chooses:
+/// Among members that share the `kid`, the key type the declared algorithm takes chooses:
 /// `Ed25519` takes an Ed25519 key, not an Ed448 one (RFC 9864 §2.2).
 #[test]
-fn the_key_type_the_algorithm_takes_chooses_among_entries_that_share_the_kid() {
+fn the_key_type_the_algorithm_takes_chooses_among_members_that_share_the_kid() {
     let (_, kid) = issuer_did_and_kid();
     let mut issuers = issuer_jwk();
     issuers["kid"] = json!(kid);
@@ -848,37 +880,37 @@ fn the_key_type_the_algorithm_takes_chooses_among_entries_that_share_the_kid() {
     assert_eq!(key.matched_by, Some(MatchedBy::Kid));
 }
 
-/// An entry's own `alg`, `use` and `key_ops` are the caller's policy: one that excludes the
+/// A member's own `alg`, `use` and `key_ops` are the caller's policy: one that excludes the
 /// declared algorithm refuses the key, and no proof is made with it (RFC 8725 §3.1). One
 /// that allows it changes nothing.
 #[test]
-fn an_entrys_own_members_can_exclude_the_algorithm() {
-    for (member, value, expected) in [
+fn a_members_own_parameters_can_exclude_the_algorithm() {
+    for (parameter, value, expected) in [
         (
             "use",
             json!("enc"),
-            EntryExclusion::Use {
+            MemberExclusion::Use {
                 value: "enc".to_owned(),
             },
         ),
         (
             "key_ops",
             json!(["sign"]),
-            EntryExclusion::KeyOps {
+            MemberExclusion::KeyOps {
                 ops: vec!["sign".to_owned()],
             },
         ),
         (
             "alg",
             json!("ES256"),
-            EntryExclusion::Alg {
+            MemberExclusion::Alg {
                 alg: "ES256".to_owned(),
             },
         ),
     ] {
-        let mut entry = issuer_jwk();
-        entry[member] = value;
-        let report = verified_with_key_set(&signed(|_, _| {}), &json!({"keys": [entry]}));
+        let mut member = issuer_jwk();
+        member[parameter] = value;
+        let report = verified_with_key_set(&signed(|_, _| {}), &json!({"keys": [member]}));
         let (proof, findings) = proof_of(&report);
         assert!(
             findings.contains(&(
@@ -886,7 +918,7 @@ fn an_entrys_own_members_can_exclude_the_algorithm() {
                 Attribution::Policy,
                 Severity::Error
             )),
-            "{member}: {findings:?}"
+            "{parameter}: {findings:?}"
         );
         assert!(
             report.verify.findings().iter().any(|f| matches!(
@@ -894,13 +926,13 @@ fn an_entrys_own_members_can_exclude_the_algorithm() {
                 FindingDetail::CallerKeyExcluded { exclusion, algorithm, .. }
                     if *exclusion == expected && algorithm == "Ed25519"
             )),
-            "{member}: {findings:?}"
+            "{parameter}: {findings:?}"
         );
         let [key] = proof.key_provenance.keys.as_slice() else {
-            panic!("{member}: one key: {:?}", proof.key_provenance)
+            panic!("{parameter}: one key: {:?}", proof.key_provenance)
         };
-        assert_eq!(key.refused, Some(Refusal::ExcludedByEntry), "{member}");
-        assert_eq!(key.proof, ProofOutcome::NotAttempted, "{member}");
+        assert_eq!(key.refused, Some(Refusal::ExcludedByMember), "{parameter}");
+        assert_eq!(key.proof, ProofOutcome::NotAttempted, "{parameter}");
     }
     let mut allowing = issuer_jwk();
     allowing["use"] = json!("sig");
@@ -912,20 +944,20 @@ fn an_entrys_own_members_can_exclude_the_algorithm() {
 }
 
 /// With an Ed25519 key, `EdDSA` and `Ed25519` name one algorithm (RFC 8037 §3.1; RFC 9864
-/// §2.2): the entry is not excluded, and a warning says that a verifier comparing the
+/// §2.2): the member is not excluded, and a warning says that a verifier comparing the
 /// names would refuse it. With an Ed448 key, `EdDSA` is another algorithm.
 #[test]
-fn eddsa_and_ed25519_are_one_algorithm_for_an_ed25519_entry() {
+fn eddsa_and_ed25519_are_one_algorithm_for_an_ed25519_member() {
     const ALIAS: (&str, Attribution, Severity) = (
         "verify.caller_key_alg_alias",
         Attribution::Policy,
         Severity::Warning,
     );
-    for (declared, entry_alg) in [("Ed25519", "EdDSA"), ("EdDSA", "Ed25519")] {
-        let mut entry = issuer_jwk();
-        entry["alg"] = json!(entry_alg);
+    for (declared, member_alg) in [("Ed25519", "EdDSA"), ("EdDSA", "Ed25519")] {
+        let mut member = issuer_jwk();
+        member["alg"] = json!(member_alg);
         let credential = signed(|h, _| h["alg"] = json!(declared));
-        let report = verified_with_key_set(&credential, &json!({"keys": [entry]}));
+        let report = verified_with_key_set(&credential, &json!({"keys": [member]}));
         let (proof, findings) = proof_of(&report);
         assert!(findings.contains(&ALIAS), "{declared}: {findings:?}");
         assert!(
@@ -936,38 +968,49 @@ fn eddsa_and_ed25519_are_one_algorithm_for_an_ed25519_entry() {
             report.verify.findings().iter().any(|f| matches!(
                 &f.detail,
                 FindingDetail::CallerKeyAlgAlias { alg, declared: d, .. }
-                    if alg == entry_alg && d == declared
+                    if alg == member_alg && d == declared
             )),
             "{declared}: {findings:?}"
         );
         assert!(matches!(proof.outcome, ProofOutcome::Correct { .. }));
     }
+    // Excluded, though not the error while the issuer key decides: the key's being unlike
+    // the issuer key is (DEVELOPMENT-PLAN.md, milestone 2, decided 2026-11-18).
     let mut ed448 = ed448_jwk();
     ed448["alg"] = json!("EdDSA");
     let report = verified_with_key_set(&signed(|_, _| {}), &json!({"keys": [ed448]}));
     let (_, findings) = proof_of(&report);
-    assert!(
-        findings.contains(&(
-            "verify.caller_key_excluded",
-            Attribution::Policy,
-            Severity::Error
-        )),
-        "{findings:?}"
+    assert_eq!(
+        findings,
+        [
+            (
+                "verify.caller_key_excluded",
+                Attribution::Policy,
+                Severity::Warning
+            ),
+            NOT_ISSUER_KEY,
+        ]
     );
 }
 
-/// A matched key vcrd cannot use is refused, and says why: a refused caller-supplied key
-/// may decide, so something must. Not the issuer key, it is also unlike it.
+/// A matched key vcrd cannot use is refused, and says why. While the issuer key decides,
+/// the refusal is a warning, and the key's being unlike the issuer key the error; with
+/// the override, the refused caller-supplied key decides, and the refusal is the error
+/// (DEVELOPMENT-PLAN.md, milestone 2, decided 2026-11-18).
 #[test]
 fn a_caller_key_of_a_type_vcrd_cannot_use_is_refused() {
+    const UNSUPPORTED: &str = "verify.caller_key_type_unsupported";
+    let overridden = verified_overriding(&signed(|_, _| {}), &json!({"keys": [ed448_jwk()]}), true);
+    let (proof, findings) = proof_of(&overridden);
+    assert!(
+        findings.contains(&(UNSUPPORTED, Attribution::Vcrd, Severity::Error)),
+        "{findings:?}"
+    );
+    assert_eq!(proof.key_provenance.deciding, Some(0));
     let report = verified_with_key_set(&signed(|_, _| {}), &json!({"keys": [ed448_jwk()]}));
     let (proof, findings) = proof_of(&report);
     assert!(
-        findings.contains(&(
-            "verify.caller_key_type_unsupported",
-            Attribution::Vcrd,
-            Severity::Error
-        )),
+        findings.contains(&(UNSUPPORTED, Attribution::Vcrd, Severity::Warning)),
         "{findings:?}"
     );
     assert!(findings.contains(&NOT_ISSUER_KEY), "{findings:?}");
@@ -1010,10 +1053,10 @@ fn a_caller_key_unlike_the_issuer_key_is_a_policy_error() {
     );
 }
 
-/// An entry tried because none matched, whose proof is correct, is listed, refused, with a
+/// A member tried because none matched, whose proof is correct, is listed, refused, with a
 /// warning; the refused caller-supplied key decides, and verify fails.
 #[test]
-fn an_unmatched_entry_whose_proof_is_correct_is_listed_and_refused() {
+fn an_unmatched_member_whose_proof_is_correct_is_listed_and_refused() {
     let mut signer = issuer_jwk();
     signer["kid"] = json!("k1");
     let mut other = other_jwk();
@@ -1034,23 +1077,27 @@ fn an_unmatched_entry_whose_proof_is_correct_is_listed_and_refused() {
         "{findings:?}"
     );
     let provenance = &proof.key_provenance;
-    let [stand_in, entry] = provenance.keys.as_slice() else {
+    let [stand_in, unmatched] = provenance.keys.as_slice() else {
         panic!("two keys: {provenance:?}")
     };
     assert_eq!(stand_in.refused, Some(Refusal::CallerKeyNotFound));
     assert_eq!(provenance.deciding, Some(0));
-    assert_eq!(entry.kinds, [KeySource::CallerSupplied]);
+    assert_eq!(unmatched.kinds, [KeySource::CallerSupplied]);
     assert_eq!(
-        (entry.kid.as_deref(), entry.matched_by, entry.refused),
-        (Some("k1"), None, Some(Refusal::EntryNotMatched))
+        (
+            unmatched.kid.as_deref(),
+            unmatched.matched_by,
+            unmatched.refused
+        ),
+        (Some("k1"), None, Some(Refusal::MemberNotMatched))
     );
-    assert!(matches!(entry.proof, ProofOutcome::Correct { .. }));
+    assert!(matches!(unmatched.proof, ProofOutcome::Correct { .. }));
 }
 
-/// An `oct` entry is kept and, matched, refused until slice 8: it has no thumbprint, and
+/// An `oct` member is kept and, matched, refused until slice 8: it has no thumbprint, and
 /// its `k` is masked unless the caller's designations show secrets.
 #[test]
-fn a_matched_oct_entry_is_refused_and_its_secret_masked() {
+fn a_matched_oct_member_is_refused_and_its_secret_masked() {
     let report = verified_with_key_set(
         &signed(|_, _| {}),
         &json!({"keys": [{"kty": "oct", "k": "c2VjcmV0IGtleSBtYXRlcmlhbA"}]}),
@@ -1065,7 +1112,7 @@ fn a_matched_oct_entry_is_refused_and_its_secret_masked() {
     );
     let caller = &proof.key_provenance.keys[0];
     assert_eq!(caller.refused, Some(Refusal::TypeUnsupported));
-    assert_eq!(caller.matched_by, Some(MatchedBy::SoleEntry));
+    assert_eq!(caller.matched_by, Some(MatchedBy::SoleMember));
     assert_eq!(caller.thumbprint, None);
     assert_eq!(
         caller.jwk,
@@ -1076,7 +1123,7 @@ fn a_matched_oct_entry_is_refused_and_its_secret_masked() {
     assert_eq!(
         caller.secret,
         Some(KeySecret {
-            member: "k",
+            parameter: "k",
             value: None
         })
     );
@@ -1103,6 +1150,118 @@ fn a_key_set_lets_verify_run_without_an_issuer() {
     );
     let provenance = &proof.key_provenance;
     assert_eq!(provenance.deciding, Some(0), "{provenance:?}");
-    assert_eq!(provenance.keys[0].matched_by, Some(MatchedBy::SoleEntry));
+    assert_eq!(provenance.keys[0].matched_by, Some(MatchedBy::SoleMember));
+    assert!(matches!(proof.outcome, ProofOutcome::Correct { .. }));
+}
+
+// The override (ARCHITECTURE §8, rule 1; DEVELOPMENT-PLAN.md, milestone 2, decided
+// 2026-11-13 and 2026-11-18).
+
+const OVERRIDDEN: (&str, Attribution, Severity) = (
+    "verify.issuer_key_overridden",
+    Attribution::Policy,
+    Severity::Warning,
+);
+
+/// A caller-supplied key unlike the issuer key, with its proof correct: an error without
+/// the override, and with it the deciding proof key, with a warning that names the issuer
+/// key and its proof's result.
+#[test]
+fn the_override_lets_a_caller_key_unlike_the_issuer_key_decide() {
+    let credential = signed_by_other(|_, _| {});
+    let key_set = json!({"keys": [other_jwk()]});
+    let report = verified_overriding(&credential, &key_set, false);
+    let (proof, findings) = proof_of(&report);
+    assert!(findings.contains(&NOT_ISSUER_KEY), "{findings:?}");
+    assert!(!findings.contains(&OVERRIDDEN), "{findings:?}");
+    assert_eq!(proof.key_provenance.deciding, Some(1));
+    assert_eq!(proof.outcome, ProofOutcome::Incorrect);
+
+    let report = verified_overriding(&credential, &key_set, true);
+    let (proof, findings) = proof_of(&report);
+    assert_eq!(findings, [OVERRIDDEN]);
+    let provenance = &proof.key_provenance;
+    assert_eq!(provenance.deciding, Some(0));
+    assert!(matches!(proof.outcome, ProofOutcome::Correct { .. }));
+    let issuer = &provenance.keys[1];
+    assert!(
+        report.verify.findings().iter().any(|f| matches!(
+            &f.detail,
+            FindingDetail::IssuerKeyOverridden { issuer_key, proof: ProofOutcome::Incorrect }
+                if issuer_key.thumbprint == issuer.thumbprint
+        )),
+        "{findings:?}"
+    );
+
+    // A caller-supplied key that matching did not find decides with the override, refused;
+    // its own finding says why, and no key overrides the issuer key.
+    let mut unmatched = other_jwk();
+    unmatched["kid"] = json!("elsewhere");
+    let report = verified_overriding(&credential, &json!({"keys": [unmatched]}), true);
+    let (proof, findings) = proof_of(&report);
+    assert!(findings.contains(&NOT_FOUND), "{findings:?}");
+    assert!(!findings.contains(&OVERRIDDEN), "{findings:?}");
+    assert_eq!(proof.key_provenance.deciding, Some(0));
+}
+
+/// The overridden issuer key's correct proof is said once, by the warning that names it,
+/// rather than again as a correct proof that does not count.
+#[test]
+fn an_overridden_issuer_keys_correct_proof_is_named_once() {
+    let report = verified_overriding(&signed(|_, _| {}), &json!({"keys": [other_jwk()]}), true);
+    let (proof, findings) = proof_of(&report);
+    assert!(findings.contains(&OVERRIDDEN), "{findings:?}");
+    assert!(
+        !findings
+            .iter()
+            .any(|(code, _, _)| *code == "verify.non_deciding_key_proof_correct"),
+        "{findings:?}"
+    );
+    assert!(
+        report.verify.findings().iter().any(|f| matches!(
+            &f.detail,
+            FindingDetail::IssuerKeyOverridden {
+                proof: ProofOutcome::Correct { .. },
+                ..
+            }
+        )),
+        "{findings:?}"
+    );
+    assert_eq!(proof.outcome, ProofOutcome::Incorrect);
+}
+
+/// A finding that refuses a key that does not decide is a warning, so that the outcome
+/// follows the rules: an issuer key vcrd cannot use, set aside by the override, does not
+/// fail verify; deciding, it does.
+#[test]
+fn a_refused_issuer_key_that_does_not_decide_is_a_warning() {
+    // ed448-pub (0x1203), which vcrd names and does not plan to implement.
+    let multibase = format!(
+        "z{}",
+        bs58::encode([&[0x83, 0x24][..], &[9; 57][..]].concat()).into_string()
+    );
+    let issuer = format!("did:key:{multibase}");
+    let credential = signed(|h, p| {
+        h["kid"] = json!(format!("{issuer}#{multibase}"));
+        p["issuer"] = json!(issuer);
+    });
+    let key_set = json!({"keys": [issuer_jwk()]});
+    const UNSUPPORTED: &str = "verify.did_key_codec_unsupported";
+    let report = verified_overriding(&credential, &key_set, false);
+    let (_, findings) = proof_of(&report);
+    assert!(
+        findings.contains(&(UNSUPPORTED, Attribution::Vcrd, Severity::Error)),
+        "{findings:?}"
+    );
+    let report = verified_overriding(&credential, &key_set, true);
+    let (proof, findings) = proof_of(&report);
+    assert_eq!(
+        findings,
+        [
+            (UNSUPPORTED, Attribution::Vcrd, Severity::Warning),
+            OVERRIDDEN
+        ]
+    );
+    assert_eq!(proof.key_provenance.deciding, Some(0));
     assert!(matches!(proof.outcome, ProofOutcome::Correct { .. }));
 }

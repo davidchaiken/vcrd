@@ -121,7 +121,7 @@ fn a_key_set_over_the_size_limit_is_a_caller_error() {
 /// A key set is consulted by verify alone: inspect runs as it does without one.
 #[test]
 fn inspect_reads_a_key_set_and_does_not_consult_it() {
-    let path = key_set_file("one-unknown-entry.json", br#"{"keys": [{"kty": "XYZ"}]}"#);
+    let path = key_set_file("one-unknown-member.json", br#"{"keys": [{"kty": "XYZ"}]}"#);
     let out = json(
         vcrd()
             .args(["inspect", EXAMPLE, "--now", NOW, "--key-set"])
@@ -131,11 +131,11 @@ fn inspect_reads_a_key_set_and_does_not_consult_it() {
     assert_eq!(out["findings"], json!([]), "{out}");
 }
 
-/// An ignored entry is reported by verify, with its position and why (docs/findings.md).
+/// An ignored member is reported by verify, with its position and why (docs/findings.md).
 #[test]
-fn verify_reports_an_ignored_entry() {
+fn verify_reports_an_ignored_member() {
     let path = key_set_file(
-        "one-ignored-entry.json",
+        "one-ignored-member.json",
         br#"{"keys": [{"kty": "XYZ", "kid": "k0"}]}"#,
     );
     let output = vcrd()
@@ -156,17 +156,17 @@ fn verify_reports_an_ignored_entry() {
         .as_array()
         .unwrap()
         .iter()
-        .filter(|f| f["code"] == "verify.key_set_entry_ignored")
+        .filter(|f| f["code"] == "verify.key_set_member_ignored")
         .collect();
     assert_eq!(
         ignored,
         [&json!({
-            "code": "verify.key_set_entry_ignored",
+            "code": "verify.key_set_member_ignored",
             "phase": "verify",
             "attribution": "policy",
             "severity": "warning",
             "detail": {
-                "type": "key_set_entry_ignored",
+                "type": "key_set_member_ignored",
                 "index": 0,
                 "kid": "k0",
                 "problem": {"kty_unknown": "XYZ"},
@@ -176,7 +176,7 @@ fn verify_reports_an_ignored_entry() {
     );
 }
 
-/// A matched caller-supplied key says which entry it is and how it was matched, in each
+/// A matched caller-supplied key says which member it is and how it was matched, in each
 /// output format (docs/output.md).
 #[test]
 fn a_matched_caller_key_shows_its_kid_and_how_it_was_matched() {
@@ -243,4 +243,32 @@ fn an_oct_keys_secret_is_shown_only_at_unsafe_2() {
             "{unsafe_level}: {out}"
         );
     }
+}
+
+/// `--allow-key-override` lets a caller-supplied key unlike the issuer key decide. With a
+/// key set holding another key, the example fails on caller policy without it (exit 5);
+/// with it, the other key decides and its proof is incorrect (exit 4), and a warning
+/// names the issuer key's correct proof.
+#[test]
+fn the_override_flag_lets_the_caller_key_decide() {
+    // RFC 8037 appendix A.2's public key, not the example's.
+    let jwk =
+        json!({"kty": "OKP", "crv": "Ed25519", "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"});
+    let set = json!({"keys": [jwk]}).to_string();
+    let path = key_set_file("another-key.json", set.as_bytes());
+    let without: Value = serde_json::from_str(&verified(&path, "json", &[])).unwrap();
+    assert_eq!(without["exit_code"], 5, "{without}");
+    assert_eq!(without["proofs"][0]["key_provenance"]["deciding"], 1);
+    let with: Value =
+        serde_json::from_str(&verified(&path, "json", &["--allow-key-override"])).unwrap();
+    assert_eq!(with["exit_code"], 4, "{with}");
+    assert_eq!(with["proofs"][0]["key_provenance"]["deciding"], 0);
+    let overridden: Vec<&Value> = with["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["code"] == "verify.issuer_key_overridden")
+        .collect();
+    assert_eq!(overridden.len(), 1, "{with}");
+    assert_eq!(overridden[0]["detail"]["proof"], "correct", "{with}");
 }

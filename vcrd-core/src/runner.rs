@@ -239,7 +239,6 @@ fn verify_proofs(
             .findings
             .iter()
             .any(|f| f.severity == Severity::Error);
-        findings.append(&mut resolution.findings);
         // Each distinct key's proof, with the suite's findings for it. A refused key has
         // none, and without the suite no key has one.
         let proved: Vec<Option<Proof>> = resolution
@@ -250,7 +249,7 @@ fn verify_proofs(
                 Some(suite?.verify(&proof_input(descriptor, Some(key)), ctx))
             })
             .collect();
-        // A key set entry tried only because none matched is listed only when its proof
+        // A key set member tried only because none matched is listed only when its proof
         // is correct (DEVELOPMENT-PLAN.md, milestone 2, decided 2026-11-18).
         let (kept, mut key_proofs): (Vec<ProofKey>, Vec<Option<Proof>>) =
             std::mem::take(&mut resolution.keys)
@@ -262,11 +261,29 @@ fn verify_proofs(
                 })
                 .unzip();
         resolution.keys = kept;
-        let decision = keys::decide(
-            &keys_and_proofs(&resolution.keys, &key_proofs),
-            ctx.key_policy(),
-        );
-        findings.extend(decision_findings(&resolution, &decision, resolution_failed));
+        let considered = keys_and_proofs(&resolution.keys, &key_proofs);
+        let decision = keys::decide(&considered, ctx.key_policy());
+        let correct: Vec<bool> = considered.iter().map(|k| k.correct).collect();
+        // A finding that refuses a key that does not decide is a warning, so that the
+        // outcome follows the rules (DEVELOPMENT-PLAN.md, milestone 2, decided
+        // 2026-11-18), as `verify.issuer_key_not_obtained` does.
+        for (index, key) in resolution.keys.iter().enumerate() {
+            if decision.deciding == Some(index) {
+                continue;
+            }
+            for &refusal in &key.refusals {
+                if let Some(finding) = resolution.findings.get_mut(refusal) {
+                    finding.severity = Severity::Warning;
+                }
+            }
+        }
+        findings.append(&mut resolution.findings);
+        findings.extend(decision_findings(
+            &resolution,
+            &decision,
+            resolution_failed,
+            &correct,
+        ));
         let outcome = match suite {
             None => {
                 findings.push(Finding::error(
@@ -318,6 +335,7 @@ fn decision_findings(
     resolution: &Resolution,
     decision: &Decision,
     resolution_failed: bool,
+    correct: &[bool],
 ) -> Vec<Finding> {
     let mut findings = Vec::new();
     if let Some(unobtained) = &resolution.unobtained {
@@ -411,19 +429,32 @@ fn decision_findings(
                     ));
                 }
             }
+            // Two different keys with correct proofs, whatever the opt-ins: each is named.
+            Condition::OneKeyCorrect => findings.push(Finding::error(
+                Phase::Verify,
+                Attribution::Input,
+                FindingDetail::DifferentKeysCorrect {
+                    keys: resolution
+                        .keys
+                        .iter()
+                        .zip(correct)
+                        .filter(|(_, correct)| **correct)
+                        .map(|(key, _)| *key.report.reference())
+                        .collect(),
+                },
+            )),
             // Reported by key resolution's findings of a refused key, and by the suite's
-            // of an incorrect proof. Two different keys with correct proofs need ECDSA.
+            // of an incorrect proof.
             Condition::KeyPresent
             | Condition::DecidingKeyNotRefused
-            | Condition::DecidingProofCorrect
-            | Condition::OneKeyCorrect => {}
+            | Condition::DecidingProofCorrect => {}
         }
     }
     findings
 }
 
 /// What ARCHITECTURE §8's rules consult about each key: its kinds, whether key
-/// resolution refused it, and whether its proof is correct. An entry of the caller's
+/// resolution refused it, and whether its proof is correct. A member of the caller's
 /// key set that was not matched is not the caller-supplied key the rules consult.
 fn keys_and_proofs(keys: &[ProofKey], proofs: &[Option<Proof>]) -> Vec<KeyAndProof> {
     keys.iter()
@@ -452,14 +483,31 @@ fn keys_and_proofs(keys: &[ProofKey], proofs: &[Option<Proof>]) -> Vec<KeyAndPro
 /// key that is the deciding proof key has the deciding proof's result.
 ///
 /// An embedded key's correct proof, while the deciding proof is not correct and the two
-/// keys are known to differ, is key substitution. Any other correct proof that does not
-/// decide is a warning of its own, with the reason.
+/// keys are known to differ, is key substitution. An issuer key that the caller-supplied
+/// key overrides is named by a warning of its own, with its proof's result. Any other
+/// correct proof that does not decide is a warning of its own, with the reason.
 fn key_reports(
     keys: Vec<ProofKey>,
     decision: &Decision,
     outcome: &ProofOutcome,
     proofs: &[Option<Proof>],
 ) -> (KeyProvenance, Vec<Finding>) {
+    // The issuer key, when the caller-supplied key matching found decides in its place,
+    // which only the caller's opt-in to the override allows (ARCHITECTURE §8, rule 1).
+    let caller_decides = decision
+        .deciding
+        .and_then(|d| keys.get(d))
+        .is_some_and(|k| {
+            k.caller == Some(CallerPart::Consulted)
+                && !matches!(
+                    k.report.refused,
+                    Some(Refusal::CallerKeyNotFound | Refusal::CallerKeyAmbiguous)
+                )
+        });
+    let overridden = keys
+        .iter()
+        .position(|k| k.report.kinds.contains(&KeySource::IssuerIdentifier))
+        .filter(|&i| caller_decides && decision.deciding != Some(i));
     let embedded_refusal = if decision.unmet.contains(&Condition::EmbeddedKeyOptIn) {
         Some(Refusal::EmbeddedKeyAlone)
     } else if decision.unmet.contains(&Condition::EmbeddedKeysAgree) {
@@ -488,6 +536,17 @@ fn key_reports(
     let deciding = decision.deciding.and_then(|d| reports.get(d));
     let mut findings = Vec::new();
     for (index, report) in reports.iter().enumerate() {
+        if Some(index) == overridden {
+            findings.push(Finding::new(
+                Phase::Verify,
+                Attribution::Policy,
+                Severity::Warning,
+                FindingDetail::IssuerKeyOverridden {
+                    issuer_key: report.reference(),
+                    proof: report.proof.clone(),
+                },
+            ));
+        }
         if decision.deciding == Some(index) || !correct(&report.proof) {
             continue;
         }
@@ -501,6 +560,8 @@ fn key_reports(
                 embedded_key: report.reference(),
                 key: d.reference(),
             },
+            // Its warning above already gives its proof's result.
+            None if Some(index) == overridden => continue,
             None => FindingDetail::NonDecidingKeyProofCorrect {
                 key: report.reference(),
                 why: report
@@ -618,4 +679,54 @@ fn proof_validity(times: &ProofTimes, ctx: &Context, findings: &mut Vec<Finding>
         return Validity::Expired;
     }
     Validity::Current
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// No Ed25519 input gives two different keys correct proofs; ECDSA public-key recovery
+    /// does, and slice 6 has that fixture. Until then, a decision with the condition unmet
+    /// shows the finding: an error attributed to the input, naming each key whose proof
+    /// is correct (DEVELOPMENT-PLAN.md, milestone 2, decided 2026-11-13).
+    #[test]
+    fn two_different_keys_correct_is_an_input_error_naming_both() {
+        let key = |kind, thumbprint: &str| ProofKey {
+            report: KeyReport {
+                thumbprint: Some(thumbprint.to_owned()),
+                ..KeyReport::new(kind)
+            },
+            key: None,
+            caller: None,
+            refusals: Vec::new(),
+        };
+        let resolution = Resolution {
+            keys: vec![
+                key(KeySource::IssuerIdentifier, "issuer"),
+                key(KeySource::CredentialEmbedded, "embedded"),
+            ],
+            ..Resolution::default()
+        };
+        let decision = Decision {
+            deciding: Some(0),
+            unmet: vec![Condition::OneKeyCorrect],
+        };
+        let findings = decision_findings(&resolution, &decision, false, &[true, true]);
+        let [finding] = findings.as_slice() else {
+            panic!("one finding: {findings:?}")
+        };
+        assert_eq!(
+            (finding.code, finding.attribution, finding.severity),
+            (
+                "verify.different_keys_correct",
+                Attribution::Input,
+                Severity::Error
+            )
+        );
+        let FindingDetail::DifferentKeysCorrect { keys } = &finding.detail else {
+            panic!("{finding:?}")
+        };
+        let thumbprints: Vec<_> = keys.iter().map(|k| k.thumbprint.as_deref()).collect();
+        assert_eq!(thumbprints, [Some("issuer"), Some("embedded")]);
+    }
 }

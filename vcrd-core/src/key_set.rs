@@ -6,7 +6,7 @@ use std::fmt;
 
 use crate::context::Limits;
 use crate::finding::{
-    Attribution, Finding, FindingDetail, JwkProblem, KeySetEntryProblem, Severity,
+    Attribution, Finding, FindingDetail, JwkProblem, KeySetMemberProblem, Severity,
 };
 use crate::json::{self, Json};
 use crate::keys::{Jwk, MatchedBy, PRIVATE_MEMBERS};
@@ -14,17 +14,19 @@ use crate::redact::ClaimValue;
 use crate::registry::KeyType;
 use crate::report::Phase;
 
-/// A JWK Set the caller supplies (RFC 7517 §5): the entries vcrd keeps, and those RFC
-/// 7517 §5 says to ignore. Its `Debug` shows no key material.
+/// A JWK Set the caller supplies (RFC 7517 §5): the members vcrd keeps, and those RFC
+/// 7517 §5 says to ignore. A set, unordered: `index` only names a member, by its position
+/// in the file. Its `Debug` shows no key material.
 #[derive(Clone, Default)]
 pub struct KeySet {
-    pub(crate) entries: Vec<KeySetEntry>,
-    pub(crate) ignored: Vec<IgnoredEntry>,
+    pub(crate) members: Vec<KeySetMember>,
+    pub(crate) ignored: Vec<IgnoredMember>,
 }
 
-/// One entry vcrd keeps, with the members that constrain its use (RFC 7517 §4.2–4.4).
+/// One member vcrd keeps: a JWK, with the parameters that constrain its use (RFC 7517
+/// §4.2–4.4).
 #[derive(Clone)]
-pub(crate) struct KeySetEntry {
+pub(crate) struct KeySetMember {
     /// Its position in `keys`, from 0.
     pub index: usize,
     pub kid: Option<String>,
@@ -32,29 +34,29 @@ pub(crate) struct KeySetEntry {
     /// `use` (RFC 7517 §4.2).
     pub key_use: Option<String>,
     pub key_ops: Option<Vec<String>>,
-    pub key: EntryKey,
-    /// The private or secret members it carries, besides an `oct` key's `k`.
-    pub private_members: Vec<&'static str>,
+    pub key: MemberKey,
+    /// The private or secret parameters it carries, besides an `oct` key's `k`.
+    pub private_parameters: Vec<&'static str>,
 }
 
-/// An entry's key.
+/// A member's key.
 #[derive(Clone)]
-pub(crate) enum EntryKey {
-    /// An asymmetric key's public members, and the key, when vcrd can use it. Boxed, as
-    /// it is many times the size of the other variant.
+pub(crate) enum MemberKey {
+    /// An asymmetric key's public parameters, and the key, when vcrd can use it. Boxed,
+    /// as it is many times the size of the other variant.
     Public(Box<Jwk>),
     /// A symmetric key (RFC 7518 §6.4). `k` is a secret, which vcrd does not yet use.
     Symmetric { k: ClaimValue },
 }
 
-/// An entry RFC 7517 §5 says to ignore, and why.
+/// A member RFC 7517 §5 says to ignore, and why.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct IgnoredEntry {
+pub(crate) struct IgnoredMember {
     /// Its position in `keys`, from 0.
     pub index: usize,
     /// Its `kid`, when that is a string.
     pub kid: Option<String>,
-    pub problem: KeySetEntryProblem,
+    pub problem: KeySetMemberProblem,
 }
 
 /// Why bytes are not a key set vcrd can use: a caller error (ARCHITECTURE §6).
@@ -81,13 +83,13 @@ pub enum NotJwkSet {
     KeysMissing,
     /// `keys` is not an array; `found` is its JSON type.
     KeysNotArray { found: &'static str },
-    /// `keys` appears more than once (RFC 7517 §5 applies §4's rule on member names).
+    /// `keys` appears more than once (RFC 7517 §5 applies §4's rule on parameter names).
     KeysRepeated,
 }
 
 impl KeySet {
     /// Reads a JWK Set, its size and depth checked against `limits` before it is
-    /// parsed (ARCHITECTURE §4). An entry RFC 7517 §5 says to ignore is kept aside, to
+    /// parsed (ARCHITECTURE §4). A member RFC 7517 §5 says to ignore is kept aside, to
     /// be reported, rather than failing the set.
     pub fn parse(bytes: &[u8], limits: &Limits) -> Result<KeySet, KeySetError> {
         if bytes.len() > limits.max_key_set_bytes {
@@ -107,12 +109,13 @@ impl KeySet {
             message: e.to_string(),
         })?;
         let not_set = |found| Err(KeySetError::NotJwkSet(found));
-        let Some(members) = json.members() else {
+        // The JWK Set's own JSON members, which RFC 7517 §5 calls parameters.
+        let Some(parameters) = json.members() else {
             return not_set(NotJwkSet::NotObject {
                 found: json.type_name(),
             });
         };
-        let keys: Vec<&Json> = members
+        let keys: Vec<&Json> = parameters
             .iter()
             .filter(|m| m.name == "keys")
             .map(|m| &m.value)
@@ -130,22 +133,22 @@ impl KeySet {
         };
         let mut set = KeySet::default();
         for (index, item) in items.iter().enumerate() {
-            match entry(index, item) {
-                Ok(entry) => set.entries.push(entry),
+            match member(index, item) {
+                Ok(member) => set.members.push(member),
                 Err(ignored) => set.ignored.push(ignored),
             }
         }
         Ok(set)
     }
 
-    /// The warnings about the set itself, in the order of its entries: each entry it
-    /// ignores, and each with private members (DEVELOPMENT-PLAN.md, milestone 2, decided
-    /// 2026-11-18). Attributed to caller policy: the set is the caller's.
+    /// The warnings about the set itself, by each member's position in the file: each
+    /// member it ignores, and each with private parameters (DEVELOPMENT-PLAN.md, milestone
+    /// 2, decided 2026-11-18). Attributed to caller policy: the set is the caller's.
     pub(crate) fn findings(&self) -> Vec<Finding> {
         let ignored = self.ignored.iter().map(|ignored| {
             (
                 ignored.index,
-                FindingDetail::KeySetEntryIgnored {
+                FindingDetail::KeySetMemberIgnored {
                     index: ignored.index,
                     kid: ignored.kid.clone(),
                     problem: ignored.problem.clone(),
@@ -153,16 +156,16 @@ impl KeySet {
             )
         });
         let private = self
-            .entries
+            .members
             .iter()
-            .filter(|entry| !entry.private_members.is_empty())
-            .map(|entry| {
+            .filter(|member| !member.private_parameters.is_empty())
+            .map(|member| {
                 (
-                    entry.index,
+                    member.index,
                     FindingDetail::KeySetPrivateKey {
-                        index: entry.index,
-                        kid: entry.kid.clone(),
-                        members: entry.private_members.clone(),
+                        index: member.index,
+                        kid: member.kid.clone(),
+                        parameters: member.private_parameters.clone(),
                     },
                 )
             });
@@ -185,35 +188,35 @@ impl KeySet {
 /// What matching found in the caller's key set (DEVELOPMENT-PLAN.md, milestone 2,
 /// decided 2026-11-18).
 pub(crate) enum CallerMatch<'a> {
-    Matched(&'a KeySetEntry, MatchedBy),
+    Matched(&'a KeySetMember, MatchedBy),
     NotFound,
-    /// The entries left: those with the `kid`, or, with no `kid`, every entry.
-    Ambiguous(Vec<&'a KeySetEntry>),
+    /// The members left: those with the `kid`, or, with no `kid`, every member.
+    Ambiguous(Vec<&'a KeySetMember>),
 }
 
 impl KeySet {
-    /// The entry that is the caller-supplied key. `kid` is the header's, resolved as
+    /// The member that is the caller-supplied key. `kid` is the header's, resolved as
     /// inspect resolves it; `takes` says whether the declared algorithm takes a key of
-    /// a type, and only breaks ties among entries with the `kid`.
+    /// a type, and only breaks ties among members with the `kid`.
     pub(crate) fn find(
         &self,
         kid: Option<&str>,
         takes: impl Fn(KeyType<'_>) -> bool,
     ) -> CallerMatch<'_> {
         if let Some(kid) = kid {
-            let equal: Vec<&KeySetEntry> = self
-                .entries
+            let equal: Vec<&KeySetMember> = self
+                .members
                 .iter()
-                .filter(|e| e.kid.as_deref() == Some(kid))
+                .filter(|m| m.kid.as_deref() == Some(kid))
                 .collect();
             match equal.as_slice() {
                 [] => {}
                 [one] => return CallerMatch::Matched(one, MatchedBy::Kid),
                 several => {
-                    let fitting: Vec<&KeySetEntry> = several
+                    let fitting: Vec<&KeySetMember> = several
                         .iter()
                         .copied()
-                        .filter(|e| takes(e.key_type()))
+                        .filter(|m| takes(m.key_type()))
                         .collect();
                     return match fitting.as_slice() {
                         [one] => CallerMatch::Matched(one, MatchedBy::Kid),
@@ -222,22 +225,22 @@ impl KeySet {
                 }
             }
         }
-        match self.entries.as_slice() {
+        match self.members.as_slice() {
             [only] if kid.is_none() || only.kid.is_none() => {
-                CallerMatch::Matched(only, MatchedBy::SoleEntry)
+                CallerMatch::Matched(only, MatchedBy::SoleMember)
             }
-            [_, _, ..] if kid.is_none() => CallerMatch::Ambiguous(self.entries.iter().collect()),
+            [_, _, ..] if kid.is_none() => CallerMatch::Ambiguous(self.members.iter().collect()),
             _ => CallerMatch::NotFound,
         }
     }
 }
 
-impl KeySetEntry {
-    /// The entry's key type: its `kty`, and its `crv` where it has one.
+impl KeySetMember {
+    /// The member's key type: its `kty`, and its `crv` where it has one.
     pub(crate) fn key_type(&self) -> KeyType<'_> {
         match &self.key {
-            EntryKey::Public(jwk) => {
-                let member = |name| {
+            MemberKey::Public(jwk) => {
+                let parameter = |name| {
                     jwk.public
                         .members
                         .iter()
@@ -245,11 +248,11 @@ impl KeySetEntry {
                         .map(|(_, v)| v.as_str())
                 };
                 KeyType {
-                    kty: member("kty").unwrap_or_default(),
-                    crv: member("crv"),
+                    kty: parameter("kty").unwrap_or_default(),
+                    crv: parameter("crv"),
                 }
             }
-            EntryKey::Symmetric { .. } => KeyType {
+            MemberKey::Symmetric { .. } => KeyType {
                 kty: "oct",
                 crv: None,
             },
@@ -257,34 +260,35 @@ impl KeySetEntry {
     }
 }
 
-/// One entry of `keys`, or why RFC 7517 §5 says to ignore it.
-fn entry(index: usize, json: &Json) -> Result<KeySetEntry, IgnoredEntry> {
+/// One member of `keys`, or why RFC 7517 §5 says to ignore it. The member is a JWK,
+/// whose own JSON members RFC 7517 §4 calls parameters.
+fn member(index: usize, json: &Json) -> Result<KeySetMember, IgnoredMember> {
     let kid_text = json.get("kid").and_then(Json::as_str).map(str::to_owned);
-    let ignored = |problem| IgnoredEntry {
+    let ignored = |problem| IgnoredMember {
         index,
         kid: kid_text.clone(),
         problem,
     };
-    let Some(members) = json.members() else {
-        return Err(ignored(KeySetEntryProblem::NotObject));
+    let Some(parameters) = json.members() else {
+        return Err(ignored(KeySetMemberProblem::NotObject));
     };
-    // RFC 7517 §4 lets a parser reject a JWK whose member names repeat.
-    if let Some(repeated) = members
+    // RFC 7517 §4 lets a parser reject a JWK whose parameter names repeat.
+    if let Some(repeated) = parameters
         .iter()
         .enumerate()
-        .find(|(i, m)| members.iter().skip(i + 1).any(|n| n.name == m.name))
-        .map(|(_, m)| m.name.clone())
+        .find(|(i, p)| parameters.iter().skip(i + 1).any(|q| q.name == p.name))
+        .map(|(_, p)| p.name.clone())
     {
-        return Err(ignored(KeySetEntryProblem::MemberRepeated {
-            member: repeated,
+        return Err(ignored(KeySetMemberProblem::ParameterRepeated {
+            parameter: repeated,
         }));
     }
-    let string = |member: &'static str| match json.get(member) {
+    let string = |parameter: &'static str| match json.get(parameter) {
         None => Ok(None),
         Some(value) => value
             .as_str()
             .map(|s| Some(s.to_owned()))
-            .ok_or_else(|| ignored(KeySetEntryProblem::MemberInvalid { member })),
+            .ok_or_else(|| ignored(KeySetMemberProblem::ParameterInvalid { parameter })),
     };
     let kid = string("kid")?;
     let alg = string("alg")?;
@@ -295,55 +299,63 @@ fn entry(index: usize, json: &Json) -> Result<KeySetEntry, IgnoredEntry> {
             ops.iter()
                 .map(|op| op.as_str().map(str::to_owned))
                 .collect::<Option<Vec<_>>>()
-                .ok_or_else(|| ignored(KeySetEntryProblem::MemberInvalid { member: "key_ops" }))?,
+                .ok_or_else(|| {
+                    ignored(KeySetMemberProblem::ParameterInvalid {
+                        parameter: "key_ops",
+                    })
+                })?,
         ),
         Some(_) => {
-            return Err(ignored(KeySetEntryProblem::MemberInvalid {
-                member: "key_ops",
+            return Err(ignored(KeySetMemberProblem::ParameterInvalid {
+                parameter: "key_ops",
             }));
         }
     };
     let symmetric = json.get("kty").and_then(Json::as_str) == Some("oct");
     let key = if symmetric {
         match json.get("k") {
-            Some(Json::Scalar(k)) if k.as_str().is_some() => EntryKey::Symmetric { k: k.clone() },
-            _ => return Err(ignored(KeySetEntryProblem::MemberMissing { member: "k" })),
+            Some(Json::Scalar(k)) if k.as_str().is_some() => MemberKey::Symmetric { k: k.clone() },
+            _ => {
+                return Err(ignored(KeySetMemberProblem::ParameterMissing {
+                    parameter: "k",
+                }));
+            }
         }
     } else {
-        EntryKey::Public(Box::new(Jwk::parse(json).map_err(|problem| {
+        MemberKey::Public(Box::new(Jwk::parse(json).map_err(|problem| {
             ignored(match problem {
-                JwkProblem::NotObject => KeySetEntryProblem::NotObject,
-                JwkProblem::KtyMissing => KeySetEntryProblem::KtyMissing,
-                JwkProblem::KtyUnknown { kty } => KeySetEntryProblem::KtyUnknown { kty },
+                JwkProblem::NotObject => KeySetMemberProblem::NotObject,
+                JwkProblem::KtyMissing => KeySetMemberProblem::KtyMissing,
+                JwkProblem::KtyUnknown { kty } => KeySetMemberProblem::KtyUnknown { kty },
                 JwkProblem::MemberMissing { member } => {
-                    KeySetEntryProblem::MemberMissing { member }
+                    KeySetMemberProblem::ParameterMissing { parameter: member }
                 }
                 // `oct` is read above, so `Jwk::parse` does not see it.
-                JwkProblem::Symmetric | JwkProblem::KeyInvalid => KeySetEntryProblem::KeyInvalid,
+                JwkProblem::Symmetric | JwkProblem::KeyInvalid => KeySetMemberProblem::KeyInvalid,
             })
         })?))
     };
-    // An `oct` key's `k` is the key itself, not a private member beside it.
-    let private_members = PRIVATE_MEMBERS
+    // An `oct` key's `k` is the key itself, not a private parameter beside it.
+    let private_parameters = PRIVATE_MEMBERS
         .iter()
         .copied()
-        .filter(|&member| !(symmetric && member == "k") && json.get(member).is_some())
+        .filter(|&parameter| !(symmetric && parameter == "k") && json.get(parameter).is_some())
         .collect();
-    Ok(KeySetEntry {
+    Ok(KeySetMember {
         index,
         kid,
         alg,
         key_use,
         key_ops,
         key,
-        private_members,
+        private_parameters,
     })
 }
 
 impl fmt::Debug for KeySet {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("KeySet")
-            .field("entries", &self.entries.len())
+            .field("members", &self.members.len())
             .field("ignored", &self.ignored)
             .finish()
     }
@@ -369,8 +381,8 @@ impl std::error::Error for KeySetError {}
 
 impl fmt::Display for NotJwkSet {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        const SET: &str = "a JWK Set is an object whose \"keys\" member is an array of \
-                           JWKs (RFC 7517 §5)";
+        const SET: &str = "a JWK Set is an object whose \"keys\" parameter is an array of \
+                           JWKs, the set's members (RFC 7517 §5)";
         match self {
             NotJwkSet::NotObject { found: "array" } => write!(
                 f,
@@ -381,13 +393,13 @@ impl fmt::Display for NotJwkSet {
                 f,
                 "a single JWK, not a JWK Set: put it in {{\"keys\": [...]}}; {SET}"
             ),
-            NotJwkSet::KeysMissing => write!(f, "an object with no \"keys\" member; {SET}"),
+            NotJwkSet::KeysMissing => write!(f, "an object with no \"keys\" parameter; {SET}"),
             NotJwkSet::KeysNotArray { found } => {
                 write!(f, "\"keys\" is a JSON {found}, not an array; {SET}")
             }
             NotJwkSet::KeysRepeated => write!(
                 f,
-                "\"keys\" appears more than once, where member names must be unique \
+                "\"keys\" appears more than once, where parameter names must be unique \
                  (RFC 7517 §4, §5)"
             ),
         }
@@ -398,7 +410,7 @@ impl fmt::Display for NotJwkSet {
 mod tests {
     use super::*;
 
-    /// RFC 8037 appendix A.1–A.2's key: its private and public members.
+    /// RFC 8037 appendix A.1–A.2's key: its private and public parameters.
     const D: &str = "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A";
     const X: &str = "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo";
     const K: &str = "c2VjcmV0IGtleSBtYXRlcmlhbA";
@@ -416,7 +428,7 @@ mod tests {
     #[test]
     fn a_jwk_set_is_read_and_anything_else_is_named() {
         let empty = parse(r#"{"keys": []}"#).unwrap();
-        assert!(empty.entries.is_empty() && empty.ignored.is_empty());
+        assert!(empty.members.is_empty() && empty.ignored.is_empty());
         for (text, expected) in [
             ("[]", not_jwk_set(NotJwkSet::NotObject { found: "array" })),
             (
@@ -484,11 +496,11 @@ mod tests {
         );
     }
 
-    /// RFC 7517 §5: an entry with a key type vcrd does not know, a required member
+    /// RFC 7517 §5: a member with a key type vcrd does not know, a required parameter
     /// missing, or a value out of range is ignored, and the set is still read. Each is
     /// kept aside with why, by its position in `keys`.
     #[test]
-    fn an_ignored_entry_says_why_and_the_rest_are_kept() {
+    fn an_ignored_member_says_why_and_the_rest_are_kept() {
         let text = format!(
             r#"{{"keys": [
                 7,
@@ -506,17 +518,17 @@ mod tests {
             ]}}"#
         );
         let set = parse(&text).unwrap();
-        let ignored = |index, kid: Option<&str>, problem| IgnoredEntry {
+        let ignored = |index, kid: Option<&str>, problem| IgnoredMember {
             index,
             kid: kid.map(str::to_owned),
             problem,
         };
-        use KeySetEntryProblem::*;
+        use KeySetMemberProblem::*;
         assert_eq!(
             set.ignored,
             [
                 ignored(0, None, NotObject),
-                ignored(1, None, MemberMissing { member: "x" }),
+                ignored(1, None, ParameterMissing { parameter: "x" }),
                 ignored(
                     2,
                     Some("k2"),
@@ -526,36 +538,42 @@ mod tests {
                 ),
                 ignored(3, Some("k3"), KtyMissing),
                 ignored(4, None, KeyInvalid),
-                ignored(5, None, MemberInvalid { member: "kid" }),
-                ignored(6, None, MemberInvalid { member: "use" }),
-                ignored(7, None, MemberInvalid { member: "key_ops" }),
-                ignored(8, None, MemberInvalid { member: "alg" }),
+                ignored(5, None, ParameterInvalid { parameter: "kid" }),
+                ignored(6, None, ParameterInvalid { parameter: "use" }),
+                ignored(
+                    7,
+                    None,
+                    ParameterInvalid {
+                        parameter: "key_ops"
+                    }
+                ),
+                ignored(8, None, ParameterInvalid { parameter: "alg" }),
                 ignored(
                     9,
                     Some("k9"),
-                    MemberRepeated {
-                        member: "x".to_owned()
+                    ParameterRepeated {
+                        parameter: "x".to_owned()
                     }
                 ),
             ]
         );
-        let [entry] = set.entries.as_slice() else {
-            panic!("one entry kept: {set:?}")
+        let [member] = set.members.as_slice() else {
+            panic!("one member kept: {set:?}")
         };
-        assert_eq!(entry.index, 10);
-        assert_eq!(entry.kid.as_deref(), Some("k10"));
-        assert_eq!(entry.alg.as_deref(), Some("Ed25519"));
-        assert_eq!(entry.key_use.as_deref(), Some("sig"));
-        assert_eq!(entry.key_ops, Some(vec!["verify".to_owned()]));
-        assert!(entry.private_members.is_empty());
-        assert!(matches!(&entry.key, EntryKey::Public(jwk) if jwk.key.is_some()));
+        assert_eq!(member.index, 10);
+        assert_eq!(member.kid.as_deref(), Some("k10"));
+        assert_eq!(member.alg.as_deref(), Some("Ed25519"));
+        assert_eq!(member.key_use.as_deref(), Some("sig"));
+        assert_eq!(member.key_ops, Some(vec!["verify".to_owned()]));
+        assert!(member.private_parameters.is_empty());
+        assert!(matches!(&member.key, MemberKey::Public(jwk) if jwk.key.is_some()));
     }
 
-    /// An `oct` entry is kept, though vcrd cannot yet use it (DEVELOPMENT-PLAN.md,
-    /// milestone 2, decided 2026-11-16); its `k` is the key, not a private member. An
-    /// asymmetric key's private members are noted, to be reported.
+    /// An `oct` member is kept, though vcrd cannot yet use it (DEVELOPMENT-PLAN.md,
+    /// milestone 2, decided 2026-11-16); its `k` is the key, not a private parameter. An
+    /// asymmetric key's private parameters are noted, to be reported.
     #[test]
-    fn an_oct_entry_is_kept_and_private_members_are_noted() {
+    fn an_oct_member_is_kept_and_private_parameters_are_noted() {
         let text = format!(
             r#"{{"keys": [
                 {{"kty": "oct", "k": "{K}"}},
@@ -564,26 +582,26 @@ mod tests {
             ]}}"#
         );
         let set = parse(&text).unwrap();
-        let [oct, private] = set.entries.as_slice() else {
-            panic!("two entries kept: {set:?}")
+        let [oct, private] = set.members.as_slice() else {
+            panic!("two members kept: {set:?}")
         };
-        assert!(matches!(&oct.key, EntryKey::Symmetric { k } if k.as_str() == Some(K)));
-        assert!(oct.private_members.is_empty());
-        assert_eq!(private.private_members, ["d"]);
+        assert!(matches!(&oct.key, MemberKey::Symmetric { k } if k.as_str() == Some(K)));
+        assert!(oct.private_parameters.is_empty());
+        assert_eq!(private.private_parameters, ["d"]);
         assert_eq!(
             set.ignored,
-            [IgnoredEntry {
+            [IgnoredMember {
                 index: 2,
                 kid: None,
-                problem: KeySetEntryProblem::MemberMissing { member: "k" },
+                problem: KeySetMemberProblem::ParameterMissing { parameter: "k" },
             }]
         );
     }
 
-    /// A set of Ed25519 entries (`true`) and EC entries (`false`), each with the `kid`
+    /// A set of Ed25519 members (`true`) and EC members (`false`), each with the `kid`
     /// given, if any.
-    fn set_of(entries: &[(Option<&str>, bool)]) -> KeySet {
-        let entries: Vec<String> = entries
+    fn set_of(members: &[(Option<&str>, bool)]) -> KeySet {
+        let members: Vec<String> = members
             .iter()
             .map(|(kid, ed25519)| {
                 let kid = kid.map_or_else(String::new, |k| format!(r#", "kid": "{k}""#));
@@ -594,31 +612,31 @@ mod tests {
                 }
             })
             .collect();
-        let set = parse(&format!(r#"{{"keys": [{}]}}"#, entries.join(", "))).unwrap();
+        let set = parse(&format!(r#"{{"keys": [{}]}}"#, members.join(", "))).unwrap();
         assert!(set.ignored.is_empty(), "{set:?}");
         set
     }
 
     /// The rules of matching (DEVELOPMENT-PLAN.md, milestone 2, decided 2026-11-13 and
     /// 2026-11-18), for an algorithm that takes Ed25519 keys alone: the `kid`; among
-    /// entries that share it, the key type; otherwise the sole entry, when it or the
+    /// members that share it, the key type; otherwise the sole member, when it or the
     /// header has no `kid`.
     #[test]
-    fn matching_takes_the_kid_then_the_key_type_then_the_sole_entry() {
+    fn matching_takes_the_kid_then_the_key_type_then_the_sole_member() {
         let takes = |t: KeyType<'_>| t.kty == "OKP" && t.crv == Some("Ed25519");
         let (a, b, c) = (Some("a"), Some("b"), Some("c"));
         let (ed, ec) = (true, false);
-        for (entries, kid, expected) in [
+        for (members, kid, expected) in [
             (&[(a, ed)][..], a, ("kid", vec![0])),
             (&[(a, ec), (a, ed)], a, ("kid", vec![1])),
             (&[(a, ed), (a, ed)], a, ("ambiguous", vec![0, 1])),
             (&[(a, ec), (a, ec)], a, ("ambiguous", vec![0, 1])),
-            // One entry with the `kid` is the match, whatever its type: whether it fits
+            // One member with the `kid` is the match, whatever its type: whether it fits
             // the algorithm is the suite's check.
             (&[(a, ec)], a, ("kid", vec![0])),
-            (&[(None, ed)], a, ("sole_entry", vec![0])),
-            (&[(b, ed)], None, ("sole_entry", vec![0])),
-            (&[(None, ed)], None, ("sole_entry", vec![0])),
+            (&[(None, ed)], a, ("sole_member", vec![0])),
+            (&[(b, ed)], None, ("sole_member", vec![0])),
+            (&[(None, ed)], None, ("sole_member", vec![0])),
             (&[(b, ed)], a, ("not_found", vec![])),
             (&[(b, ed), (c, ed)], a, ("not_found", vec![])),
             (&[(a, ed), (None, ed)], c, ("not_found", vec![])),
@@ -626,18 +644,18 @@ mod tests {
             (&[], a, ("not_found", vec![])),
             (&[], None, ("not_found", vec![])),
         ] {
-            let set = set_of(entries);
+            let set = set_of(members);
             let found = match set.find(kid, takes) {
-                CallerMatch::Matched(entry, MatchedBy::Kid) => ("kid", vec![entry.index]),
-                CallerMatch::Matched(entry, MatchedBy::SoleEntry) => {
-                    ("sole_entry", vec![entry.index])
+                CallerMatch::Matched(member, MatchedBy::Kid) => ("kid", vec![member.index]),
+                CallerMatch::Matched(member, MatchedBy::SoleMember) => {
+                    ("sole_member", vec![member.index])
                 }
                 CallerMatch::NotFound => ("not_found", vec![]),
                 CallerMatch::Ambiguous(left) => {
-                    ("ambiguous", left.iter().map(|e| e.index).collect())
+                    ("ambiguous", left.iter().map(|m| m.index).collect())
                 }
             };
-            assert_eq!(found, expected, "{entries:?}, kid {kid:?}");
+            assert_eq!(found, expected, "{members:?}, kid {kid:?}");
         }
     }
 
@@ -652,7 +670,7 @@ mod tests {
             ]}}"#
         );
         let set = parse(&text).unwrap();
-        assert_eq!(set.entries.len(), 2);
+        assert_eq!(set.members.len(), 2);
         let debug = format!("{set:?}");
         for value in [K, X, D] {
             assert!(!debug.contains(value), "{debug}");

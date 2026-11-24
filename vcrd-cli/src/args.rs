@@ -57,7 +57,7 @@ pub struct Options {
     pub verbosity: u8,
     /// Show masked values in cleartext: 1, or the flag alone, shows every claim; 2
     /// also shows cryptographic secrets, such as a private key the credential carries.
-    /// Write the level as `--unsafe=2` or `--unsafe 2`. A warning says so, on standard
+    /// The level is written `--unsafe=2` or `--unsafe 2`. A warning says so, on standard
     /// error and in the result.
     #[arg(
         long = "unsafe",
@@ -71,15 +71,21 @@ pub struct Options {
     )]
     pub unsafe_level: u8,
     /// Let a key the credential carries about its own proof decide the outcome when
-    /// there is neither an issuer key nor a key of your own. Such a key is bound to
-    /// nothing: a correct proof shows only that the signer holds its private key.
+    /// there is neither an issuer key nor a key provided in a key set. Such a key is
+    /// bound to nothing: a correct proof shows only that the signer holds its private
+    /// key.
     #[arg(long, global = true)]
     pub allow_embedded_key: bool,
-    /// A JWK Set (RFC 7517 §5) of keys of your own. The entry the credential's `kid`
-    /// names, or the set's sole entry, is your key, which must be the issuer key when
-    /// vcrd can obtain that.
+    /// A JWK Set (RFC 7517 §5) of keys provided in the specified file. The key set
+    /// member used to decide correctness will be the one that the credential's `kid`
+    /// identifies or the set's sole member, whose key must be the issuer key when vcrd
+    /// can obtain it.
     #[arg(long, global = true, value_name = "FILE")]
     pub key_set: Option<PathBuf>,
+    /// Let a key from the key set decide in place of the issuer key when the two differ.
+    /// A warning names the issuer key and its proof's result.
+    #[arg(long, global = true)]
+    pub allow_key_override: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]

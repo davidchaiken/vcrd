@@ -35,10 +35,10 @@ pub use document::{
     ProofMaterial, ProofTime, ProofTimes, Timestamp,
 };
 pub use finding::{
-    Attribution, Base64urlProblem, ClaimLocation, CritProblem, DateField, DidKeyProblem,
-    EntryExclusion, Finding, FindingDetail, IssuerKeyUnobtainable, IssuerProblem, JwkProblem,
-    JwsJsonSyntax, JwsSegment, KeyRef, KeySetEntryProblem, KeySourceKind, LanguageValueProblem,
-    NotDeciding, Severity, WeakKeyCriterion,
+    Attribution, Base64urlProblem, ClaimLocation, CritProblem, DateField, DidKeyProblem, Finding,
+    FindingDetail, IssuerKeyUnobtainable, IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment,
+    KeyRef, KeySetMemberProblem, KeySourceKind, LanguageValueProblem, MemberExclusion, NotDeciding,
+    Severity, WeakKeyCriterion,
 };
 pub use json::{DuplicateName, Json, Member, nesting_depth};
 pub use key_set::{KeySet, KeySetError, NotJwkSet};

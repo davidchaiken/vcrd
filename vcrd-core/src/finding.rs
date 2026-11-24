@@ -4,7 +4,7 @@ use time::OffsetDateTime;
 
 use crate::keys::{KeySource, Refusal};
 use crate::registry::{FormatId, SuiteId};
-use crate::report::Phase;
+use crate::report::{Phase, ProofOutcome};
 
 /// One condition a phase found.
 #[derive(Clone, Debug)]
@@ -445,48 +445,48 @@ pub enum FindingDetail {
     /// substitution, where the deciding proof is not correct, is
     /// `EmbeddedKeyProofCorrect` instead.
     NonDecidingKeyProofCorrect { key: Box<KeyRef>, why: NotDeciding },
-    /// An entry of the caller's key set that RFC 7517 §5 says to ignore. A warning
+    /// A member of the caller's key set that RFC 7517 §5 says to ignore. A warning
     /// attributed to caller policy.
-    KeySetEntryIgnored {
+    KeySetMemberIgnored {
         /// Its position in `keys`, from 0.
         index: usize,
         kid: Option<String>,
-        problem: KeySetEntryProblem,
+        problem: KeySetMemberProblem,
     },
-    /// An entry of the caller's key set carries private or secret members, which a
+    /// A member of the caller's key set carries private or secret parameters, which a
     /// verifier does not need: whoever has the file has the private key. A warning
     /// attributed to caller policy.
     KeySetPrivateKey {
         /// Its position in `keys`, from 0.
         index: usize,
         kid: Option<String>,
-        members: Vec<&'static str>,
+        parameters: Vec<&'static str>,
     },
-    /// No entry of the caller's key set matches: none has the `kid`, resolved as inspect
-    /// resolves it, and the set has no sole entry to match instead. Attributed to caller
+    /// No member of the caller's key set matches: none has the `kid`, resolved as inspect
+    /// resolves it, and the set has no sole member to match instead. Attributed to caller
     /// policy; never a fall back to the issuer key alone.
     CallerKeyNotFound { kid: Option<String> },
-    /// More than one entry of the caller's key set is left: several with the `kid` that
+    /// More than one member of the caller's key set is left: several with the `kid` that
     /// the algorithm's key type does not narrow to one, or, with no `kid`, more than one
-    /// entry. Attributed to caller policy.
+    /// member. Attributed to caller policy.
     CallerKeyAmbiguous {
         kid: Option<String>,
         candidates: Vec<KeyRef>,
     },
-    /// The matched entry's own `alg`, `use` or `key_ops` excludes the declared algorithm,
+    /// The matched member's own `alg`, `use` or `key_ops` excludes the declared algorithm,
     /// so no proof is made with it (RFC 8725 §3.1). Attributed to caller policy.
     CallerKeyExcluded {
         key: Box<KeyRef>,
-        exclusion: EntryExclusion,
+        exclusion: MemberExclusion,
         algorithm: String,
     },
-    /// The matched entry is a key of a type vcrd cannot use. Attributed to vcrd.
+    /// The matched member is a key of a type vcrd cannot use. Attributed to vcrd.
     CallerKeyTypeUnsupported {
         key: Box<KeyRef>,
         kty: String,
         crv: Option<String>,
     },
-    /// The matched entry's `alg` names the declared algorithm by its other name, `EdDSA`
+    /// The matched member's `alg` names the declared algorithm by its other name, `EdDSA`
     /// for `Ed25519` or the reverse, with an Ed25519 key: one algorithm (RFC 8037 §3.1;
     /// RFC 9864 §2.2), which a verifier that compares the names refuses. A warning
     /// attributed to caller policy.
@@ -502,6 +502,17 @@ pub enum FindingDetail {
         caller_key: Box<KeyRef>,
         issuer_key: Box<KeyRef>,
     },
+    /// The caller-supplied key decides in place of the issuer key unlike it, as the caller
+    /// opted in to (ARCHITECTURE §8, rule 1). A warning attributed to caller policy,
+    /// naming the issuer key and its proof's result.
+    IssuerKeyOverridden {
+        issuer_key: Box<KeyRef>,
+        proof: ProofOutcome,
+    },
+    /// Two different keys both give correct proofs, as ECDSA public-key recovery can
+    /// produce: the signature binds no one key, whatever the caller's opt-ins
+    /// (ARCHITECTURE §8). Attributed to the input.
+    DifferentKeysCorrect { keys: Vec<KeyRef> },
 }
 
 impl FindingDetail {
@@ -596,7 +607,7 @@ impl FindingDetail {
             FindingDetail::EmbeddedKeyRefused { .. } => "verify.embedded_key_refused",
             FindingDetail::EmbeddedKeyMismatch { .. } => "verify.embedded_key_mismatch",
             FindingDetail::EmbeddedKeyProofCorrect { .. } => "verify.embedded_key_proof_correct",
-            FindingDetail::KeySetEntryIgnored { .. } => "verify.key_set_entry_ignored",
+            FindingDetail::KeySetMemberIgnored { .. } => "verify.key_set_member_ignored",
             FindingDetail::KeySetPrivateKey { .. } => "verify.key_set_private_key",
             FindingDetail::CallerKeyNotFound { .. } => "verify.caller_key_not_found",
             FindingDetail::CallerKeyAmbiguous { .. } => "verify.caller_key_ambiguous",
@@ -604,6 +615,8 @@ impl FindingDetail {
             FindingDetail::CallerKeyTypeUnsupported { .. } => "verify.caller_key_type_unsupported",
             FindingDetail::CallerKeyAlgAlias { .. } => "verify.caller_key_alg_alias",
             FindingDetail::CallerKeyNotIssuerKey { .. } => "verify.caller_key_not_issuer_key",
+            FindingDetail::IssuerKeyOverridden { .. } => "verify.issuer_key_overridden",
+            FindingDetail::DifferentKeysCorrect { .. } => "verify.different_keys_correct",
             FindingDetail::NonDecidingKeyProofCorrect { .. } => {
                 "verify.non_deciding_key_proof_correct"
             }
@@ -676,17 +689,17 @@ pub struct KeyRef {
     pub method: Option<&'static str>,
     /// Where the credential carries it, e.g. `header.jwk`, when it is an embedded key.
     pub location: Option<&'static str>,
-    /// The key set entry's own `kid`, when the key is a caller-supplied key that has one.
+    /// The key set member's own `kid`, when the key is a caller-supplied key that has one.
     pub kid: Option<String>,
     /// Absent for a key vcrd names but cannot decode, a symmetric key, and a
     /// caller-supplied key that matching did not find.
     pub thumbprint: Option<String>,
 }
 
-/// What, in a key set entry's own members, excludes the declared algorithm (RFC 8725
+/// What, in a key set member's own parameters, excludes the declared algorithm (RFC 8725
 /// §3.1; RFC 7517 §4.2–4.4).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum EntryExclusion {
+pub enum MemberExclusion {
     /// `alg` names another algorithm.
     Alg { alg: String },
     /// `use` is not `sig`.
@@ -739,23 +752,24 @@ pub enum JwkProblem {
     KeyInvalid,
 }
 
-/// Why an entry of the caller's key set is ignored (RFC 7517 §5).
+/// Why a member of the caller's key set is ignored (RFC 7517 §5). A member is a JWK, whose
+/// own JSON members RFC 7517 §4 calls parameters, as these names do.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum KeySetEntryProblem {
+pub enum KeySetMemberProblem {
     /// Not a JSON object.
     NotObject,
-    /// A member name appears more than once (RFC 7517 §4).
-    MemberRepeated { member: String },
+    /// A parameter's name appears more than once (RFC 7517 §4).
+    ParameterRepeated { parameter: String },
     /// No `kty`, or one that is not a string.
     KtyMissing,
     /// A key type vcrd does not know.
     KtyUnknown { kty: String },
-    /// A member the key type requires is absent or not a string.
-    MemberMissing { member: &'static str },
+    /// A parameter the key type requires is absent or not a string.
+    ParameterMissing { parameter: &'static str },
     /// `kid`, `alg` or `use` is not a string, or `key_ops` is not an array of strings
     /// (RFC 7517 §4.2–4.5).
-    MemberInvalid { member: &'static str },
-    /// The members do not decode to a key, such as an Ed25519 `x` that is not a point.
+    ParameterInvalid { parameter: &'static str },
+    /// The parameters do not decode to a key, such as an Ed25519 `x` that is not a point.
     KeyInvalid,
 }
 

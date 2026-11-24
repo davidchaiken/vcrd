@@ -10,10 +10,10 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use vcrd_core::{
     Attribution, Base64urlProblem, BlockReason, Check, ClaimLocation, Context, CritProblem,
-    DateField, DeclaredAlgorithm, DidKeyProblem, Document, DocumentKind, EntryExclusion, Finding,
-    FindingDetail, IssuerKeyUnobtainable, IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment,
-    KeyRef, KeySecret, KeySetEntryProblem, KeySourceKind, LanguageValueProblem, LeafClass,
-    MatchedBy, Missing, NotDeciding, NotEvaluatedReason, Phase, PhaseOutcome, ProofOutcome,
+    DateField, DeclaredAlgorithm, DidKeyProblem, Document, DocumentKind, Finding, FindingDetail,
+    IssuerKeyUnobtainable, IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment, KeyRef, KeySecret,
+    KeySetMemberProblem, KeySourceKind, LanguageValueProblem, LeafClass, MatchedBy,
+    MemberExclusion, Missing, NotDeciding, NotEvaluatedReason, Phase, PhaseOutcome, ProofOutcome,
     PublicJwk, Refusal, Rendered, RenderedJson, Report, RevealLocation, Revealed, Severity,
     Treatment, Validity, ValueKind, WeakKeyCriterion, render,
 };
@@ -173,21 +173,21 @@ pub struct KeyView {
     /// Where the credential carries the embedded key, e.g. `header.jwk`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<&'static str>,
-    /// The key set entry's own `kid`, for a caller-supplied key that has one.
+    /// The key set member's own `kid`, for a caller-supplied key that has one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kid: Option<String>,
-    /// How matching found the caller-supplied key: `kid` or `sole_entry`.
+    /// How matching found the caller-supplied key: `kid` or `sole_member`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matched_by: Option<&'static str>,
     /// The RFC 7638 thumbprint; absent for a key vcrd names but cannot decode, a
     /// symmetric key, and a caller-supplied key that matching did not find.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thumbprint: Option<String>,
-    /// The members the thumbprint covers, or a symmetric key's `kty`, with its `k` when
-    /// that is shown.
+    /// The JWK parameters the thumbprint covers, or a symmetric key's `kty`, with its `k`
+    /// when that is shown.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jwk: Option<Value>,
-    /// A symmetric key's secret members left out of `jwk`, such as `k`.
+    /// A symmetric key's secret parameters left out of `jwk`, such as `k`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub masked: Vec<&'static str>,
     /// The proof's result with it as the proof key.
@@ -297,12 +297,12 @@ pub fn envelope(report: &Report, ctx: &Context, size: Option<u64>) -> Envelope {
     for (p, proof) in proofs.iter().enumerate() {
         for (k, key) in proof.key_provenance.keys.iter().enumerate() {
             if let Some(KeySecret {
-                member,
+                parameter,
                 value: Some(_),
             }) = &key.secret
             {
                 reveals.push(RevealView {
-                    path: key_secret_path(p, k, member),
+                    path: key_secret_path(p, k, parameter),
                     location: "proofs",
                     visibility: "revealed",
                 });
@@ -475,7 +475,7 @@ fn proofs(report: &Report) -> Vec<ProofView> {
                             kid: k.kid.clone(),
                             matched_by: k.matched_by.map(|m| match m {
                                 MatchedBy::Kid => "kid",
-                                MatchedBy::SoleEntry => "sole_entry",
+                                MatchedBy::SoleMember => "sole_member",
                             }),
                             thumbprint: k.thumbprint.clone(),
                             jwk: k.jwk.as_ref().map(|j| jwk(j, k.secret.as_ref())),
@@ -483,7 +483,7 @@ fn proofs(report: &Report) -> Vec<ProofView> {
                                 .secret
                                 .iter()
                                 .filter(|s| s.value.is_none())
-                                .map(|s| s.member)
+                                .map(|s| s.parameter)
                                 .collect(),
                             proof: proof_outcome(&k.proof),
                             refused: k.refused.map(refusal_name),
@@ -953,27 +953,27 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
                 NotDeciding::AnotherKeyDecides => "another_key_decides",
             },
         }),
-        FindingDetail::KeySetEntryIgnored {
+        FindingDetail::KeySetMemberIgnored {
             index,
             kid,
             problem,
-        } => key_set_entry(
-            "key_set_entry_ignored",
+        } => key_set_member(
+            "key_set_member_ignored",
             *index,
             kid.as_deref(),
             "problem",
-            key_set_entry_problem(problem),
+            key_set_member_problem(problem),
         ),
         FindingDetail::KeySetPrivateKey {
             index,
             kid,
-            members,
-        } => key_set_entry(
+            parameters,
+        } => key_set_member(
             "key_set_private_key",
             *index,
             kid.as_deref(),
-            "members",
-            json!(members),
+            "parameters",
+            json!(parameters),
         ),
         FindingDetail::CallerKeyNotFound { kid } => {
             json!({"type": "caller_key_not_found", "kid": kid})
@@ -988,15 +988,15 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
             exclusion,
             algorithm,
         } => {
-            let (member, value) = match exclusion {
-                EntryExclusion::Alg { alg } => ("alg", json!(alg)),
-                EntryExclusion::Use { value } => ("use", json!(value)),
-                EntryExclusion::KeyOps { ops } => ("key_ops", json!(ops)),
+            let (parameter, value) = match exclusion {
+                MemberExclusion::Alg { alg } => ("alg", json!(alg)),
+                MemberExclusion::Use { value } => ("use", json!(value)),
+                MemberExclusion::KeyOps { ops } => ("key_ops", json!(ops)),
             };
             json!({
                 "type": "caller_key_excluded",
                 "key": key_ref(key),
-                "member": member,
+                "parameter": parameter,
                 "value": value,
                 "algorithm": algorithm,
             })
@@ -1021,31 +1021,46 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
             "caller_key": key_ref(caller_key),
             "issuer_key": key_ref(issuer_key),
         }),
+        FindingDetail::IssuerKeyOverridden { issuer_key, proof } => json!({
+            "type": "issuer_key_overridden",
+            "issuer_key": key_ref(issuer_key),
+            "proof": proof_outcome(proof),
+        }),
+        FindingDetail::DifferentKeysCorrect { keys } => json!({
+            "type": "different_keys_correct",
+            "keys": keys.iter().map(key_ref).collect::<Vec<_>>(),
+        }),
     }
 }
 
-/// A finding about one entry of the caller's key set: its position in `keys`, its
-/// `kid` when it has one, and one more member.
-fn key_set_entry(kind: &str, index: usize, kid: Option<&str>, name: &str, value: Value) -> Value {
-    let mut members = serde_json::Map::new();
-    members.insert("type".to_owned(), json!(kind));
-    members.insert("index".to_owned(), json!(index));
+/// A finding about one member of the caller's key set: its position in `keys`, its
+/// `kid` when it has one, and one more JSON member of the detail.
+fn key_set_member(kind: &str, index: usize, kid: Option<&str>, name: &str, value: Value) -> Value {
+    let mut detail = serde_json::Map::new();
+    detail.insert("type".to_owned(), json!(kind));
+    detail.insert("index".to_owned(), json!(index));
     if let Some(kid) = kid {
-        members.insert("kid".to_owned(), json!(kid));
+        detail.insert("kid".to_owned(), json!(kid));
     }
-    members.insert(name.to_owned(), value);
-    Value::Object(members)
+    detail.insert(name.to_owned(), value);
+    Value::Object(detail)
 }
 
-fn key_set_entry_problem(problem: &KeySetEntryProblem) -> Value {
+fn key_set_member_problem(problem: &KeySetMemberProblem) -> Value {
     match problem {
-        KeySetEntryProblem::NotObject => json!("not_object"),
-        KeySetEntryProblem::MemberRepeated { member } => json!({"member_repeated": member}),
-        KeySetEntryProblem::KtyMissing => json!("kty_missing"),
-        KeySetEntryProblem::KtyUnknown { kty } => json!({"kty_unknown": kty}),
-        KeySetEntryProblem::MemberMissing { member } => json!({"member_missing": member}),
-        KeySetEntryProblem::MemberInvalid { member } => json!({"member_invalid": member}),
-        KeySetEntryProblem::KeyInvalid => json!("key_invalid"),
+        KeySetMemberProblem::NotObject => json!("not_object"),
+        KeySetMemberProblem::ParameterRepeated { parameter } => {
+            json!({"parameter_repeated": parameter})
+        }
+        KeySetMemberProblem::KtyMissing => json!("kty_missing"),
+        KeySetMemberProblem::KtyUnknown { kty } => json!({"kty_unknown": kty}),
+        KeySetMemberProblem::ParameterMissing { parameter } => {
+            json!({"parameter_missing": parameter})
+        }
+        KeySetMemberProblem::ParameterInvalid { parameter } => {
+            json!({"parameter_invalid": parameter})
+        }
+        KeySetMemberProblem::KeyInvalid => json!("key_invalid"),
     }
 }
 
@@ -1059,13 +1074,13 @@ fn refusal_name(refusal: Refusal) -> &'static str {
         Refusal::EmbeddedKeysDiffer => "embedded_keys_differ",
         Refusal::CallerKeyNotFound => "not_found",
         Refusal::CallerKeyAmbiguous => "ambiguous",
-        Refusal::EntryNotMatched => "entry_not_matched",
-        Refusal::ExcludedByEntry => "excluded_by_entry",
+        Refusal::MemberNotMatched => "member_not_matched",
+        Refusal::ExcludedByMember => "excluded_by_member",
     }
 }
 
 /// A key as a finding names it, as `key_provenance` does: its kinds, where each came
-/// from, and its thumbprint, each member present only when it applies.
+/// from, and its thumbprint, each present only when it applies.
 fn key_ref(key: &KeyRef) -> Value {
     let kinds: Vec<&str> = key.kinds.iter().map(|k| k.as_str()).collect();
     let mut members = serde_json::Map::new();
@@ -1085,27 +1100,27 @@ fn key_ref(key: &KeyRef) -> Value {
     Value::Object(members)
 }
 
-/// A key's JWK members as a JSON object, with a symmetric key's secret when it is
+/// A key's JWK parameters as a JSON object, with a symmetric key's secret when it is
 /// shown.
 fn jwk(jwk: &PublicJwk, secret: Option<&KeySecret>) -> Value {
-    let mut members: serde_json::Map<String, Value> = jwk
+    let mut parameters: serde_json::Map<String, Value> = jwk
         .members
         .iter()
         .map(|(name, value)| ((*name).to_owned(), Value::String(value.clone())))
         .collect();
     if let Some(KeySecret {
-        member,
+        parameter,
         value: Some(value),
     }) = secret
     {
-        members.insert((*member).to_owned(), revealed(value));
+        parameters.insert((*parameter).to_owned(), revealed(value));
     }
-    Value::Object(members)
+    Value::Object(parameters)
 }
 
 /// Where a key's shown secret is, relative to `proofs`, for `reveals`.
-fn key_secret_path(proof: usize, key: usize, member: &str) -> String {
-    format!("[{proof}].key_provenance.keys[{key}].jwk.{member}")
+fn key_secret_path(proof: usize, key: usize, parameter: &str) -> String {
+    format!("[{proof}].key_provenance.keys[{key}].jwk.{parameter}")
 }
 
 /// A proof's time and the clock it was compared with. `value` is the JSON number as

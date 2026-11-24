@@ -45,7 +45,7 @@ pub trait ProofSuite {
     /// finding (REQUIREMENTS §10).
     fn algorithms(&self) -> &'static [&'static str];
     /// Whether `algorithm`, as its definition has it, takes a key of this type, whether
-    /// or not this suite implements both. Used only to choose among a key set's entries
+    /// or not this suite implements both. Used only to choose among a key set's members
     /// that share a `kid`: whether the chosen key fits stays `verify`'s check.
     fn takes_key(&self, algorithm: &str, key: KeyType<'_>) -> bool;
     fn verify(&self, input: &ProofInput<'_>, ctx: &Context) -> (ProofOutcome, Vec<Finding>);
