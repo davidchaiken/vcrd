@@ -191,11 +191,12 @@ defines them in full:
 | embedded key | a key the credential carries about its own proof, such as a JWS header's `jwk`, or the `did:key` its `kid` names when there is no issuer key; self-asserted |
 | issuer key | the key the issuer identifier gives: for a `did:key`, the key it encodes |
 | key set member | one JWK of the caller's key set (`--key-set`): one key, with parameters such as `kid`, `alg`, `use` and `key_ops`. The set is unordered; a member's `index` is only its position in the file |
-| caller-supplied key | the key of the key set member whose `kid` is the header's, resolved as inspect resolves it, or of the set's sole member when it or the header has no `kid`; among members that share the `kid`, the one of the key type the algorithm takes |
+| eligible member | a key set member whose key type the algorithm takes and whose own `alg`, `use` and `key_ops` allow the algorithm; with `--key-set-checks strict`, the default, also one whose `kid` is the header's, resolved as inspect resolves it, or absent, and whose `alg` does not name the algorithm by its other name |
+| caller-supplied key | the key of the eligible member whose proof is correct; with none, verify fails, and the key consulted is the one that best explains why: the member holding the issuer key, when eligible, or the one key every eligible member holds |
 | proof key | a key vcrd makes a proof with |
 | deciding proof key | the proof key whose proof decides the outcome and the exit code |
 | correct, incorrect, not attempted | a proof's result with one proof key: the signature holds for that key, it does not, or the check was not made |
-| refused | a key vcrd will not let decide the outcome: a weak key, one that is not a signing key or of a type vcrd does not support, an embedded key alone without the caller's opt-in, one of two embedded keys that differ, a caller-supplied key that matching did not find or found more than once, one whose member's own `alg`, `use` or `key_ops` excludes the algorithm, or the key of a key set member tried only because none matched |
+| refused | a key vcrd will not let decide the outcome: a weak key, one that is not a signing key or of a type vcrd does not support, an embedded key alone without the caller's opt-in, one of two embedded keys that differ, the caller-supplied key that stands in when none is chosen, or the key of a key set member that is not eligible |
 
 The rules, which ARCHITECTURE.md §8 sets out as a table of every combination:
 
@@ -209,10 +210,11 @@ The rules, which ARCHITECTURE.md §8 sets out as a table of every combination:
 3. vcrd may succeed only when the deciding proof is correct.
 
 A refused caller-supplied or issuer key prevents success, and still decides, so that no
-other key can; a refused embedded key is treated as not present. When matching finds no
-member, or more than one, a refused caller-supplied key stands in the list, so that vcrd
-never falls back to the issuer key alone; each member whose key could have signed is
-then tried, and those keys whose proofs are correct are listed. An issuer key vcrd cannot
+other key can; a refused embedded key is treated as not present. The key set is
+unordered: a proof is made with the key of every member whose key type the algorithm
+takes, eligible or not, and a member's key is listed when its proof is correct. When no
+key is chosen, a refused caller-supplied key stands in the list, so that vcrd never falls
+back to the issuer key alone. An issuer key vcrd cannot
 obtain, as for an `https:` issuer, is not present, so another key may decide. A
 credential carrying two embedded keys that differ, a `jwk` and a `did:key` `kid`, gives
 neither the right to decide, even with the opt-in. Two different keys that
@@ -230,8 +232,8 @@ Where a result answers each question about its keys:
 | Is the embedded key the issuer key? | whether one key in `keys` has both kinds | `issuer key, from did:key, and embedded key, at header.jwk` |
 | Is the deciding proof correct? | `outcome`, and that key's `proof` | Outcome |
 | Is the proof with another key correct? | that key's `proof` | `proof correct`, `proof incorrect` or `proof not attempted` |
-| Which member of the key set holds the caller-supplied key? | its `kid`, the member's own, and `matched_by`: `kid` or `sole_member`; the key of a member tried only because none matched has `kid` and no `matched_by` | `caller-supplied key k1, matched by kid`, `caller-supplied key, the sole member`, `key set member k1, not matched` |
-| Why may a key not decide? | its `refused`: `weak_key`, `not_for_signing`, `type_unsupported`, `embedded_key_alone`, `embedded_keys_differ`, `not_found`, `ambiguous`, `excluded_by_member` or `member_not_matched` | `refused:` and a phrase |
+| Which members of the key set hold a key? | its `members`, each by `index` and `kid` | `caller-supplied key, from key set member 0 (kid k1)`, or `members 0 (kid k1) and 3` |
+| Why may a key not decide? | its `refused`: `weak_key`, `not_for_signing`, `type_unsupported`, `embedded_key_alone`, `embedded_keys_differ`, `not_found`, `excluded_by_member`, `kid_not_header_kid` or `alg_alias` | `refused:` and a phrase |
 
 The findings that say what the keys and proofs show:
 
@@ -245,10 +247,13 @@ The findings that say what the keys and proofs show:
 | An issuer key vcrd cannot obtain, while another key decides. | [`verify.issuer_key_not_obtained`](findings.md#verify.issuer_key_not_obtained), a warning; with no other key, [`verify.issuer_method_unsupported`](findings.md#verify.issuer_method_unsupported), an error |
 | No key may decide, and nothing above says why. | [`verify.no_key_material`](findings.md#verify.no_key_material), an error |
 | A refused issuer key. | [`verify.weak_key`](findings.md#verify.weak_key), [`verify.did_key_not_for_signing`](findings.md#verify.did_key_not_for_signing) or [`verify.did_key_codec_unsupported`](findings.md#verify.did_key_codec_unsupported), errors; warnings when the override sets the issuer key aside |
-| No member of the key set matches, or more than one is left. | [`verify.caller_key_not_found`](findings.md#verify.caller_key_not_found) or [`verify.caller_key_ambiguous`](findings.md#verify.caller_key_ambiguous), errors |
-| The matched member's own `alg`, `use` or `key_ops` excludes the algorithm. | [`verify.caller_key_excluded`](findings.md#verify.caller_key_excluded), an error |
-| The matched member's `alg` names the algorithm by its other name, `EdDSA` or `Ed25519`. | [`verify.caller_key_alg_alias`](findings.md#verify.caller_key_alg_alias), a warning |
-| The matched member holds a key vcrd cannot use. | [`verify.caller_key_type_unsupported`](findings.md#verify.caller_key_type_unsupported), an error |
+| No eligible member's key gives a correct proof, and none is chosen to explain why. | [`verify.caller_key_not_found`](findings.md#verify.caller_key_not_found), an error |
+| A member whose key's proof is correct has its own `alg`, `use` or `key_ops` excluding the algorithm. | [`verify.caller_key_excluded`](findings.md#verify.caller_key_excluded), an error when no eligible member's key gives a correct proof, a warning otherwise |
+| A member whose key's proof is correct has a `kid` that is not the header's. | [`verify.key_set_kid_not_header_kid`](findings.md#verify.key_set_kid_not_header_kid): with `--key-set-checks strict`, as the row above; with `lenient`, a warning |
+| A member whose key's proof is correct has an `alg` naming the algorithm by its other name, `EdDSA` or `Ed25519`. | [`verify.caller_key_alg_alias`](findings.md#verify.caller_key_alg_alias): as the row above |
+| The caller-supplied key is of a type vcrd cannot use. | [`verify.caller_key_type_unsupported`](findings.md#verify.caller_key_type_unsupported), an error |
+| With `--key-set-checks lenient`, a member the set ignores, private parameters, or one `kid` on two keys of one type; with `strict`, the set is rejected (`key_set_rejected`). | [`verify.key_set_member_ignored`](findings.md#verify.key_set_member_ignored), [`verify.key_set_private_key`](findings.md#verify.key_set_private_key), [`verify.key_set_kid_repeated`](findings.md#verify.key_set_kid_repeated), warnings |
+| One key in two members. | [`verify.key_set_key_repeated`](findings.md#verify.key_set_key_repeated), a warning |
 | The caller-supplied key is not the issuer key. | [`verify.caller_key_not_issuer_key`](findings.md#verify.caller_key_not_issuer_key), an error; with `--allow-key-override`, the caller-supplied key decides, and [`verify.issuer_key_overridden`](findings.md#verify.issuer_key_overridden), a warning, names the issuer key and its proof's result |
 | Two different keys both give correct proofs. | [`verify.different_keys_correct`](findings.md#verify.different_keys_correct), an error |
 
@@ -274,13 +279,12 @@ when no key decides, and `keys`, each distinct key once:
 | `kinds` | always | the kinds of key it is, in the order caller-supplied, issuer, embedded: the values of an open set, so consumers must accept values they do not recognize |
 | `method` | for the issuer key | how it was derived from the issuer identifier, such as `did:key` |
 | `location` | for an embedded key | where the credential carries it: `header.jwk`, or `header.kid` for the `did:key` a `kid` names |
-| `kid` | for a caller-supplied key whose key set member has one | the member's own `kid` |
-| `matched_by` | for the matched caller-supplied key | `kid`, or `sole_member` |
+| `members` | for a caller-supplied key from the key set | each key set member holding it, as `{index, kid}`: its position in `keys`, and its own `kid` when it has one |
 | `thumbprint` | when vcrd can decode the key, and it is not symmetric | its JWK Thumbprint; a symmetric key has none, since it would be a hash of the secret |
 | `jwk` | with `thumbprint`, or for a symmetric key | the key as a JWK; for a symmetric key, its `kty`, and its `k` at `--unsafe=2` |
 | `masked` | for a symmetric key below `--unsafe=2` | the secret parameters left out of `jwk`: `["k"]` |
 | `proof` | always | the proof's result with it as the proof key, which vcrd makes for information whether or not the key can decide |
-| `refused` | when the key may not decide | why: `weak_key`, `not_for_signing`, `type_unsupported`, `embedded_key_alone`, `embedded_keys_differ`, `not_found` or `ambiguous` (the caller-supplied key, standing in when matching did not find one member), `excluded_by_member`, or `member_not_matched` |
+| `refused` | when the key may not decide | why: `weak_key`, `not_for_signing`, `type_unsupported`, `embedded_key_alone`, `embedded_keys_differ`, `not_found` (the caller-supplied key that stands in when none is chosen), or, for the key of a member that is not eligible, `excluded_by_member`, `kid_not_header_kid` or `alg_alias` |
 
 `outcome: not_attempted` with another key's `proof: correct` means that the signature
 holds for a key vcrd did not let decide (REQUIREMENTS §10).
@@ -296,6 +300,25 @@ keys name them the same way, without the JWK: `key`, and for the embedded key
 `embedded_key`, each with its `kinds`, `method` or `location`, and `thumbprint`.
 `verify.weak_key` adds `criterion`, the weak-key test the key fails: for Ed25519,
 `small_order`.
+
+### Making a key set from a credential
+
+A credential with a `did:key` issuer gives a key set for `--key-set`: the issuer key's
+`jwk`, from `key_provenance.keys`, with the header's `kid`. A member's `kid` is compared as
+written and the header's as resolved, so a relative header `kid`, such as `#key-1`, needs
+the issuer written before it. A command that writes a key set, and one that merges key
+sets, are planned.
+
+**Note:** `a_key_set_made_from_a_credential_verifies_it`, in vcrd-cli/tests/key_set.rs,
+follows these steps and verifies with the set they make; change the two together.
+
+```bash
+vcrd verify credential.jwt --format json | jq '([.format.header[] | select(.path == "kid") | .value][0]) as $kid | {keys: [.proofs[0].key_provenance.keys[] | select(.kinds | index("issuer_identifier")) | .jwk + (if $kid then {kid: $kid} else {} end)]}' > issuer.jwks.json
+```
+
+```bash
+vcrd verify credential.jwt --key-set issuer.jwks.json
+```
 
 ## `findings`
 
@@ -626,9 +649,10 @@ of error; `error.message` has the text, which vcrd also writes to standard error
 | `key_set_too_large` | The key set is over its size limit, 64 KiB, checked before it is parsed. No flag changes the limit before milestone 3's configuration file. |
 | `key_set_too_deep` | The key set is nested deeper than the depth limit, checked before it is parsed. |
 | `key_set_invalid` | The key set is not JSON, or not a JWK Set (RFC 7517 §5): the message says what was found, such as a single JWK, which belongs in `{"keys": [...]}`. |
+| `key_set_rejected` | With `--key-set-checks strict`, the default, the key set has problems: a member RFC 7517 §5 says to ignore, a member with private parameters, or one `kid` on two different keys of one key type. The message names each problem by its members' positions. `--key-set-checks lenient` reports each as a warning instead. |
 
-The key set is read whichever subcommand runs, so that a file vcrd cannot use is always
-reported; only verify consults it.
+The key set is read by verify alone; inspect ignores `--key-set`, as it ignores the other
+key options.
 
 ```bash
 vcrd --format json --no-such-flag 2>/dev/null | jq '{status, exit_code, error: .error.code, verify: .phases.verify}'

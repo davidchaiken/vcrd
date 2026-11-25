@@ -222,46 +222,37 @@ fn verify_proofs(
             .as_ref()
             .and_then(DeclaredAlgorithm::name);
         let mut resolution = keys::resolve(&descriptor.key_hints);
-        if let Some(set) = ctx.key_set() {
-            let caller = keys::CallerKeys {
-                set,
-                algorithm,
-                takes: |key_type| {
-                    suite
-                        .zip(algorithm)
-                        .is_some_and(|(s, a)| s.takes_key(a, key_type))
-                },
-                show_secrets: ctx.designations().shows(LeafClass::Secret),
-            };
-            keys::add_caller_keys(&descriptor.key_hints, &caller, &mut resolution);
+        let caller = ctx.key_set().map(|set| keys::CallerKeys {
+            set,
+            algorithm,
+            takes: move |key_type| {
+                suite
+                    .zip(algorithm)
+                    .is_some_and(|(s, a)| s.takes_key(a, key_type))
+            },
+            show_secrets: ctx.designations().shows(LeafClass::Secret),
+        });
+        if let Some(caller) = &caller {
+            keys::add_members(caller, &mut resolution);
+        }
+        // Each distinct key's proof, with the suite's findings for it. A refused key has
+        // none, and without the suite no key has one.
+        for key in &mut resolution.keys {
+            key.proved = key
+                .key
+                .as_ref()
+                .and_then(|k| Some(suite?.verify(&proof_input(descriptor, Some(k)), ctx)));
+        }
+        // The caller-supplied key is chosen by the members' proofs (DEVELOPMENT-PLAN.md,
+        // milestone 2, decided 2026-11-24).
+        if let Some(caller) = &caller {
+            keys::choose_caller_key(&descriptor.key_hints, caller, &mut resolution);
         }
         let resolution_failed = resolution
             .findings
             .iter()
             .any(|f| f.severity == Severity::Error);
-        // Each distinct key's proof, with the suite's findings for it. A refused key has
-        // none, and without the suite no key has one.
-        let proved: Vec<Option<Proof>> = resolution
-            .keys
-            .iter()
-            .map(|k| {
-                let key = k.key.as_ref()?;
-                Some(suite?.verify(&proof_input(descriptor, Some(key)), ctx))
-            })
-            .collect();
-        // A key set member tried only because none matched is listed only when its proof
-        // is correct (DEVELOPMENT-PLAN.md, milestone 2, decided 2026-11-18).
-        let (kept, mut key_proofs): (Vec<ProofKey>, Vec<Option<Proof>>) =
-            std::mem::take(&mut resolution.keys)
-                .into_iter()
-                .zip(proved)
-                .filter(|(key, proof)| {
-                    key.caller != Some(CallerPart::Unmatched)
-                        || matches!(proof, Some((ProofOutcome::Correct { .. }, _)))
-                })
-                .unzip();
-        resolution.keys = kept;
-        let considered = keys_and_proofs(&resolution.keys, &key_proofs);
+        let considered = keys_and_proofs(&resolution.keys);
         let decision = keys::decide(&considered, ctx.key_policy());
         let correct: Vec<bool> = considered.iter().map(|k| k.correct).collect();
         // A finding that refuses a key that does not decide is a warning, so that the
@@ -301,16 +292,15 @@ fn verify_proofs(
                 // the algorithm, so that those findings are reported too.
                 let deciding = decision
                     .deciding
-                    .and_then(|d| key_proofs.get_mut(d))
-                    .and_then(Option::take);
+                    .and_then(|d| resolution.keys.get_mut(d))
+                    .and_then(|k| k.proved.take());
                 let (outcome, suite_findings) =
                     deciding.unwrap_or_else(|| suite.verify(&proof_input(descriptor, None), ctx));
                 findings.extend(suite_findings);
                 outcome
             }
         };
-        let (key_provenance, key_findings) =
-            key_reports(resolution.keys, &decision, &outcome, &key_proofs);
+        let (key_provenance, key_findings) = key_reports(resolution.keys, &decision, &outcome);
         findings.extend(key_findings);
         let validity = proof_validity(&descriptor.times, ctx, &mut findings);
         proofs.push(ProofResult {
@@ -323,9 +313,6 @@ fn verify_proofs(
     }
     PhaseOutcome::from_findings(VerifyOutput { proofs }, findings)
 }
-
-/// A proof with one key, and the suite's findings for it.
-type Proof = (ProofOutcome, Vec<Finding>);
 
 /// The findings for the outcome of ARCHITECTURE §8's rules that no other finding states:
 /// the issuer key vcrd cannot obtain, an error only when no other key decides, and each
@@ -402,16 +389,13 @@ fn decision_findings(
                     FindingDetail::NoKeyMaterial { consulted },
                 ));
             }
-            // The caller-supplied key the rules consult, unless matching did not find it,
-            // which its own finding already says (DEVELOPMENT-PLAN.md, milestone 2,
-            // decided 2026-11-18).
+            // The caller-supplied key the rules consult, unless it is the refused key that
+            // stands in, which its own finding already explains (DEVELOPMENT-PLAN.md,
+            // milestone 2, decided 2026-11-18).
             Condition::CallerKeyIsIssuerKey => {
                 let found = |k: &&ProofKey| {
                     k.caller == Some(CallerPart::Consulted)
-                        && !matches!(
-                            k.report.refused,
-                            Some(Refusal::CallerKeyNotFound | Refusal::CallerKeyAmbiguous)
-                        )
+                        && k.report.refused != Some(Refusal::CallerKeyNotFound)
                 };
                 let caller = resolution.keys.iter().find(found);
                 let issuer = resolution
@@ -454,23 +438,22 @@ fn decision_findings(
 }
 
 /// What ARCHITECTURE §8's rules consult about each key: its kinds, whether key
-/// resolution refused it, and whether its proof is correct. A member of the caller's
-/// key set that was not matched is not the caller-supplied key the rules consult.
-fn keys_and_proofs(keys: &[ProofKey], proofs: &[Option<Proof>]) -> Vec<KeyAndProof> {
+/// resolution refused it, and whether its proof is correct. A member's key listed for
+/// information is not the caller-supplied key the rules consult.
+fn keys_and_proofs(keys: &[ProofKey]) -> Vec<KeyAndProof> {
     keys.iter()
-        .zip(proofs)
-        .map(|(key, proof)| KeyAndProof {
+        .map(|key| KeyAndProof {
             kinds: key
                 .report
                 .kinds
                 .iter()
                 .copied()
                 .filter(|&kind| {
-                    kind != KeySource::CallerSupplied || key.caller != Some(CallerPart::Unmatched)
+                    kind != KeySource::CallerSupplied || key.caller != Some(CallerPart::Listed)
                 })
                 .collect(),
             refused: key.key.is_none(),
-            correct: matches!(proof, Some((ProofOutcome::Correct { .. }, _))),
+            correct: key.correct(),
         })
         .collect()
 }
@@ -484,25 +467,22 @@ fn keys_and_proofs(keys: &[ProofKey], proofs: &[Option<Proof>]) -> Vec<KeyAndPro
 ///
 /// An embedded key's correct proof, while the deciding proof is not correct and the two
 /// keys are known to differ, is key substitution. An issuer key that the caller-supplied
-/// key overrides is named by a warning of its own, with its proof's result. Any other
-/// correct proof that does not decide is a warning of its own, with the reason.
+/// key overrides is named by a warning of its own, with its proof's result, and so is a
+/// member's key that is not eligible. Any other correct proof that does not decide is a
+/// warning of its own, with the reason.
 fn key_reports(
     keys: Vec<ProofKey>,
     decision: &Decision,
     outcome: &ProofOutcome,
-    proofs: &[Option<Proof>],
 ) -> (KeyProvenance, Vec<Finding>) {
-    // The issuer key, when the caller-supplied key matching found decides in its place,
+    // The issuer key, when a caller-supplied key from the key set decides in its place,
     // which only the caller's opt-in to the override allows (ARCHITECTURE §8, rule 1).
     let caller_decides = decision
         .deciding
         .and_then(|d| keys.get(d))
         .is_some_and(|k| {
             k.caller == Some(CallerPart::Consulted)
-                && !matches!(
-                    k.report.refused,
-                    Some(Refusal::CallerKeyNotFound | Refusal::CallerKeyAmbiguous)
-                )
+                && k.report.refused != Some(Refusal::CallerKeyNotFound)
         });
     let overridden = keys
         .iter()
@@ -517,13 +497,12 @@ fn key_reports(
     };
     let reports: Vec<KeyReport> = keys
         .into_iter()
-        .zip(proofs)
         .enumerate()
-        .map(|(index, (key, proof))| {
+        .map(|(index, key)| {
             let mut report = key.report;
-            report.proof = match proof {
+            report.proof = match key.proved {
                 _ if decision.deciding == Some(index) => outcome.clone(),
-                Some((proof, _)) => proof.clone(),
+                Some((proof, _)) => proof,
                 None => ProofOutcome::NotAttempted,
             };
             if report.refused.is_none() && report.kinds.contains(&KeySource::CredentialEmbedded) {
@@ -562,6 +541,15 @@ fn key_reports(
             },
             // Its warning above already gives its proof's result.
             None if Some(index) == overridden => continue,
+            // A member that is not eligible: its own finding says its proof is correct
+            // (DEVELOPMENT-PLAN.md, milestone 2, decided 2026-11-24).
+            None if matches!(
+                report.refused,
+                Some(Refusal::ExcludedByMember | Refusal::KidNotHeaderKid | Refusal::AlgAlias)
+            ) =>
+            {
+                continue;
+            }
             None => FindingDetail::NonDecidingKeyProofCorrect {
                 key: report.reference(),
                 why: report
@@ -699,6 +687,7 @@ mod tests {
             key: None,
             caller: None,
             refusals: Vec::new(),
+            proved: None,
         };
         let resolution = Resolution {
             keys: vec![

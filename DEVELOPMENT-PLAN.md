@@ -503,7 +503,7 @@ CodeLLDB's memory grow without bound, and 1.101 brings rust-lang/rust#165113.
   `key_set_too_large`, `key_set_too_deep`, and `key_set_invalid`, whose message says what
   was found (not JSON, an array, a single JWK, no `keys`, `keys` not an array, `keys`
   repeated). Read for both subcommands, so that a bad file is always reported; consulted
-  by verify only.
+  by verify only. *(Superseded 2026-11-24: read by verify only.)*
 - *Its limit.* `Limits::max_key_set_bytes`, 64 KiB by default, provisional as the others
   are ([T6]); the CLI reads at most one byte past it. No CLI flag changes a limit: limits
   wait for milestone 3's configuration file. A core test raises it; a CLI test writes
@@ -614,8 +614,7 @@ sole member"), so adding a member could withdraw acceptance: `{issuer key}` pass
   a correct proof, verify fails whatever is chosen, and the choice decides only which
   finding explains it: the member holding the issuer key, when eligible; otherwise the
   sole eligible member; otherwise a refused caller-supplied key that stands in, with
-  `verify.caller_key_not_found`, whose detail gives each member's reason for not being
-  chosen. Proofs are made with the key of every member that vcrd can use and whose key
+  `verify.caller_key_not_found` (its detail settled below). Proofs are made with the key of every member that vcrd can use and whose key
   type the algorithm takes, eligible or not, so that a member whose key would verify is
   named; the size limit bounds their number. `verify.caller_key_ambiguous` and the
   refusals `ambiguous` and `member_not_matched` go. `verify.caller_key_excluded` names a
@@ -634,7 +633,7 @@ sole member"), so adding a member could withdraw acceptance: `{issuer key}` pass
   equivalent alternatives, allowed in both modes. One key in two members is
   `verify.key_set_key_repeated`, a warning in both modes. Problems found against a
   credential: a member whose key's proof is correct and whose `kid` differs from the
-  header's, `verify.key_set_kid_differs`, and the `alg` alias. Lenient: a warning, and
+  header's, `verify.key_set_kid_not_header_kid`, and the `alg` alias. Lenient: a warning, and
   the member is eligible. Strict: the member is ineligible, and the finding is an error
   when that is why no key decides, a warning otherwise. Neither mode treats a member the
   algorithm cannot use, or one whose own parameters exclude it, as a problem: it is not
@@ -648,13 +647,48 @@ sole member"), so adding a member could withdraw acceptance: `{issuer key}` pass
   2026-11-18: a credential and a key set whose member holding the signer's key carries a
   `kid` other than the header's, failing with `--key-set-checks strict` and passing with
   `lenient`, both
-  with `verify.key_set_kid_differs`. Its launch configuration picks the value, which is
+  with `verify.key_set_kid_not_header_kid`. Its launch configuration picks the value, which is
   always passed, so a picker suits it.
 - *Weak keys in a `jwk` or a key set member,* to slice 6: an Ed25519 key of small order
   there is not refused when it is read, as a `did:key` one is; `verify_strict` rejects
   its signature, so only the finding is less precise. Slice 6 brings the EC identity
   point, and with it one weak-key check over every key source and type (milestone 2's
   scope), whose first test is this case.
+- *Settled before the round,* the same day:
+  - Findings checked against a credential (a `kid` not the header's, the `alg` alias)
+    name only a member whose key's proof is correct; the others' keys did not sign.
+  - A finding that names a member that is not eligible and whose key's proof is
+    correct (`verify.caller_key_excluded`; in strict mode, the `kid` and alias
+    findings) is an error when no eligible member's key gives a correct proof, and a
+    warning otherwise. Its key has no `verify.non_deciding_key_proof_correct`: the
+    finding already says the proof is correct. `verify.caller_key_not_found` stays an
+    error beside it, its detail the header's `kid` alone: a key set usually holds every
+    key the caller trusts, so a reason for each member would be mostly irrelevant, and
+    the members that matter are named by their own findings.
+  - "The sole eligible member" counts distinct keys: two members holding one key are
+    one, so repeating a member changes nothing but the repeated-key warning.
+  - Two different eligible keys with correct proofs, which only a crafted key gives:
+    `verify.different_keys_correct`, with the issuer key consulted when it is one of
+    them, and otherwise the one with the least thumbprint, so that member order does
+    not show.
+  - The key type for one `kid` on two different keys is `kty` and `crv`: Ed25519 and
+    Ed448, or P-256 and P-384, under one `kid` are alternatives.
+  - A member's `kid` is compared as written; the header's is resolved. A temporary
+    example with a relative member `kid` is to be tried before deciding otherwise.
+  - The order property compares the verdict, the deciding key, each key's kinds, proof
+    result, refusal and members' `kid`s, and the findings by code, attribution and
+    severity; not member indexes, nor the order non-deciding keys are listed in, which
+    follow the file.
+  - `vcrd inspect` does not read the key set, as it ignores the other key options;
+    superseding 2026-11-18's "read for both subcommands".
+  - The `kid` finding is `verify.key_set_kid_not_header_kid`, and its refusal
+    `kid_not_header_kid`, as `verify.caller_key_not_issuer_key` is named; the alias's
+    refusal, in strict mode, is `alg_alias`. One `kid` on two different keys of one key
+    type is `verify.key_set_kid_repeated`.
+  - In `text`, every key from a member reads "caller-supplied key, from key set member
+    N (kid …)", chosen or not; when none is chosen, the refused key that stands in is
+    the one the rules consult. Saying "key set member N" alone was considered, and kept
+    out: the chosen key would no longer read as caller-supplied.
 - *Order of work.* A round before (d): matching changed red then green, the setting and
   its flag, the two property tests, the members each key in the output came from, and
   the documentation. Round
@@ -722,6 +756,17 @@ VC-JOSE-COSE §8's examples, and outputs of the oracles REQUIREMENTS §11 names,
 source and license tracked. Property tests: base64url and JWS split/join round trips, and
 the depth prescan agreeing with `serde_json`'s rejection at 128. The performance tripwire
 and a `criterion` baseline (REQUIREMENTS §11).
+*Quadratic loops over a key set's members* (noted 2026-11-24): `KeySet::kids_repeated`
+and `KeySet::keys_repeated`, and `keys::add_members` and `keys::choose_caller_key`, each
+marked "Quadratic in the members" in its comment. `Limits::max_key_set_bytes` bounds them:
+measured on 2026-11-24 with a debug build, `vcrd verify` of the curated example with sets
+of `oct` members, each with its own `k` and `kid`, took 0.01 s for 400, 0.02 s for 800 and
+0.09 s for 1,600 (61,791 bytes, near the 64 KiB default); the sets were made with
+`jq -cn --argjson n 1600 '{keys: [range(0; $n) | {kty: "oct", k: "k\(.)", kid: "i\(.)"}]}'`.
+Left quadratic at least until this milestone (decided 2026-11-25), and perhaps past the
+first release: when the configuration file lets the limit be raised, decide whether to
+make them linear, with maps keyed by `kid` and key type, by key, and by member, or to cap
+the number of members; either way, give the performance tripwire a key set at the limit.
 
 **Delivers.** `vcrd` usable unattended by a CI job or agent with a config file and no
 flags; the same result whether a setting came from a flag, the environment or the file.

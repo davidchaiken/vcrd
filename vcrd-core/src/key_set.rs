@@ -1,15 +1,15 @@
 //! The caller-supplied key set: a JWK Set (RFC 7517 §5) the caller passes in, from which
-//! the caller-supplied key is matched (ARCHITECTURE §8; DEVELOPMENT-PLAN.md, milestone
-//! 2, decided 2026-11-18).
+//! the caller-supplied key is chosen (ARCHITECTURE §8; DEVELOPMENT-PLAN.md, milestone 2,
+//! decided 2026-11-18 and 2026-11-24).
 
 use std::fmt;
 
 use crate::context::Limits;
 use crate::finding::{
-    Attribution, Finding, FindingDetail, JwkProblem, KeySetMemberProblem, Severity,
+    Attribution, Finding, FindingDetail, JwkProblem, KeySetMemberProblem, MemberRef, Severity,
 };
 use crate::json::{self, Json};
-use crate::keys::{Jwk, MatchedBy, PRIVATE_MEMBERS};
+use crate::keys::{Jwk, PRIVATE_MEMBERS};
 use crate::redact::ClaimValue;
 use crate::registry::KeyType;
 use crate::report::Phase;
@@ -21,6 +21,44 @@ use crate::report::Phase;
 pub struct KeySet {
     pub(crate) members: Vec<KeySetMember>,
     pub(crate) ignored: Vec<IgnoredMember>,
+    pub(crate) checks: KeySetChecks,
+}
+
+/// How the caller's key set is checked, `--key-set-checks` (DEVELOPMENT-PLAN.md, milestone
+/// 2, decided 2026-11-24). Strict rejects a set with any [`KeySetProblem`], and makes a
+/// member that is not eligible of one whose `kid` is not the header's or whose `alg`
+/// names the declared algorithm by its other name. Lenient warns of each, and uses the
+/// rest of the set.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum KeySetChecks {
+    #[default]
+    Strict,
+    Lenient,
+}
+
+/// A problem found when the caller's key set is read: with [`KeySetChecks::Strict`], the
+/// set is rejected; with lenient, each is a warning.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KeySetProblem {
+    /// A member RFC 7517 §5 says to ignore.
+    MemberIgnored {
+        index: usize,
+        kid: Option<String>,
+        problem: KeySetMemberProblem,
+    },
+    /// A member with private or secret parameters.
+    PrivateParameters {
+        index: usize,
+        kid: Option<String>,
+        parameters: Vec<&'static str>,
+    },
+    /// One `kid` on two or more different keys of one key type (RFC 7517 §4.5).
+    KidRepeated {
+        kid: String,
+        kty: String,
+        crv: Option<String>,
+        members: Vec<usize>,
+    },
 }
 
 /// One member vcrd keeps: a JWK, with the parameters that constrain its use (RFC 7517
@@ -70,6 +108,9 @@ pub enum KeySetError {
     NotJson { message: String },
     /// JSON, but not a JWK Set.
     NotJwkSet(NotJwkSet),
+    /// A JWK Set with problems, which [`KeySetChecks::Strict`] rejects: each, by the
+    /// position of its first member.
+    Rejected { problems: Vec<KeySetProblem> },
 }
 
 /// What was found in place of a JWK Set (RFC 7517 §5).
@@ -89,9 +130,14 @@ pub enum NotJwkSet {
 
 impl KeySet {
     /// Reads a JWK Set, its size and depth checked against `limits` before it is
-    /// parsed (ARCHITECTURE §4). A member RFC 7517 §5 says to ignore is kept aside, to
-    /// be reported, rather than failing the set.
-    pub fn parse(bytes: &[u8], limits: &Limits) -> Result<KeySet, KeySetError> {
+    /// parsed (ARCHITECTURE §4). With [`KeySetChecks::Strict`], a set with problems is
+    /// rejected; with lenient, a member RFC 7517 §5 says to ignore is kept aside, and each
+    /// problem is reported as a warning.
+    pub fn parse(
+        bytes: &[u8],
+        limits: &Limits,
+        checks: KeySetChecks,
+    ) -> Result<KeySet, KeySetError> {
         if bytes.len() > limits.max_key_set_bytes {
             return Err(KeySetError::TooLarge {
                 limit: limits.max_key_set_bytes,
@@ -131,24 +177,34 @@ impl KeySet {
             }
             [_, _, ..] => return not_set(NotJwkSet::KeysRepeated),
         };
-        let mut set = KeySet::default();
+        let mut set = KeySet {
+            checks,
+            ..KeySet::default()
+        };
         for (index, item) in items.iter().enumerate() {
             match member(index, item) {
                 Ok(member) => set.members.push(member),
                 Err(ignored) => set.ignored.push(ignored),
             }
         }
+        if checks == KeySetChecks::Strict {
+            let problems = set.problems();
+            if !problems.is_empty() {
+                return Err(KeySetError::Rejected { problems });
+            }
+        }
         Ok(set)
     }
 
-    /// The warnings about the set itself, by each member's position in the file: each
-    /// member it ignores, and each with private parameters (DEVELOPMENT-PLAN.md, milestone
-    /// 2, decided 2026-11-18). Attributed to caller policy: the set is the caller's.
-    pub(crate) fn findings(&self) -> Vec<Finding> {
+    /// The problems found in the set itself, by the position of each one's first member:
+    /// each member RFC 7517 §5 says to ignore, each with private parameters, and each
+    /// `kid` on two or more different keys of one key type (DEVELOPMENT-PLAN.md, milestone
+    /// 2, decided 2026-11-24).
+    fn problems(&self) -> Vec<KeySetProblem> {
         let ignored = self.ignored.iter().map(|ignored| {
             (
                 ignored.index,
-                FindingDetail::KeySetMemberIgnored {
+                KeySetProblem::MemberIgnored {
                     index: ignored.index,
                     kid: ignored.kid.clone(),
                     problem: ignored.problem.clone(),
@@ -162,14 +218,105 @@ impl KeySet {
             .map(|member| {
                 (
                     member.index,
-                    FindingDetail::KeySetPrivateKey {
+                    KeySetProblem::PrivateParameters {
                         index: member.index,
                         kid: member.kid.clone(),
                         parameters: member.private_parameters.clone(),
                     },
                 )
             });
-        let mut details: Vec<(usize, FindingDetail)> = ignored.chain(private).collect();
+        let mut problems: Vec<(usize, KeySetProblem)> =
+            ignored.chain(private).chain(self.kids_repeated()).collect();
+        problems.sort_by_key(|(index, _)| *index);
+        problems.into_iter().map(|(_, problem)| problem).collect()
+    }
+
+    /// Each `kid` that two or more different keys of one key type share, from its first
+    /// member (RFC 7517 §4.5). Members that share a `kid` and differ in key type are
+    /// alternatives, and members with one key repeat it, not the `kid`.
+    ///
+    /// Quadratic in the members, which `Limits::max_key_set_bytes` bounds
+    /// (DEVELOPMENT-PLAN.md, milestone 3, noted 2026-11-24).
+    fn kids_repeated(&self) -> Vec<(usize, KeySetProblem)> {
+        let mut repeated = Vec::new();
+        for (position, member) in self.members.iter().enumerate() {
+            let Some(kid) = &member.kid else {
+                continue;
+            };
+            let key_type = member.key_type();
+            let alike = |m: &&KeySetMember| m.kid.as_ref() == Some(kid) && m.key_type() == key_type;
+            if self.members.iter().take(position).any(|m| alike(&m)) {
+                continue;
+            }
+            let group: Vec<&KeySetMember> = self.members.iter().filter(alike).collect();
+            if group.iter().any(|m| !m.same_key(member)) {
+                repeated.push((
+                    member.index,
+                    KeySetProblem::KidRepeated {
+                        kid: kid.clone(),
+                        kty: key_type.kty.to_owned(),
+                        crv: key_type.crv.map(str::to_owned),
+                        members: group.iter().map(|m| m.index).collect(),
+                    },
+                ));
+            }
+        }
+        repeated
+    }
+
+    /// The warnings about the set itself, by the position of each one's first member,
+    /// attributed to caller policy, the set being the caller's: with lenient checks, each
+    /// problem, which strict checks reject; with either, each key in two or more members
+    /// (DEVELOPMENT-PLAN.md, milestone 2, decided 2026-11-18 and 2026-11-24).
+    pub(crate) fn findings(&self) -> Vec<Finding> {
+        let problems = match self.checks {
+            KeySetChecks::Strict => Vec::new(),
+            KeySetChecks::Lenient => self.problems(),
+        };
+        let mut details: Vec<(usize, FindingDetail)> = problems
+            .into_iter()
+            .map(|problem| match problem {
+                KeySetProblem::MemberIgnored {
+                    index,
+                    kid,
+                    problem,
+                } => (
+                    index,
+                    FindingDetail::KeySetMemberIgnored {
+                        index,
+                        kid,
+                        problem,
+                    },
+                ),
+                KeySetProblem::PrivateParameters {
+                    index,
+                    kid,
+                    parameters,
+                } => (
+                    index,
+                    FindingDetail::KeySetPrivateKey {
+                        index,
+                        kid,
+                        parameters,
+                    },
+                ),
+                KeySetProblem::KidRepeated {
+                    kid,
+                    kty,
+                    crv,
+                    members,
+                } => (
+                    members.first().copied().unwrap_or_default(),
+                    FindingDetail::KeySetKidRepeated {
+                        kid,
+                        kty,
+                        crv,
+                        members: members.into(),
+                    },
+                ),
+            })
+            .collect();
+        details.extend(self.keys_repeated());
         details.sort_by_key(|(index, _)| *index);
         details
             .into_iter()
@@ -183,59 +330,65 @@ impl KeySet {
             })
             .collect()
     }
-}
 
-/// What matching found in the caller's key set (DEVELOPMENT-PLAN.md, milestone 2,
-/// decided 2026-11-18).
-pub(crate) enum CallerMatch<'a> {
-    Matched(&'a KeySetMember, MatchedBy),
-    NotFound,
-    /// The members left: those with the `kid`, or, with no `kid`, every member.
-    Ambiguous(Vec<&'a KeySetMember>),
-}
-
-impl KeySet {
-    /// The member that is the caller-supplied key. `kid` is the header's, resolved as
-    /// inspect resolves it; `takes` says whether the declared algorithm takes a key of
-    /// a type, and only breaks ties among members with the `kid`.
-    pub(crate) fn find(
-        &self,
-        kid: Option<&str>,
-        takes: impl Fn(KeyType<'_>) -> bool,
-    ) -> CallerMatch<'_> {
-        if let Some(kid) = kid {
-            let equal: Vec<&KeySetMember> = self
+    /// Each key that two or more members hold, from its first member.
+    ///
+    /// Quadratic in the members, which `Limits::max_key_set_bytes` bounds
+    /// (DEVELOPMENT-PLAN.md, milestone 3, noted 2026-11-24).
+    fn keys_repeated(&self) -> Vec<(usize, FindingDetail)> {
+        let mut repeated = Vec::new();
+        for (position, member) in self.members.iter().enumerate() {
+            if self
                 .members
                 .iter()
-                .filter(|m| m.kid.as_deref() == Some(kid))
+                .take(position)
+                .any(|m| m.same_key(member))
+            {
+                continue;
+            }
+            let holders: Vec<MemberRef> = self
+                .members
+                .iter()
+                .filter(|m| m.same_key(member))
+                .map(KeySetMember::reference)
                 .collect();
-            match equal.as_slice() {
-                [] => {}
-                [one] => return CallerMatch::Matched(one, MatchedBy::Kid),
-                several => {
-                    let fitting: Vec<&KeySetMember> = several
-                        .iter()
-                        .copied()
-                        .filter(|m| takes(m.key_type()))
-                        .collect();
-                    return match fitting.as_slice() {
-                        [one] => CallerMatch::Matched(one, MatchedBy::Kid),
-                        _ => CallerMatch::Ambiguous(equal),
-                    };
-                }
+            if holders.len() > 1 {
+                let thumbprint = match &member.key {
+                    MemberKey::Public(jwk) => Some(jwk.thumbprint.clone()),
+                    MemberKey::Symmetric { .. } => None,
+                };
+                repeated.push((
+                    member.index,
+                    FindingDetail::KeySetKeyRepeated {
+                        thumbprint,
+                        members: holders,
+                    },
+                ));
             }
         }
-        match self.members.as_slice() {
-            [only] if kid.is_none() || only.kid.is_none() => {
-                CallerMatch::Matched(only, MatchedBy::SoleMember)
-            }
-            [_, _, ..] if kid.is_none() => CallerMatch::Ambiguous(self.members.iter().collect()),
-            _ => CallerMatch::NotFound,
-        }
+        repeated
     }
 }
 
 impl KeySetMember {
+    /// The member as the result names it.
+    pub(crate) fn reference(&self) -> MemberRef {
+        MemberRef {
+            index: self.index,
+            kid: self.kid.clone(),
+        }
+    }
+
+    /// Whether the two members hold one key: by RFC 7638 thumbprint, or, for symmetric
+    /// keys, by `k`.
+    pub(crate) fn same_key(&self, other: &KeySetMember) -> bool {
+        match (&self.key, &other.key) {
+            (MemberKey::Public(a), MemberKey::Public(b)) => a.thumbprint == b.thumbprint,
+            (MemberKey::Symmetric { k: a }, MemberKey::Symmetric { k: b }) => a == b,
+            _ => false,
+        }
+    }
+
     /// The member's key type: its `kty`, and its `crv` where it has one.
     pub(crate) fn key_type(&self) -> KeyType<'_> {
         match &self.key {
@@ -373,6 +526,79 @@ impl fmt::Display for KeySetError {
             ),
             KeySetError::NotJson { message } => write!(f, "not JSON: {message}"),
             KeySetError::NotJwkSet(found) => write!(f, "{found}"),
+            KeySetError::Rejected { problems } => {
+                write!(f, "rejected by --key-set-checks strict: ")?;
+                for (i, problem) in problems.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, "; ")?;
+                    }
+                    write!(f, "{problem}")?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl fmt::Display for KeySetProblem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let member = |index: &usize, kid: &Option<String>| match kid {
+            Some(kid) => format!("member {index} (kid {kid})"),
+            None => format!("member {index}"),
+        };
+        match self {
+            KeySetProblem::MemberIgnored {
+                index,
+                kid,
+                problem,
+            } => {
+                let why = match problem {
+                    KeySetMemberProblem::NotObject => "not a JSON object".to_owned(),
+                    KeySetMemberProblem::ParameterRepeated { parameter } => {
+                        format!("parameter {parameter} repeated")
+                    }
+                    KeySetMemberProblem::KtyMissing => "no kty".to_owned(),
+                    KeySetMemberProblem::KtyUnknown { kty } => format!("key type {kty} unknown"),
+                    KeySetMemberProblem::ParameterMissing { parameter } => {
+                        format!("parameter {parameter} missing")
+                    }
+                    KeySetMemberProblem::ParameterInvalid { parameter } => {
+                        format!("parameter {parameter} invalid")
+                    }
+                    KeySetMemberProblem::KeyInvalid => "not a key".to_owned(),
+                };
+                write!(
+                    f,
+                    "{} is one RFC 7517 §5 says to ignore ({why})",
+                    member(index, kid)
+                )
+            }
+            KeySetProblem::PrivateParameters {
+                index,
+                kid,
+                parameters,
+            } => write!(
+                f,
+                "{} carries private parameters ({})",
+                member(index, kid),
+                parameters.join(", ")
+            ),
+            KeySetProblem::KidRepeated {
+                kid,
+                kty,
+                crv,
+                members,
+            } => {
+                let key_type = crv
+                    .as_ref()
+                    .map_or_else(|| kty.clone(), |crv| format!("{kty} {crv}"));
+                let members: Vec<String> = members.iter().map(usize::to_string).collect();
+                write!(
+                    f,
+                    "members {} share kid {kid} on different {key_type} keys (RFC 7517 §4.5)",
+                    members.join(", ")
+                )
+            }
         }
     }
 }
@@ -416,7 +642,7 @@ mod tests {
     const K: &str = "c2VjcmV0IGtleSBtYXRlcmlhbA";
 
     fn parse(text: &str) -> Result<KeySet, KeySetError> {
-        KeySet::parse(text.as_bytes(), &Limits::default())
+        KeySet::parse(text.as_bytes(), &Limits::default(), KeySetChecks::Lenient)
     }
 
     fn not_jwk_set(found: NotJwkSet) -> Result<(), KeySetError> {
@@ -470,7 +696,7 @@ mod tests {
             " ".repeat(limits.max_key_set_bytes + 1 - set.len())
         );
         assert_eq!(
-            KeySet::parse(padded.as_bytes(), &limits).map(|_| ()),
+            KeySet::parse(padded.as_bytes(), &limits, KeySetChecks::Lenient).map(|_| ()),
             Err(KeySetError::TooLarge {
                 limit: limits.max_key_set_bytes,
                 found: padded.len(),
@@ -480,15 +706,15 @@ mod tests {
             max_key_set_bytes: padded.len(),
             ..limits
         };
-        assert!(KeySet::parse(padded.as_bytes(), &raised).is_ok());
+        assert!(KeySet::parse(padded.as_bytes(), &raised, KeySetChecks::Lenient).is_ok());
         let oversize_garbage = "x".repeat(limits.max_key_set_bytes + 1);
         assert!(matches!(
-            KeySet::parse(oversize_garbage.as_bytes(), &limits),
+            KeySet::parse(oversize_garbage.as_bytes(), &limits, KeySetChecks::Lenient),
             Err(KeySetError::TooLarge { .. })
         ));
         let deep = "[".repeat(limits.max_depth + 1);
         assert_eq!(
-            KeySet::parse(deep.as_bytes(), &limits).map(|_| ()),
+            KeySet::parse(deep.as_bytes(), &limits, KeySetChecks::Lenient).map(|_| ()),
             Err(KeySetError::TooDeep {
                 limit: limits.max_depth,
                 found: deep.len(),
@@ -596,67 +822,6 @@ mod tests {
                 problem: KeySetMemberProblem::ParameterMissing { parameter: "k" },
             }]
         );
-    }
-
-    /// A set of Ed25519 members (`true`) and EC members (`false`), each with the `kid`
-    /// given, if any.
-    fn set_of(members: &[(Option<&str>, bool)]) -> KeySet {
-        let members: Vec<String> = members
-            .iter()
-            .map(|(kid, ed25519)| {
-                let kid = kid.map_or_else(String::new, |k| format!(r#", "kid": "{k}""#));
-                if *ed25519 {
-                    format!(r#"{{"kty": "OKP", "crv": "Ed25519", "x": "{X}"{kid}}}"#)
-                } else {
-                    format!(r#"{{"kty": "EC", "crv": "P-256", "x": "x", "y": "y"{kid}}}"#)
-                }
-            })
-            .collect();
-        let set = parse(&format!(r#"{{"keys": [{}]}}"#, members.join(", "))).unwrap();
-        assert!(set.ignored.is_empty(), "{set:?}");
-        set
-    }
-
-    /// The rules of matching (DEVELOPMENT-PLAN.md, milestone 2, decided 2026-11-13 and
-    /// 2026-11-18), for an algorithm that takes Ed25519 keys alone: the `kid`; among
-    /// members that share it, the key type; otherwise the sole member, when it or the
-    /// header has no `kid`.
-    #[test]
-    fn matching_takes_the_kid_then_the_key_type_then_the_sole_member() {
-        let takes = |t: KeyType<'_>| t.kty == "OKP" && t.crv == Some("Ed25519");
-        let (a, b, c) = (Some("a"), Some("b"), Some("c"));
-        let (ed, ec) = (true, false);
-        for (members, kid, expected) in [
-            (&[(a, ed)][..], a, ("kid", vec![0])),
-            (&[(a, ec), (a, ed)], a, ("kid", vec![1])),
-            (&[(a, ed), (a, ed)], a, ("ambiguous", vec![0, 1])),
-            (&[(a, ec), (a, ec)], a, ("ambiguous", vec![0, 1])),
-            // One member with the `kid` is the match, whatever its type: whether it fits
-            // the algorithm is the suite's check.
-            (&[(a, ec)], a, ("kid", vec![0])),
-            (&[(None, ed)], a, ("sole_member", vec![0])),
-            (&[(b, ed)], None, ("sole_member", vec![0])),
-            (&[(None, ed)], None, ("sole_member", vec![0])),
-            (&[(b, ed)], a, ("not_found", vec![])),
-            (&[(b, ed), (c, ed)], a, ("not_found", vec![])),
-            (&[(a, ed), (None, ed)], c, ("not_found", vec![])),
-            (&[(a, ed), (b, ed)], None, ("ambiguous", vec![0, 1])),
-            (&[], a, ("not_found", vec![])),
-            (&[], None, ("not_found", vec![])),
-        ] {
-            let set = set_of(members);
-            let found = match set.find(kid, takes) {
-                CallerMatch::Matched(member, MatchedBy::Kid) => ("kid", vec![member.index]),
-                CallerMatch::Matched(member, MatchedBy::SoleMember) => {
-                    ("sole_member", vec![member.index])
-                }
-                CallerMatch::NotFound => ("not_found", vec![]),
-                CallerMatch::Ambiguous(left) => {
-                    ("ambiguous", left.iter().map(|m| m.index).collect())
-                }
-            };
-            assert_eq!(found, expected, "{members:?}, kid {kid:?}");
-        }
     }
 
     /// The caller's secrets stay out of debug output, as the credential's claims do

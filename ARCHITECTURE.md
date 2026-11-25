@@ -555,9 +555,10 @@ read (finding 4).
 ### Injected traits
 
 - **`Clock`** — the current time. A system implementation exists behind `std-clock` (§2).
-- **`KeySet`** — caller-supplied key material, matched by key identifier or as the sole
-  key: a value in the `Context` rather than a trait, a JWK Set parsed by `KeySet::parse`
-  (milestone 2, DEVELOPMENT-PLAN.md, decided 2026-11-16). A trait comes back if keys
+- **`KeySet`** — caller-supplied key material, from which the caller-supplied key is
+  chosen by its proof (§8): a value in the `Context` rather than a trait, a JWK Set parsed
+  by `KeySet::parse` with its `KeySetChecks` (milestone 2, DEVELOPMENT-PLAN.md, decided
+  2026-11-16 and 2026-11-24). A trait comes back if keys
   must come from somewhere a value cannot hold, such as a key-management service.
 - **Still to come** (REQUIREMENTS §6, §12): a DID resolver, a JSON-LD context loader, an
   HTTPS trust anchor, and a random source for proof generation.
@@ -742,18 +743,21 @@ The terms, used in this sense in the output and its documentation:
 - **Key set member** — one JWK of a JWK Set (RFC 7517 §5) the caller passes in: one key,
   with parameters, RFC 7517 §4's name for a JWK's JSON members, such as `kid`, `alg`,
   `use` and `key_ops`. The set is unordered.
-- **Caller-supplied key** — the key matched in the caller's key set:
-  `ContextBuilder::key_set`, or `--key-set`. Matching takes the member whose `kid` is
-  the header's, resolved as inspect resolves it; among members that share it, the one
-  of the key type the declared algorithm takes (`ProofSuite::takes_key`); otherwise the
-  set's sole member, when it or the header has no `kid`. No member, or more than one
-  left, is a refused caller-supplied key, which stands in the list so that the rules
-  never fall back to the issuer key alone; each member whose key could have signed is
-  then tried for information, and those keys whose proofs are correct are listed,
-  refused as not matched. A member's own `alg`, `use` and `key_ops` are the caller's
-  policy: one that excludes the declared algorithm refuses the key, and no proof is made
-  with it (RFC 8725 §3.1). DEVELOPMENT-PLAN.md, milestone 2, records the decisions;
-  those of 2026-11-24 replace this matching.
+- **Eligible member** — a key set member whose key type the declared algorithm takes
+  (`ProofSuite::takes_key`) and whose own `alg`, `use` and `key_ops` allow the algorithm,
+  `EdDSA` and `Ed25519` being one algorithm for an Ed25519 key: a member's parameters are
+  the caller's policy (RFC 8725 §3.1). With `--key-set-checks strict`, the default, it
+  must also have no `kid` or the header's, resolved as inspect resolves it, and an `alg`
+  that does not name the algorithm by its other name.
+- **Caller-supplied key** — the key, from the caller's key set (`ContextBuilder::key_set`,
+  or `--key-set`), of the eligible member whose proof is correct: a proof is made with the
+  key of every member whose key type the algorithm takes, eligible or not, and the set is
+  unordered. With none, verify fails whatever is chosen, and the choice decides only which
+  finding explains it: the member holding the issuer key, when eligible; otherwise the one
+  key every eligible member holds; otherwise a refused caller-supplied key, which stands
+  in the list so that the rules never fall back to the issuer key alone. A member whose
+  key's proof is correct and which is not eligible is listed, refused, and named by a
+  finding. DEVELOPMENT-PLAN.md, milestone 2, records the decisions of 2026-11-24.
 - **Proof key** — a key the runner passes to a suite in `ProofInput` (§3), which carries no
   provenance: the suite does not know which kind of key it has.
 - **Deciding proof key** — the proof key whose proof decides the outcome and the exit code.
@@ -765,9 +769,8 @@ The terms, used in this sense in the output and its documentation:
 - **Refused** — a key that key resolution will not let decide the outcome: because of a
   property of the key (weak, not a signing key, or a type vcrd does not support); because
   it is an embedded key alone and the caller has not opted in, or one of two embedded
-  keys that differ; or, for a caller-supplied key, because matching did not find one
-  member, because the member's own parameters exclude the algorithm, or because it is
-  the key of a member tried only when none matched.
+  keys that differ; or, for a caller-supplied key, because it stands in when none is
+  chosen, or because it is the key of a member that is not eligible.
 
 The rules, which together make the table below:
 

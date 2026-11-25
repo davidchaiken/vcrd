@@ -462,36 +462,66 @@ pub enum FindingDetail {
         kid: Option<String>,
         parameters: Vec<&'static str>,
     },
-    /// No member of the caller's key set matches: none has the `kid`, resolved as inspect
-    /// resolves it, and the set has no sole member to match instead. Attributed to caller
-    /// policy; never a fall back to the issuer key alone.
-    CallerKeyNotFound { kid: Option<String> },
-    /// More than one member of the caller's key set is left: several with the `kid` that
-    /// the algorithm's key type does not narrow to one, or, with no `kid`, more than one
-    /// member. Attributed to caller policy.
-    CallerKeyAmbiguous {
-        kid: Option<String>,
-        candidates: Vec<KeyRef>,
+    /// One `kid` on two or more different keys of one key type in the caller's key set,
+    /// where RFC 7517 §4.5 says different keys SHOULD have distinct `kid`s. Members that
+    /// share a `kid` and differ in key type are §4.5's equivalent alternatives, and not
+    /// this. A warning attributed to caller policy, with `--key-set-checks lenient`; with
+    /// `strict`, the set is rejected (DEVELOPMENT-PLAN.md, milestone 2, decided
+    /// 2026-11-24).
+    KeySetKidRepeated {
+        kid: String,
+        kty: String,
+        crv: Option<String>,
+        /// The members with the `kid` and the key type, by position in `keys`; boxed, as
+        /// the members of the next findings are, so that a finding stays small.
+        members: Box<[usize]>,
     },
-    /// The matched member's own `alg`, `use` or `key_ops` excludes the declared algorithm,
-    /// so no proof is made with it (RFC 8725 §3.1). Attributed to caller policy.
+    /// One key in two or more members of the caller's key set. A warning attributed to
+    /// caller policy, in either mode.
+    KeySetKeyRepeated {
+        /// Absent for a symmetric key: it would be a hash of the secret.
+        thumbprint: Option<String>,
+        members: Vec<MemberRef>,
+    },
+    /// A member of the caller's key set whose key's proof is correct has a `kid` that is
+    /// not the header's, resolved as inspect resolves it. Attributed to caller policy:
+    /// with `--key-set-checks strict`, the member is not eligible, and the finding is an
+    /// error when no eligible member's key gives a correct proof; otherwise a warning.
+    KeySetKidNotHeaderKid {
+        key: Box<KeyRef>,
+        member: Box<MemberRef>,
+        header_kid: String,
+    },
+    /// No eligible member of the caller's key set has a key whose proof is correct, and
+    /// none is chosen to explain why, so a refused caller-supplied key stands in: never a
+    /// fall back to the issuer key alone. `kid` is the header's, resolved as inspect
+    /// resolves it. Attributed to caller policy.
+    CallerKeyNotFound { kid: Option<String> },
+    /// A member of the caller's key set whose key's proof is correct, and whose own
+    /// `alg`, `use` or `key_ops` excludes the declared algorithm, so it is not eligible
+    /// (RFC 8725 §3.1). Attributed to caller policy: an error when no eligible member's
+    /// key gives a correct proof, a warning otherwise.
     CallerKeyExcluded {
         key: Box<KeyRef>,
+        member: Box<MemberRef>,
         exclusion: MemberExclusion,
         algorithm: String,
     },
-    /// The matched member is a key of a type vcrd cannot use. Attributed to vcrd.
+    /// The caller-supplied key is of a type vcrd cannot use. Attributed to vcrd.
     CallerKeyTypeUnsupported {
         key: Box<KeyRef>,
         kty: String,
         crv: Option<String>,
     },
-    /// The matched member's `alg` names the declared algorithm by its other name, `EdDSA`
-    /// for `Ed25519` or the reverse, with an Ed25519 key: one algorithm (RFC 8037 §3.1;
-    /// RFC 9864 §2.2), which a verifier that compares the names refuses. A warning
-    /// attributed to caller policy.
+    /// A member of the caller's key set whose key's proof is correct has an `alg` that
+    /// names the declared algorithm by its other name, `EdDSA` for `Ed25519` or the
+    /// reverse, with an Ed25519 key: one algorithm (RFC 8037 §3.1; RFC 9864 §2.2), which
+    /// a verifier that compares the names refuses. Attributed to caller policy: a warning
+    /// with `--key-set-checks lenient`; with `strict`, the member is not eligible, and
+    /// the finding is an error when no eligible member's key gives a correct proof.
     CallerKeyAlgAlias {
         key: Box<KeyRef>,
+        member: Box<MemberRef>,
         alg: String,
         declared: String,
     },
@@ -609,8 +639,10 @@ impl FindingDetail {
             FindingDetail::EmbeddedKeyProofCorrect { .. } => "verify.embedded_key_proof_correct",
             FindingDetail::KeySetMemberIgnored { .. } => "verify.key_set_member_ignored",
             FindingDetail::KeySetPrivateKey { .. } => "verify.key_set_private_key",
+            FindingDetail::KeySetKidRepeated { .. } => "verify.key_set_kid_repeated",
+            FindingDetail::KeySetKeyRepeated { .. } => "verify.key_set_key_repeated",
+            FindingDetail::KeySetKidNotHeaderKid { .. } => "verify.key_set_kid_not_header_kid",
             FindingDetail::CallerKeyNotFound { .. } => "verify.caller_key_not_found",
-            FindingDetail::CallerKeyAmbiguous { .. } => "verify.caller_key_ambiguous",
             FindingDetail::CallerKeyExcluded { .. } => "verify.caller_key_excluded",
             FindingDetail::CallerKeyTypeUnsupported { .. } => "verify.caller_key_type_unsupported",
             FindingDetail::CallerKeyAlgAlias { .. } => "verify.caller_key_alg_alias",
@@ -689,11 +721,20 @@ pub struct KeyRef {
     pub method: Option<&'static str>,
     /// Where the credential carries it, e.g. `header.jwk`, when it is an embedded key.
     pub location: Option<&'static str>,
-    /// The key set member's own `kid`, when the key is a caller-supplied key that has one.
-    pub kid: Option<String>,
-    /// Absent for a key vcrd names but cannot decode, a symmetric key, and a
-    /// caller-supplied key that matching did not find.
+    /// The key set members holding it, when it is a caller-supplied key.
+    pub members: Vec<MemberRef>,
+    /// Absent for a key vcrd names but cannot decode, a symmetric key, and the refused
+    /// caller-supplied key that stands in when none is found.
     pub thumbprint: Option<String>,
+}
+
+/// A member of the caller's key set, as the result names it: its position in `keys`, from
+/// 0, and its own `kid`, when it has one. The set is unordered; the position only names
+/// the member.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MemberRef {
+    pub index: usize,
+    pub kid: Option<String>,
 }
 
 /// What, in a key set member's own parameters, excludes the declared algorithm (RFC 8725

@@ -9,10 +9,10 @@ use crate::context::KeyPolicy;
 use crate::document::{EmbeddedKey, KeyHints};
 use crate::finding::{
     Attribution, DidKeyProblem, Finding, FindingDetail, JwkProblem, KeyRef, MemberExclusion,
-    Severity, WeakKeyCriterion,
+    MemberRef, Severity, WeakKeyCriterion,
 };
 use crate::json::Json;
-use crate::key_set::{CallerMatch, KeySet, KeySetMember, MemberKey};
+use crate::key_set::{KeySet, KeySetChecks, KeySetMember, MemberKey};
 use crate::redact::Revealed;
 use crate::registry::KeyType;
 use crate::report::{Phase, ProofOutcome};
@@ -179,13 +179,13 @@ pub struct KeyReport {
     /// Where the credential carries it, e.g. `header.jwk`; present when the key is an
     /// embedded key.
     pub location: Option<&'static str>,
-    /// The key set member's own `kid`, when the key is a caller-supplied key that has one.
-    pub kid: Option<String>,
-    /// How matching found the caller-supplied key; absent for a member tried only because
-    /// none matched.
-    pub matched_by: Option<MatchedBy>,
+    /// The key set members holding it, by position and `kid`, when it is a caller-supplied
+    /// key: every member with this key (DEVELOPMENT-PLAN.md, milestone 2, decided
+    /// 2026-11-24).
+    pub members: Vec<MemberRef>,
     /// The RFC 7638 thumbprint; absent for a key vcrd names but cannot decode, a
-    /// symmetric key, and a caller-supplied key that matching did not find.
+    /// symmetric key, and the refused caller-supplied key that stands in when none is
+    /// found.
     pub thumbprint: Option<String>,
     /// The key as a JWK: what the thumbprint is of, or a symmetric key's `kty`.
     pub jwk: Option<PublicJwk>,
@@ -195,16 +195,6 @@ pub struct KeyReport {
     pub proof: ProofOutcome,
     /// Why it may not decide the outcome, when it may not.
     pub refused: Option<Refusal>,
-}
-
-/// How matching found the caller-supplied key in the caller's key set
-/// (DEVELOPMENT-PLAN.md, milestone 2, decided 2026-11-18).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MatchedBy {
-    /// The member's `kid` is the header's, resolved as inspect resolves it.
-    Kid,
-    /// The set's sole member, where it or the header has no `kid`.
-    SoleMember,
 }
 
 /// A symmetric key's secret parameter, such as an `oct` key's `k` (RFC 7518 §6.4.1): its
@@ -224,7 +214,7 @@ impl KeyReport {
             kinds: self.kinds.clone(),
             method: self.method,
             location: self.location,
-            kid: self.kid.clone(),
+            members: self.members.clone(),
             thumbprint: self.thumbprint.clone(),
         })
     }
@@ -234,8 +224,7 @@ impl KeyReport {
             kinds: vec![kind],
             method: None,
             location: None,
-            kid: None,
-            matched_by: None,
+            members: Vec::new(),
             thumbprint: None,
             jwk: None,
             secret: None,
@@ -260,16 +249,18 @@ pub enum Refusal {
     /// One of two embedded keys not known to be the same key, which may not decide even
     /// with the opt-in.
     EmbeddedKeysDiffer,
-    /// The caller-supplied key, which no member of the caller's key set matched. It
-    /// stands in the list so that the rules never fall back to the issuer key alone.
+    /// The caller-supplied key that stands in when no eligible member of the caller's key
+    /// set has a key whose proof is correct, and none is chosen to explain why, so that
+    /// the rules never fall back to the issuer key alone.
     CallerKeyNotFound,
-    /// The caller-supplied key, of which more than one member is left.
-    CallerKeyAmbiguous,
-    /// A member of the caller's key set tried only because none matched.
-    MemberNotMatched,
-    /// The matched member's own `alg`, `use` or `key_ops` excludes the declared
-    /// algorithm (RFC 8725 §3.1).
+    /// A member's own `alg`, `use` or `key_ops` excludes the declared algorithm (RFC 8725
+    /// §3.1).
     ExcludedByMember,
+    /// With `--key-set-checks strict`, the member's `kid` is not the header's.
+    KidNotHeaderKid,
+    /// With `--key-set-checks strict`, the member's `alg` names the declared algorithm by
+    /// its other name.
+    AlgAlias,
 }
 
 /// An open set: consumers must accept values they do not recognize (ARCHITECTURE §8).
@@ -322,8 +313,11 @@ impl Resolution {
     }
 }
 
+/// A proof with one key, and the suite's findings for it.
+pub(crate) type Proof = (ProofOutcome, Vec<Finding>);
+
 /// A distinct key, as the result reports it, and the key itself (ARCHITECTURE §8).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(crate) struct ProofKey {
     /// The kinds of key it is and where each came from; the runner adds its proof's
     /// result.
@@ -337,16 +331,35 @@ pub(crate) struct ProofKey {
     /// decides, warnings when it does not, so that the outcome follows [`decide`]
     /// (DEVELOPMENT-PLAN.md, milestone 2, decided 2026-11-18).
     pub refusals: Vec<usize>,
+    /// Its proof, once the runner has made it; `None` before, and for a key with none.
+    pub proved: Option<Proof>,
+}
+
+impl ProofKey {
+    fn new(report: KeyReport, key: Option<PublicKey>) -> Self {
+        ProofKey {
+            report,
+            key,
+            caller: None,
+            refusals: Vec::new(),
+            proved: None,
+        }
+    }
+
+    /// Whether its proof is correct.
+    pub(crate) fn correct(&self) -> bool {
+        matches!(self.proved, Some((ProofOutcome::Correct { .. }, _)))
+    }
 }
 
 /// What a caller-supplied key is to ARCHITECTURE §8's rules.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CallerPart {
-    /// The matched member, or the refused key that stands in when none matched: the
-    /// caller-supplied key the rules consult.
+    /// The key chosen from the caller's key set, or the refused key that stands in when
+    /// none is: the caller-supplied key the rules consult.
     Consulted,
-    /// A member tried only because none matched: reported, not consulted.
-    Unmatched,
+    /// A member's key, listed for information: not consulted.
+    Listed,
 }
 
 /// What ARCHITECTURE §8's rules consult about one distinct key.
@@ -479,155 +492,329 @@ pub(crate) struct CallerKeys<'a, F: Fn(KeyType<'_>) -> bool> {
     pub show_secrets: bool,
 }
 
-/// Adds the caller-supplied key to the keys resolution found (DEVELOPMENT-PLAN.md,
-/// milestone 2, decided 2026-11-18): the matched member, first, joined with the key it is
-/// the same as; or, with no match or several members left, a refused key that stands in
-/// for it, and each member the algorithm and its own parameters allow, to be tried.
-pub(crate) fn add_caller_keys<F: Fn(KeyType<'_>) -> bool>(
+/// Adds the key of each member of the caller's key set that vcrd can use and whose key
+/// type the declared algorithm takes, eligible or not, so that its proof is made and a
+/// member whose key would verify is named (DEVELOPMENT-PLAN.md, milestone 2, decided
+/// 2026-11-24). Each key is listed once, by thumbprint, with every member holding it,
+/// and joins the issuer or embedded key it is the same as.
+///
+/// Quadratic in the members, as `join` searches the keys listed so far; the members are
+/// bounded by `Limits::max_key_set_bytes` (DEVELOPMENT-PLAN.md, milestone 3, noted
+/// 2026-11-24).
+pub(crate) fn add_members<F: Fn(KeyType<'_>) -> bool>(
+    caller: &CallerKeys<'_, F>,
+    resolution: &mut Resolution,
+) {
+    for member in &caller.set.members {
+        if let (true, Some(key)) = ((caller.takes)(member.key_type()), member_key(member)) {
+            join(
+                resolution,
+                member_report(member, caller.show_secrets),
+                Some(key),
+            );
+        }
+    }
+}
+
+/// One member of the caller's key set, against the declared algorithm and the header's
+/// `kid`.
+struct Standing<'a> {
+    member: &'a KeySetMember,
+    /// Where its key is listed: present for a member [`add_members`] added.
+    key: Option<usize>,
+    /// Whether its key's proof is correct.
+    correct: bool,
+    check: MemberCheck,
+    /// Its `kid` and the header's are both present, and differ.
+    kid_differs: bool,
+    eligible: bool,
+}
+
+/// Chooses the caller-supplied key once each listed key's proof is made
+/// (DEVELOPMENT-PLAN.md, milestone 2, decided 2026-11-24): the key of the eligible member
+/// whose proof is correct. With none, verify fails whatever is chosen, and the choice
+/// decides only which finding explains it: the member holding the issuer key, when it is
+/// eligible; otherwise the sole eligible key; otherwise a refused key that stands in. The
+/// chosen key goes first, in the order of precedence. The other members' keys whose
+/// proofs are not correct are no longer listed: those keys did not sign.
+///
+/// Quadratic in the members, as each member's key is found by searching the keys' member
+/// lists; the members are bounded by `Limits::max_key_set_bytes` (DEVELOPMENT-PLAN.md,
+/// milestone 3, noted 2026-11-24).
+pub(crate) fn choose_caller_key<F: Fn(KeyType<'_>) -> bool>(
     hints: &KeyHints,
     caller: &CallerKeys<'_, F>,
     resolution: &mut Resolution,
 ) {
-    let kid = hints
+    let header_kid = hints
         .kid
         .as_deref()
         .map(|kid| resolve_kid(kid, hints.issuer.as_deref()));
-    let (refusal, detail) = match caller.set.find(kid.as_deref(), &caller.takes) {
-        CallerMatch::Matched(member, matched_by) => {
-            add_matched(member, matched_by, caller, resolution);
-            return;
-        }
-        CallerMatch::NotFound => (
-            Refusal::CallerKeyNotFound,
-            FindingDetail::CallerKeyNotFound { kid },
-        ),
-        CallerMatch::Ambiguous(left) => (
-            Refusal::CallerKeyAmbiguous,
-            FindingDetail::CallerKeyAmbiguous {
-                kid,
-                candidates: left
-                    .iter()
-                    .map(|member| *member_report(member, false).reference())
-                    .collect(),
-            },
-        ),
-    };
-    resolution
-        .findings
-        .push(Finding::error(Phase::Verify, Attribution::Policy, detail));
-    resolution.keys.insert(
-        0,
-        ProofKey {
-            report: KeyReport {
-                refused: Some(refusal),
-                ..KeyReport::new(KeySource::CallerSupplied)
-            },
-            key: None,
-            caller: Some(CallerPart::Consulted),
-            refusals: Vec::new(),
-        },
+    let strict = caller.set.checks == KeySetChecks::Strict;
+    let standings: Vec<Standing<'_>> = caller
+        .set
+        .members
+        .iter()
+        .map(|member| {
+            let key = resolution
+                .keys
+                .iter()
+                .position(|k| k.report.members.iter().any(|m| m.index == member.index));
+            let check = check_member(member, caller.algorithm);
+            let kid_differs =
+                matches!((&member.kid, &header_kid), (Some(own), Some(header)) if own != header);
+            let refused_by_checks =
+                strict && (kid_differs || matches!(check, MemberCheck::Alias { .. }));
+            Standing {
+                member,
+                key,
+                correct: key
+                    .and_then(|i| resolution.keys.get(i))
+                    .is_some_and(ProofKey::correct),
+                eligible: (caller.takes)(member.key_type())
+                    && !matches!(check, MemberCheck::Excluded(_))
+                    && !refused_by_checks,
+                check,
+                kid_differs,
+            }
+        })
+        .collect();
+    let mut correct: Vec<usize> = standings
+        .iter()
+        .filter(|s| s.eligible && s.correct)
+        .filter_map(|s| s.key)
+        .collect();
+    correct.sort_unstable();
+    correct.dedup();
+    member_findings(
+        &standings,
+        !correct.is_empty(),
+        strict,
+        caller,
+        header_kid.as_deref(),
+        resolution,
     );
-    // Each member that could have signed is tried, for information; the runner keeps
-    // those whose proofs are correct.
-    for member in &caller.set.members {
-        let allowed = !matches!(
-            check_member(member, caller.algorithm),
-            MemberCheck::Excluded(_)
-        );
-        if let (true, true, Some(key)) = (
-            (caller.takes)(member.key_type()),
-            allowed,
-            member_key(member),
-        ) {
-            let report = KeyReport {
-                refused: Some(Refusal::MemberNotMatched),
-                ..member_report(member, caller.show_secrets)
-            };
-            join(resolution, report, Some(key), CallerPart::Unmatched);
+    let issuer = resolution
+        .keys
+        .iter()
+        .position(|k| k.report.kinds.contains(&KeySource::IssuerIdentifier));
+    let chosen = match correct.as_slice() {
+        [one] => Some(*one),
+        // Two different keys with correct proofs, which only a crafted key gives: verify
+        // fails, and the key consulted does not depend on the members' order.
+        [_, _, ..] => issuer
+            .filter(|i| correct.contains(i))
+            .or_else(|| least_thumbprint(&correct, resolution)),
+        [] => issuer
+            .filter(|&i| standings.iter().any(|s| s.eligible && s.key == Some(i)))
+            .or_else(|| sole_eligible_key(&standings, caller, resolution)),
+    };
+    let consulted = chosen.unwrap_or_else(|| stand_in(header_kid, resolution));
+    let keys = std::mem::take(&mut resolution.keys);
+    let mut first = None;
+    let mut rest = Vec::with_capacity(keys.len());
+    for (index, mut key) in keys.into_iter().enumerate() {
+        if index == consulted {
+            key.caller = Some(CallerPart::Consulted);
+            first = Some(key);
+            continue;
         }
+        if key.caller == Some(CallerPart::Listed) {
+            let alone = key.report.kinds == [KeySource::CallerSupplied];
+            match (key.correct(), alone) {
+                (false, true) => continue,
+                // The issuer key or an embedded key, which no member's key verifies.
+                (false, false) => {
+                    key.report.kinds.retain(|&k| k != KeySource::CallerSupplied);
+                    key.report.members.clear();
+                    key.caller = None;
+                }
+                (true, true) => key.report.refused = ineligible(index, &standings),
+                // Refusing the issuer key or an embedded key for a member's parameters
+                // would be wrong: the member's finding says why it is not eligible.
+                (true, false) => {}
+            }
+        }
+        rest.push(key);
     }
+    resolution.keys = first.into_iter().chain(rest).collect();
 }
 
-/// The matched member, joined with the key it is the same as, first in the list; refused
-/// when its own parameters exclude the declared algorithm or vcrd cannot use it, with the
-/// finding that says why.
-fn add_matched<F: Fn(KeyType<'_>) -> bool>(
-    member: &KeySetMember,
-    matched_by: MatchedBy,
+/// The findings for each member whose key's proof is correct: its own parameters that
+/// exclude the algorithm, its `alg` alias, and its `kid` that is not the header's. One
+/// that makes the member not eligible is an error when no eligible member's key gives a
+/// correct proof, and a warning otherwise; with lenient checks, the alias and the `kid`
+/// leave the member eligible, and are warnings (DEVELOPMENT-PLAN.md, milestone 2, decided
+/// 2026-11-24). The others' keys did not sign, so they are not named.
+fn member_findings<F: Fn(KeyType<'_>) -> bool>(
+    standings: &[Standing<'_>],
+    eligible_correct: bool,
+    strict: bool,
     caller: &CallerKeys<'_, F>,
+    header_kid: Option<&str>,
     resolution: &mut Resolution,
 ) {
-    let mut report = KeyReport {
-        matched_by: Some(matched_by),
-        ..member_report(member, caller.show_secrets)
+    let ineligible = if eligible_correct {
+        Severity::Warning
+    } else {
+        Severity::Error
     };
-    let mut key = member_key(member);
-    let check = check_member(member, caller.algorithm);
-    if let MemberCheck::Excluded(_) = check {
-        report.refused = Some(Refusal::ExcludedByMember);
-        key = None;
-    } else if key.is_none() {
-        report.refused = Some(Refusal::TypeUnsupported);
-    }
-    let index = join(resolution, report, key, CallerPart::Consulted);
-    let Some(joined) = resolution.keys.get(index) else {
-        return;
+    let checked = if strict {
+        ineligible
+    } else {
+        Severity::Warning
     };
-    let reference = joined.report.reference();
-    let declared = caller.algorithm.unwrap_or_default().to_owned();
-    let finding = match check {
-        MemberCheck::Excluded(exclusion) => Finding::error(
-            Phase::Verify,
-            Attribution::Policy,
-            FindingDetail::CallerKeyExcluded {
-                key: reference,
-                exclusion,
-                algorithm: declared,
-            },
-        ),
-        MemberCheck::Alias { alg } => Finding::new(
-            Phase::Verify,
-            Attribution::Policy,
-            Severity::Warning,
-            FindingDetail::CallerKeyAlgAlias {
-                key: reference,
-                alg,
-                declared,
-            },
-        ),
-        MemberCheck::Allowed if joined.report.refused == Some(Refusal::TypeUnsupported) => {
-            let key_type = member.key_type();
-            Finding::error(
-                Phase::Verify,
-                Attribution::Vcrd,
-                FindingDetail::CallerKeyTypeUnsupported {
-                    key: reference,
-                    kty: key_type.kty.to_owned(),
-                    crv: key_type.crv.map(str::to_owned),
+    let declared = caller.algorithm.unwrap_or_default();
+    let mut findings = Vec::new();
+    for standing in standings.iter().filter(|s| s.correct) {
+        let Some(key) = standing.key.and_then(|i| resolution.keys.get(i)) else {
+            continue;
+        };
+        let member = Box::new(standing.member.reference());
+        // The key without its members: `member` names the one the finding is about, and
+        // `verify.key_set_key_repeated` names every member holding the key.
+        let reference = || {
+            let mut reference = key.report.reference();
+            reference.members.clear();
+            reference
+        };
+        match &standing.check {
+            MemberCheck::Excluded(exclusion) => findings.push((
+                ineligible,
+                FindingDetail::CallerKeyExcluded {
+                    key: reference(),
+                    member: member.clone(),
+                    exclusion: exclusion.clone(),
+                    algorithm: declared.to_owned(),
                 },
-            )
+            )),
+            MemberCheck::Alias { alg } => findings.push((
+                checked,
+                FindingDetail::CallerKeyAlgAlias {
+                    key: reference(),
+                    member: member.clone(),
+                    alg: alg.clone(),
+                    declared: declared.to_owned(),
+                },
+            )),
+            MemberCheck::Allowed => {}
         }
-        MemberCheck::Allowed => return,
-    };
-    // An error here refuses the key; the alias's warning does not.
-    let refuses = finding.severity == Severity::Error;
-    resolution.findings.push(finding);
-    let pushed = resolution.findings.len().saturating_sub(1);
-    if let (true, Some(joined)) = (refuses, resolution.keys.get_mut(index)) {
-        joined.refusals.push(pushed);
+        if let (true, Some(header_kid)) = (standing.kid_differs, header_kid) {
+            findings.push((
+                checked,
+                FindingDetail::KeySetKidNotHeaderKid {
+                    key: reference(),
+                    member,
+                    header_kid: header_kid.to_owned(),
+                },
+            ));
+        }
+    }
+    resolution
+        .findings
+        .extend(findings.into_iter().map(|(severity, detail)| {
+            Finding::new(Phase::Verify, Attribution::Policy, severity, detail)
+        }));
+}
+
+/// Why a listed key whose proof is correct may not decide, when no member holding it is
+/// eligible: its own parameters, then the alias, then the `kid`, which only strict checks
+/// refuse. `None` when a member holding it is eligible, as when two different keys give
+/// correct proofs.
+fn ineligible(index: usize, standings: &[Standing<'_>]) -> Option<Refusal> {
+    let holding: Vec<&Standing<'_>> = standings.iter().filter(|s| s.key == Some(index)).collect();
+    if holding.iter().any(|s| s.eligible) {
+        None
+    } else if holding
+        .iter()
+        .any(|s| matches!(s.check, MemberCheck::Excluded(_)))
+    {
+        Some(Refusal::ExcludedByMember)
+    } else if holding
+        .iter()
+        .any(|s| matches!(s.check, MemberCheck::Alias { .. }))
+    {
+        Some(Refusal::AlgAlias)
+    } else if holding.iter().any(|s| s.kid_differs) {
+        Some(Refusal::KidNotHeaderKid)
+    } else {
+        None
     }
 }
 
-/// Adds a caller-supplied key to the list, or joins it to the key with the same
-/// thumbprint: one key, with every kind it is. The consulted caller-supplied key goes
-/// first, in the order of precedence; a member tried for information goes last. Returns
-/// where the key is.
-fn join(
+/// Of keys whose proofs are correct, the one with the least thumbprint.
+fn least_thumbprint(keys: &[usize], resolution: &Resolution) -> Option<usize> {
+    keys.iter().copied().min_by_key(|&i| {
+        resolution
+            .keys
+            .get(i)
+            .and_then(|k| k.report.thumbprint.clone())
+    })
+}
+
+/// The key that every eligible member holds, when there is one: two members holding one
+/// key are one. A key vcrd cannot use, such as an `oct` key, is listed now, refused, with
+/// the finding that says why: error when it decides, warning when it does not.
+fn sole_eligible_key<F: Fn(KeyType<'_>) -> bool>(
+    standings: &[Standing<'_>],
+    caller: &CallerKeys<'_, F>,
     resolution: &mut Resolution,
-    report: KeyReport,
-    key: Option<PublicKey>,
-    part: CallerPart,
-) -> usize {
+) -> Option<usize> {
+    let eligible: Vec<&Standing<'_>> = standings.iter().filter(|s| s.eligible).collect();
+    let first = eligible.first()?.member;
+    if !eligible.iter().all(|s| s.member.same_key(first)) {
+        return None;
+    }
+    if let Some(index) = eligible.iter().find_map(|s| s.key) {
+        return Some(index);
+    }
+    let mut report = member_report(first, caller.show_secrets);
+    report.members = caller
+        .set
+        .members
+        .iter()
+        .filter(|m| m.same_key(first))
+        .map(KeySetMember::reference)
+        .collect();
+    report.refused = Some(Refusal::TypeUnsupported);
+    let index = join(resolution, report, None);
+    let key = resolution.keys.get(index)?.report.reference();
+    let key_type = first.key_type();
+    resolution.findings.push(Finding::error(
+        Phase::Verify,
+        Attribution::Vcrd,
+        FindingDetail::CallerKeyTypeUnsupported {
+            key,
+            kty: key_type.kty.to_owned(),
+            crv: key_type.crv.map(str::to_owned),
+        },
+    ));
+    let pushed = resolution.findings.len().saturating_sub(1);
+    if let Some(joined) = resolution.keys.get_mut(index) {
+        joined.refusals.push(pushed);
+    }
+    Some(index)
+}
+
+/// The refused caller-supplied key that stands in when none is chosen, so that the rules
+/// never fall back to the issuer key alone, with the finding that says why.
+fn stand_in(header_kid: Option<String>, resolution: &mut Resolution) -> usize {
+    resolution.findings.push(Finding::error(
+        Phase::Verify,
+        Attribution::Policy,
+        FindingDetail::CallerKeyNotFound { kid: header_kid },
+    ));
+    let report = KeyReport {
+        refused: Some(Refusal::CallerKeyNotFound),
+        ..KeyReport::new(KeySource::CallerSupplied)
+    };
+    resolution.keys.push(ProofKey::new(report, None));
+    resolution.keys.len().saturating_sub(1)
+}
+
+/// Lists a member's key, or joins it to the key with the same thumbprint: one key, with
+/// every kind it is and every member holding it. Returns where the key is.
+fn join(resolution: &mut Resolution, report: KeyReport, key: Option<PublicKey>) -> usize {
     let same = report.thumbprint.as_ref().and_then(|thumbprint| {
         resolution
             .keys
@@ -635,52 +822,27 @@ fn join(
             .position(|k| k.report.thumbprint.as_ref() == Some(thumbprint))
     });
     let Some(index) = same else {
-        let added = ProofKey {
-            report,
-            key,
-            caller: Some(part),
-            refusals: Vec::new(),
-        };
-        return match part {
-            CallerPart::Consulted => {
-                resolution.keys.insert(0, added);
-                0
-            }
-            CallerPart::Unmatched => {
-                resolution.keys.push(added);
-                resolution.keys.len().saturating_sub(1)
-            }
-        };
+        resolution.keys.push(ProofKey {
+            caller: Some(CallerPart::Listed),
+            ..ProofKey::new(report, key)
+        });
+        return resolution.keys.len().saturating_sub(1);
     };
-    let Some(existing) = resolution.keys.get_mut(index) else {
-        return index;
-    };
-    if existing.report.kinds.contains(&KeySource::CallerSupplied) {
-        // A member that repeats a key already listed adds nothing.
-        return index;
+    if let Some(existing) = resolution.keys.get_mut(index) {
+        if !existing.report.kinds.contains(&KeySource::CallerSupplied) {
+            existing.report.kinds.insert(0, KeySource::CallerSupplied);
+            existing.caller = Some(CallerPart::Listed);
+        }
+        existing.report.members.extend(report.members);
     }
-    existing.report.kinds.insert(0, KeySource::CallerSupplied);
-    existing.report.kid = report.kid;
-    existing.caller = Some(part);
-    if part == CallerPart::Unmatched {
-        return index;
-    }
-    existing.report.matched_by = report.matched_by;
-    // The key's own property, such as a weak key, comes before the member's exclusion.
-    if existing.report.refused.is_none() && report.refused.is_some() {
-        existing.report.refused = report.refused;
-        existing.key = None;
-    }
-    let joined = resolution.keys.remove(index);
-    resolution.keys.insert(0, joined);
-    0
+    index
 }
 
-/// A member as a caller-supplied key: its `kid`, its thumbprint and JWK, or, for a
+/// A member as a caller-supplied key: the member, its thumbprint and JWK, or, for a
 /// symmetric key, its `kty` and its secret, shown only when `show_secrets`.
 fn member_report(member: &KeySetMember, show_secrets: bool) -> KeyReport {
     let report = KeyReport {
-        kid: member.kid.clone(),
+        members: vec![member.reference()],
         ..KeyReport::new(KeySource::CallerSupplied)
     };
     match &member.key {
@@ -812,6 +974,7 @@ fn add_kid_key(identifier: &str, resolution: &mut Resolution) {
         key,
         caller: None,
         refusals: Vec::new(),
+        proved: None,
     });
 }
 
@@ -857,6 +1020,7 @@ fn compare_embedded(embedded: &EmbeddedKey, resolution: &mut Resolution) {
                 key: embedded.jwk.key.clone(),
                 caller: None,
                 refusals: Vec::new(),
+                proved: None,
             });
         }
     }
@@ -926,6 +1090,7 @@ fn from_issuer(issuer: &str) -> Resolution {
                         caller: None,
                         // The finding above, which refuses it.
                         refusals: vec![0],
+                        proved: None,
                     }],
                     unobtained: None,
                 }
@@ -937,6 +1102,7 @@ fn from_issuer(issuer: &str) -> Resolution {
                         key: Some(key),
                         caller: None,
                         refusals: Vec::new(),
+                        proved: None,
                     }],
                     unobtained: None,
                 }
@@ -959,6 +1125,7 @@ fn refused_did_key(refusal: Refusal, finding: Finding) -> Resolution {
             caller: None,
             // The one finding, which refuses it.
             refusals: vec![0],
+            proved: None,
         }],
         unobtained: None,
     }
@@ -1054,6 +1221,60 @@ mod tests {
             .unwrap()
             .try_into()
             .unwrap()
+    }
+
+    /// Two different eligible keys with correct proofs, which only a crafted key gives
+    /// and no Ed25519 input can: the key consulted is the issuer key when it is one of
+    /// them, and otherwise the one with the least thumbprint, whatever the members' order
+    /// (DEVELOPMENT-PLAN.md, milestone 2, decided 2026-11-24).
+    #[test]
+    fn of_two_correct_keys_the_one_consulted_does_not_depend_on_order() {
+        use crate::context::Limits;
+        let x = |seed: u8| {
+            let key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
+            URL_SAFE_NO_PAD.encode(key.verifying_key().as_bytes())
+        };
+        let jwk = |x: &str| format!(r#"{{"kty": "OKP", "crv": "Ed25519", "x": "{x}"}}"#);
+        let issuer = format!("did:key:z{}", {
+            let key = URL_SAFE_NO_PAD.decode(x(3)).unwrap();
+            bs58::encode([&[0xed, 0x01][..], &key].concat()).into_string()
+        });
+        let consulted = |members: &[u8], with_issuer: bool| {
+            let members: Vec<String> = members.iter().map(|&seed| jwk(&x(seed))).collect();
+            let text = format!(r#"{{"keys": [{}]}}"#, members.join(", "));
+            let set =
+                KeySet::parse(text.as_bytes(), &Limits::default(), KeySetChecks::Strict).unwrap();
+            let caller = CallerKeys {
+                set: &set,
+                algorithm: Some("Ed25519"),
+                takes: |_: KeyType<'_>| true,
+                show_secrets: false,
+            };
+            let hints = KeyHints {
+                issuer: with_issuer.then(|| issuer.clone()),
+                ..KeyHints::default()
+            };
+            let mut resolution = resolve(&hints);
+            add_members(&caller, &mut resolution);
+            for key in &mut resolution.keys {
+                key.proved = Some((ProofOutcome::Correct { disclosed: None }, Vec::new()));
+            }
+            choose_caller_key(&hints, &caller, &mut resolution);
+            let [first, ..] = resolution.keys.as_slice() else {
+                panic!("keys: {:?}", resolution.keys)
+            };
+            assert_eq!(first.caller, Some(CallerPart::Consulted));
+            first.report.thumbprint.clone().unwrap()
+        };
+        let thumbprint = |seed: u8| {
+            let key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
+            PublicKey::Ed25519(key.verifying_key()).thumbprint()
+        };
+        let least = thumbprint(1).min(thumbprint(2));
+        assert_eq!(consulted(&[1, 2], false), least);
+        assert_eq!(consulted(&[2, 1], false), least);
+        assert_eq!(consulted(&[1, 2, 3], true), thumbprint(3));
+        assert_eq!(consulted(&[3, 2, 1], true), thumbprint(3));
     }
 
     #[test]

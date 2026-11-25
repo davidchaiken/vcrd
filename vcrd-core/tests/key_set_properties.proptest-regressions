@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 64cb8121e5925cf03fd1cbe06e808433b8716e0a42292e20a82bc135dcd6ceca # shrinks to base = [], signer = Member { key: Signer, kid: None, key_use: None, alg: None }, added = [Member { key: Unused(1), kid: None, key_use: None, alg: None }], with_kid = true
+cc cec393c3bfbd5bc81a7ff1aa4d9704ac626cf55252e1b636f4bcecd7f4bee32c # shrinks to (members, shuffled) = ([Member { key: Unused(1), kid: None, key_use: None, alg: None }, Member { key: Signer, kid: None, key_use: None, alg: None }], [Member { key: Signer, kid: None, key_use: None, alg: None }, Member { key: Unused(1), kid: None, key_use: None, alg: None }]), with_kid = false, checks = Strict

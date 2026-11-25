@@ -37,13 +37,13 @@ pub use document::{
 pub use finding::{
     Attribution, Base64urlProblem, ClaimLocation, CritProblem, DateField, DidKeyProblem, Finding,
     FindingDetail, IssuerKeyUnobtainable, IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment,
-    KeyRef, KeySetMemberProblem, KeySourceKind, LanguageValueProblem, MemberExclusion, NotDeciding,
-    Severity, WeakKeyCriterion,
+    KeyRef, KeySetMemberProblem, KeySourceKind, LanguageValueProblem, MemberExclusion, MemberRef,
+    NotDeciding, Severity, WeakKeyCriterion,
 };
 pub use json::{DuplicateName, Json, Member, nesting_depth};
-pub use key_set::{KeySet, KeySetError, NotJwkSet};
+pub use key_set::{KeySet, KeySetChecks, KeySetError, KeySetProblem, NotJwkSet};
 pub use keys::{
-    Jwk, KeyProvenance, KeyReport, KeySecret, KeySource, MatchedBy, PublicJwk, PublicKey, Refusal,
+    Jwk, KeyProvenance, KeyReport, KeySecret, KeySource, PublicJwk, PublicKey, Refusal,
 };
 pub use redact::{
     ClaimValue, Designations, Rendered, RenderedJson, RenderedLeaf, Reveal, RevealLocation,

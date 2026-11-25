@@ -12,8 +12,8 @@ use vcrd_core::{
     Attribution, Base64urlProblem, BlockReason, Check, ClaimLocation, Context, CritProblem,
     DateField, DeclaredAlgorithm, DidKeyProblem, Document, DocumentKind, Finding, FindingDetail,
     IssuerKeyUnobtainable, IssuerProblem, JwkProblem, JwsJsonSyntax, JwsSegment, KeyRef, KeySecret,
-    KeySetMemberProblem, KeySourceKind, LanguageValueProblem, LeafClass, MatchedBy,
-    MemberExclusion, Missing, NotDeciding, NotEvaluatedReason, Phase, PhaseOutcome, ProofOutcome,
+    KeySetMemberProblem, KeySourceKind, LanguageValueProblem, LeafClass, MemberExclusion,
+    MemberRef, Missing, NotDeciding, NotEvaluatedReason, Phase, PhaseOutcome, ProofOutcome,
     PublicJwk, Refusal, Rendered, RenderedJson, Report, RevealLocation, Revealed, Severity,
     Treatment, Validity, ValueKind, WeakKeyCriterion, render,
 };
@@ -173,14 +173,11 @@ pub struct KeyView {
     /// Where the credential carries the embedded key, e.g. `header.jwk`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<&'static str>,
-    /// The key set member's own `kid`, for a caller-supplied key that has one.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kid: Option<String>,
-    /// How matching found the caller-supplied key: `kid` or `sole_member`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub matched_by: Option<&'static str>,
+    /// The key set members holding it, for a caller-supplied key.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<MemberView>,
     /// The RFC 7638 thumbprint; absent for a key vcrd names but cannot decode, a
-    /// symmetric key, and a caller-supplied key that matching did not find.
+    /// symmetric key, and the caller-supplied key that stands in when none is found.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thumbprint: Option<String>,
     /// The JWK parameters the thumbprint covers, or a symmetric key's `kty`, with its `k`
@@ -195,6 +192,23 @@ pub struct KeyView {
     /// Why it may not decide the outcome, when it may not.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refused: Option<&'static str>,
+}
+
+/// A member of the caller's key set: its position in `keys`, and its `kid`.
+#[derive(Debug, Serialize)]
+pub struct MemberView {
+    pub index: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kid: Option<String>,
+}
+
+impl From<&MemberRef> for MemberView {
+    fn from(member: &MemberRef) -> Self {
+        MemberView {
+            index: member.index,
+            kid: member.kid.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -472,11 +486,7 @@ fn proofs(report: &Report) -> Vec<ProofView> {
                             kinds: k.kinds.iter().map(|kind| kind.as_str()).collect(),
                             method: k.method,
                             location: k.location,
-                            kid: k.kid.clone(),
-                            matched_by: k.matched_by.map(|m| match m {
-                                MatchedBy::Kid => "kid",
-                                MatchedBy::SoleMember => "sole_member",
-                            }),
+                            members: k.members.iter().map(MemberView::from).collect(),
                             thumbprint: k.thumbprint.clone(),
                             jwk: k.jwk.as_ref().map(|j| jwk(j, k.secret.as_ref())),
                             masked: k
@@ -975,16 +985,42 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
             "parameters",
             json!(parameters),
         ),
+        FindingDetail::KeySetKidRepeated {
+            kid,
+            kty,
+            crv,
+            members,
+        } => json!({
+            "type": "key_set_kid_repeated",
+            "kid": kid,
+            "kty": kty,
+            "crv": crv,
+            "members": members,
+        }),
+        FindingDetail::KeySetKeyRepeated {
+            thumbprint,
+            members,
+        } => json!({
+            "type": "key_set_key_repeated",
+            "thumbprint": thumbprint,
+            "members": members.iter().map(MemberView::from).collect::<Vec<_>>(),
+        }),
+        FindingDetail::KeySetKidNotHeaderKid {
+            key,
+            member,
+            header_kid,
+        } => json!({
+            "type": "key_set_kid_not_header_kid",
+            "key": key_ref(key),
+            "member": MemberView::from(&**member),
+            "header_kid": header_kid,
+        }),
         FindingDetail::CallerKeyNotFound { kid } => {
             json!({"type": "caller_key_not_found", "kid": kid})
         }
-        FindingDetail::CallerKeyAmbiguous { kid, candidates } => json!({
-            "type": "caller_key_ambiguous",
-            "kid": kid,
-            "candidates": candidates.iter().map(key_ref).collect::<Vec<_>>(),
-        }),
         FindingDetail::CallerKeyExcluded {
             key,
+            member,
             exclusion,
             algorithm,
         } => {
@@ -996,6 +1032,7 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
             json!({
                 "type": "caller_key_excluded",
                 "key": key_ref(key),
+                "member": MemberView::from(&**member),
                 "parameter": parameter,
                 "value": value,
                 "algorithm": algorithm,
@@ -1007,9 +1044,15 @@ fn detail(detail: &FindingDetail, size: Option<u64>) -> Value {
             "kty": kty,
             "crv": crv,
         }),
-        FindingDetail::CallerKeyAlgAlias { key, alg, declared } => json!({
+        FindingDetail::CallerKeyAlgAlias {
+            key,
+            member,
+            alg,
+            declared,
+        } => json!({
             "type": "caller_key_alg_alias",
             "key": key_ref(key),
+            "member": MemberView::from(&**member),
             "alg": alg,
             "declared": declared,
         }),
@@ -1073,9 +1116,9 @@ fn refusal_name(refusal: Refusal) -> &'static str {
         Refusal::EmbeddedKeyAlone => "embedded_key_alone",
         Refusal::EmbeddedKeysDiffer => "embedded_keys_differ",
         Refusal::CallerKeyNotFound => "not_found",
-        Refusal::CallerKeyAmbiguous => "ambiguous",
-        Refusal::MemberNotMatched => "member_not_matched",
         Refusal::ExcludedByMember => "excluded_by_member",
+        Refusal::KidNotHeaderKid => "kid_not_header_kid",
+        Refusal::AlgAlias => "alg_alias",
     }
 }
 
@@ -1091,8 +1134,9 @@ fn key_ref(key: &KeyRef) -> Value {
     if let Some(location) = key.location {
         members.insert("location".to_owned(), json!(location));
     }
-    if let Some(kid) = &key.kid {
-        members.insert("kid".to_owned(), json!(kid));
+    if !key.members.is_empty() {
+        let refs: Vec<MemberView> = key.members.iter().map(MemberView::from).collect();
+        members.insert("members".to_owned(), json!(refs));
     }
     if let Some(thumbprint) = &key.thumbprint {
         members.insert("thumbprint".to_owned(), json!(thumbprint));

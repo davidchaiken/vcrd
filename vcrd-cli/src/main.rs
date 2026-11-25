@@ -25,8 +25,8 @@ use std::time::Duration;
 use clap::Parser;
 use clap::error::ErrorKind;
 use vcrd_core::{
-    Context, Designations, FixedClock, KeyPolicy, KeySet, KeySetError, Limits, Registry,
-    SystemClock,
+    Context, Designations, FixedClock, KeyPolicy, KeySet, KeySetChecks, KeySetError, Limits,
+    Registry, SystemClock,
 };
 
 use args::{Cli, Operation, OutputFormat};
@@ -69,10 +69,17 @@ fn main() -> ExitCode {
     // No flag changes a limit until milestone 3's configuration file
     // (DEVELOPMENT-PLAN.md, milestone 2, decided 2026-11-18).
     let limits = Limits::default();
-    // Read whichever subcommand runs, so that a bad file is always reported.
-    let key_set = match cli.options.key_set.as_deref() {
+    // Read by verify alone, as inspect ignores the other key options (DEVELOPMENT-PLAN.md,
+    // milestone 2, decided 2026-11-24).
+    let key_set_path = cli
+        .options
+        .key_set
+        .as_deref()
+        .filter(|_| operation == Operation::Verify);
+    let checks = key_set_checks(cli.options.key_set_checks);
+    let key_set = match key_set_path {
         None => None,
-        Some(path) => match read_key_set(path, &limits) {
+        Some(path) => match read_key_set(path, &limits, checks) {
             Ok(key_set) => Some(key_set),
             Err((code, message)) => {
                 eprintln_unless_quiet(verbosity, &message);
@@ -194,7 +201,11 @@ fn unreadable(path: &Path, error: &std::io::Error) -> (&'static str, String) {
 /// Reads the caller's key set, stopping one byte past its size limit, as for the
 /// credential (ARCHITECTURE §4). A file vcrd cannot use as a JWK Set is a caller error
 /// (ARCHITECTURE §6).
-fn read_key_set(path: &Path, limits: &Limits) -> Result<KeySet, (&'static str, String)> {
+fn read_key_set(
+    path: &Path,
+    limits: &Limits,
+    checks: KeySetChecks,
+) -> Result<KeySet, (&'static str, String)> {
     let cap = u64::try_from(limits.max_key_set_bytes)
         .unwrap_or(u64::MAX)
         .saturating_add(1);
@@ -202,14 +213,23 @@ fn read_key_set(path: &Path, limits: &Limits) -> Result<KeySet, (&'static str, S
     std::fs::File::open(path)
         .and_then(|file| file.take(cap).read_to_end(&mut bytes))
         .map_err(|e| ("key_set_unreadable", format!("{}: {e}", path.display())))?;
-    KeySet::parse(&bytes, limits).map_err(|error| {
+    KeySet::parse(&bytes, limits, checks).map_err(|error| {
         let code = match error {
             KeySetError::TooLarge { .. } => "key_set_too_large",
             KeySetError::TooDeep { .. } => "key_set_too_deep",
             KeySetError::NotJson { .. } | KeySetError::NotJwkSet(_) => "key_set_invalid",
+            KeySetError::Rejected { .. } => "key_set_rejected",
         };
         (code, format!("{}: {error}", path.display()))
     })
+}
+
+/// The library's value for `--key-set-checks`.
+fn key_set_checks(checks: args::KeySetChecks) -> KeySetChecks {
+    match checks {
+        args::KeySetChecks::Strict => KeySetChecks::Strict,
+        args::KeySetChecks::Lenient => KeySetChecks::Lenient,
+    }
 }
 
 fn eprintln_unless_quiet(verbosity: u8, message: &str) {
