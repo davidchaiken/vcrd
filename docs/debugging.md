@@ -9,8 +9,10 @@ with Visual Studio Code (VS Code) and the CodeLLDB extension. Linux is ARCHITECT
 **Note: This guide is read by `vcrd-cli/tests/debugging.rs`: the functions in the tables
 of where to break, every path it names, and its quotations of the scripts in
 `scripts/debugging/`. The same test reads `.vscode/launch.json`, which must offer every
-example and fixture. Changes to this documentation will likely cause code tests to fail,
-which will need to be fixed with code updates.**
+example and fixture, in its input picker or in a configuration of its own, and checks it
+against the configuration named before each table of where to break. Changes to this
+documentation will likely cause code tests to fail, which will need to be fixed with code
+updates.**
 
 ## Known to work
 
@@ -42,25 +44,39 @@ Last run end-to-end on 2026-11-11; `docs/reviews/milestone-1.md` records the com
 
 ## The launch configurations
 
-`.vscode/launch.json` holds three, in the Run and Debug view:
+`.vscode/launch.json` holds six, in the Run and Debug view:
 
 - **vcrd: pick an input** asks for a subcommand, `verify` or `inspect`, and an input
   from `examples/` or `fixtures/`; type to filter the list. It passes
   `--now 2026-10-01T00:00:00Z`, the clock the tests use (`NOW` in
   `vcrd-cli/tests/support/mod.rs`), so that an input gives the result its tests expect.
-  The set of inputs should be correct, because the test `vcrd-cli/tests/debugging.rs`
-  fails when a file in either directory is missing from the list.
-- **vcrd: allow-embedded-key** runs one of the
-  committed inputs that show the key and proof rules at work, with the options it is
-  meant to be run with and the tests' clock: `verify
-  fixtures/embedded-jwk-https-issuer.jwt --allow-embedded-key`. Without the option, the
-  same input under **vcrd: pick an input** shows the embedded key refused.
+  The list leaves out the examples of key sets, since it cannot pass `--key-set`; the
+  three configurations below run them. The set of inputs should be correct, because the
+  test `vcrd-cli/tests/debugging.rs` fails when a file in either directory is in no
+  configuration.
+- **vcrd: allow-embedded-key**, **vcrd: allow-key-override** and **vcrd: key-set** each
+  run one of the committed inputs that show the key and proof rules at work, with the
+  options it is meant to be run with and the tests' clock:
+  - `verify fixtures/embedded-jwk-https-issuer.jwt --allow-embedded-key`: the embedded
+    key decides. Without the option, the same input under **vcrd: pick an input** shows
+    the embedded key refused.
+  - `verify fixtures/caller-key-unlike-issuer.jwt --key-set
+    fixtures/caller-key-unlike-issuer.jwks.json --allow-key-override`: the
+    caller-supplied key, unlike the issuer key, decides. Without the option, the caller's
+    policy refuses it.
+  - `verify fixtures/key-set-kid.jwt --key-set fixtures/key-set-kid.jwks.json`: of three
+    members, the one whose key signed gives the caller-supplied key.
+- **vcrd: key-set-checks** asks for `--key-set-checks`, `strict` or `lenient`, and runs
+  `verify fixtures/key-set-kid-not-header-kid.jwt --key-set
+  fixtures/key-set-kid-not-header-kid.jwks.json` with it. The one member names its key
+  by another `kid` than the header's: strict checks make it ineligible, and lenient ones
+  let it decide.
 - **vcrd: file in editor (current time)** runs the subcommand on the file in the active
   editor tab, with the system clock. Use it for a credential from outside the
   repository.
 
-All three build `vcrd` before each session, through their `cargo` member, so that a
-session never debugs a stale binary. All three set `"sourceLanguages": ["rust"]`, which
+All of them build `vcrd` before each session, through their `cargo` member, so that a
+session never debugs a stale binary. All of them set `"sourceLanguages": ["rust"]`, which
 has CodeLLDB load Rust's formatters. If you write your own configuration, it's best to
 keep both of these settings.
 
@@ -122,8 +138,9 @@ The tables below follow the phases in the order vcrd runs them. The result says 
 start from: its `status` (`parse_failed`, `inspect_failed` or `verify_failed`), its exit
 code (2, 3 or 4), or the prefix of a finding's code (`parse.`, `inspect.` or `verify.`).
 
-Each row names an input that reaches the function, to run with **vcrd: pick an input**
-and `verify`, and what to look at there, in the Variables view or with `print`:
+The line before each table names the launch configuration to start. Each row names an
+input that reaches the function, and what to look at there, in the Variables view or
+with `print`:
 
 - **At the breakpoint**, the function's parameters are in view.
 - **Step Over** (F10) runs the function a line at a time, and its locals appear as each
@@ -131,9 +148,12 @@ and `verify`, and what to look at there, in the Variables view or with `print`:
 - **Step Out** (Shift+F11) finishes the function and breaks in its caller. The value it
   returned and the caller's locals are then in view.
 
-`vcrd-cli/tests/debugging.rs` fails when a function in these tables is not in its file.
+`vcrd-cli/tests/debugging.rs` fails when a function in these tables is not in its file,
+or when a table's configuration does not offer a row's input.
 
 ### The run as a whole
+
+Run each row with **vcrd: pick an input**, choosing `verify` and the row's input.
 
 | To see | Input | Break in | Look at | File |
 |---|---|---|---|---|
@@ -144,6 +164,8 @@ and `verify`, and what to look at there, in the Variables view or with `print`:
 
 ### Parse and inspect
 
+Run each row with **vcrd: pick an input**, choosing `verify` and the row's input.
+
 | To see | Input | Break in | Look at | File |
 |---|---|---|---|---|
 | The header and payload, parsed | `examples/ed25519.jwt` | `parse_compact` | Step Out: the value returned | `vcrd-core/src/formats/vc_jose.rs` |
@@ -153,6 +175,8 @@ and `verify`, and what to look at there, in the Variables view or with `print`:
 
 ### Keys
 
+Run each row with **vcrd: pick an input**, choosing `verify` and the row's input.
+
 | To see | Input | Break in | Look at | File |
 |---|---|---|---|---|
 | The `did:key` decoded | `examples/ed25519.jwt` | `decode_did_key` | At the breakpoint: `identifier`. Step Out: the value returned | `vcrd-core/src/keys.rs` |
@@ -160,7 +184,41 @@ and `verify`, and what to look at there, in the Variables view or with `print`:
 | The embedded key compared with the issuer key | `fixtures/embedded-jwk.jwt` | `compare_embedded` | Step Out, into `resolve`: `resolution.keys`, where the embedded key has an entry of its own, its thumbprint unlike the issuer key's | `vcrd-core/src/keys.rs` |
 | Which key decides, and which conditions for success are unmet (ARCHITECTURE §8, "Keys and proofs") | `fixtures/embedded-jwk-only.jwt` | `decide` | Step Over to its last line: `deciding` and `unmet` | `vcrd-core/src/keys.rs` |
 
+### Key sets
+
+Run with **vcrd: key-set**:
+
+| To see | Input | Break in | Look at | File |
+|---|---|---|---|---|
+| Each key set member's key, listed before any proof is made | `fixtures/key-set-kid.jwt` | `add_members` | At the breakpoint: `caller->set->members`. Step Over to its last line: `resolution->keys`, where each member's key has `caller` set to `Listed`, and `report.members` names the member it came from | `vcrd-core/src/keys.rs` |
+
+Run with **vcrd: key-set-checks**, once with `strict` and once with `lenient`:
+
+| To see | Input | Break in | Look at | File |
+|---|---|---|---|---|
+| Whether each member is eligible, and which key the rules consult | `fixtures/key-set-kid-not-header-kid.jwt` | `choose_caller_key` | Step Over past `standings`: each member's `correct`, `kid_differs` and `eligible`, which is false with `strict` and true with `lenient`. Step Over to its last line: `resolution->keys`, whose first key, with `caller` set to `Consulted`, is the member's key with `lenient`, and the refused key that stands in for it with `strict` | `vcrd-core/src/keys.rs` |
+
+### The opt-ins
+
+`decide` is the only function that reads `--allow-embedded-key` and
+`--allow-key-override`. The `decide` row of [Keys](#keys) shows the embedded key refused
+without its opt-in; these show each opt-in at work.
+
+Run with **vcrd: allow-embedded-key**:
+
+| To see | Input | Break in | Look at | File |
+|---|---|---|---|---|
+| The embedded key deciding alone, with the caller's opt-in | `fixtures/embedded-jwk-https-issuer.jwt` | `decide` | At the breakpoint: `policy`, with `allow_embedded_key_alone` set. Step Over to its last line: `deciding`, the embedded key, and `unmet`, empty | `vcrd-core/src/keys.rs` |
+
+Run with **vcrd: allow-key-override**:
+
+| To see | Input | Break in | Look at | File |
+|---|---|---|---|---|
+| A caller-supplied key deciding in place of an issuer key unlike it | `fixtures/caller-key-unlike-issuer.jwt` | `decide` | At the breakpoint: `policy`, with `allow_caller_key_override` set. Step Over to its last line: `deciding`, the caller-supplied key, and `unmet`, empty | `vcrd-core/src/keys.rs` |
+
 ### Proofs
+
+Run each row with **vcrd: pick an input**, choosing `verify` and the row's input.
 
 | To see | Input | Break in | Look at | File |
 |---|---|---|---|---|

@@ -5,6 +5,8 @@
 // Each test file uses a subset of these helpers.
 #![allow(dead_code)]
 
+pub mod generate;
+
 use assert_cmd::Command;
 use serde_json::Value;
 

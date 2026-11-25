@@ -807,7 +807,8 @@ and the result says that the two were not compared (milestone 2, DEVELOPMENT-PLA
 
 The table gives every combination of at most one key of each kind in which no two
 different keys both give correct proofs. A key set supplies at most one caller-supplied
-key, the one matched to the credential (milestone 2). E, I and C say whether an embedded,
+key: the key of the eligible member whose proof is correct, or, when there is none, the
+one chosen to explain why (milestone 2). E, I and C say whether an embedded,
 issuer and caller-supplied key is present (1) or not (0). E=I, E=C and I=C say whether
 two present keys are the same key. E?, I? and C? say whether the proof with that key is
 correct. S? says whether vcrd may succeed (Y), must not (N), or may only with the caller's
@@ -861,9 +862,10 @@ code tests to fail, which will need to be fixed with code updates.**
 | 111 | N | N | N | N | N | Y | C | issuer proof key incorrect even though caller-supplied proof key correct |
 | 111 | N | N | N | N | N | N | N | three different proof keys, all incorrect |
 
-Milestone 1 produces the ten rows without a caller-supplied key, each from a fixture
-listed in `fixtures/README.md`; `vcrd-cli/tests/key_and_proof_table.rs` reads this table
-and checks vcrd against each of them. Milestone 2 tests every row (DEVELOPMENT-PLAN.md).
+`vcrd-cli/tests/key_and_proof_table.rs` reads this table and checks vcrd against every
+row, with each setting of the two opt-ins, from inputs it builds at run time
+(DEVELOPMENT-PLAN.md, milestone 2). `fixtures/README.md` lists committed inputs that
+show some of the rows at work.
 
 ### `did:key`
 
@@ -1046,7 +1048,7 @@ mechanism and its status:
 | Threat | Mechanism | Section | Status |
 |---|---|---|---|
 | false success through algorithm confusion | caller allowlist; `none` always rejected; algorithm bound to key type | §8 | designed; tested in the prototype |
-| false success through key substitution | the rules of §8's key and proof table; provenance, including the proof with the embedded key and `verify.embedded_key_proof_correct` | §8 | implemented for `did:key` and an embedded JWK; tested by `vcrd-cli/tests/key_and_proof_table.rs` on the fixtures for the table's milestone 1 rows |
+| false success through key substitution | the rules of §8's key and proof table; provenance, including the proof with the embedded key and `verify.embedded_key_proof_correct` | §8 | implemented for `did:key`, an embedded JWK and a caller's key set; tested by `vcrd-cli/tests/key_and_proof_table.rs` on inputs for every row of the table, built at run time |
 | false success through a weak key | per-algorithm criteria at resolution; strict verification | §8 | implemented for EdDSA; tested by `fixtures/weak-key.jwt` and `small-order-r.jwt` |
 | false assurance from checks not performed | `not_evaluated` in every result | §3, §6 | designed; in the prototype |
 | verification steered to fetch key material from an attacker-chosen location | the blocking rule stops verify on a dangerous inspect failure | §4 | designed; no case implemented |

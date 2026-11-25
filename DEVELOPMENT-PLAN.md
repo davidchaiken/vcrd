@@ -373,7 +373,9 @@ within the milestone, so that it is ready before a Linux-only failure needs it. 
 Rust 1.101 is stable (scheduled for 2026-12-24), the toolchain pin moved to it and the
 guide run again on macOS, including a Step Out of `keys::resolve` and of
 `runner::embedded_proof` with CodeLLDB's Variables view open: at 1.99.1 both made
-CodeLLDB's memory grow without bound, and 1.101 brings rust-lang/rust#165113.
+CodeLLDB's memory grow without bound, and 1.101 brings rust-lang/rust#165113. Also a Step
+Out of `keys::add_members` and of `keys::choose_caller_key`, which return into
+`runner::verify_proofs` too (added 2026-11-25).
 
 **Decided 2026-11-13**, before implementation:
 
@@ -694,6 +696,38 @@ sole member"), so adding a member could withdraw acceptance: `{issuer key}` pass
   the documentation. Round
   (c), not yet committed, is committed first or with it, as the maintainer chooses.
 
+**Decided 2026-11-25**, before round (d):
+
+- *The table's inputs.* All 37 rows alike, from the generator in `vcrd-cli/tests/support`;
+  the ten committed fixtures that served milestone 1's rows keep their own tests. A row
+  with an issuer key names its `did:key`, with the DID URL as `kid`; any other names
+  `https://issuer.example`, with `iss` equal to it and no `kid`, so that the header names
+  no key (VC-JOSE-COSE §4.2 asks for an absolute `kid` only when `iss` is absent). The
+  generator stays in vcrd-cli with its four dev-dependencies, as decided on 2026-11-18;
+  whether to merge it with vcrd-core's is milestone 6's.
+- *What the table test checks,* for each row with each of the four settings of the
+  opt-ins. From the table's cells: the keys' kinds, which kinds are one key, each proof's
+  result, and exit 0 exactly when S? permits success. From the rules, each written once
+  in the test and citing its source: the deciding proof key (rule 2); each finding
+  docs/findings.md conditions on the keys; and the error findings exactly, whose
+  attributions give the exit code by ARCHITECTURE §6's precedence. Without an expected
+  value: an opt-in the rules make irrelevant to a row leaves the output as it is without
+  it, byte for byte, in 96 of the 148 runs (the embedded key's opt-in matters only when
+  that key is the only one, the override only when the caller-supplied and issuer keys
+  differ). Nobody reviews the cases one by one; a disagreement is examined by itself.
+- *The third example:* `fixtures/key-set-kid-not-header-kid.jwt` and its `.jwks.json`, an
+  `https:` issuer whose header `kid` is the signer's JWK Thumbprint URI (RFC 9278), and
+  one member, holding the signer's key, whose `kid` is the bare thumbprint. Its launch
+  configuration, "vcrd: key-set-checks", picks the value.
+- *The input picker* offers every example and fixture except the key sets and the
+  credentials beside them, each of which a configuration of its own names.
+- *The debugging guide's rows for `keys::add_members` and `keys::choose_caller_key`* stay
+  inside the function, as those for `resolve` and `embedded_proof` do (the Rust 1.101
+  task, above).
+- *The guide's tables of where to break* each name, in the line before them, the launch
+  configuration that runs their rows, which must offer each row's input; every
+  configuration that runs a committed input has a table, the two opt-ins' included.
+
 **Delivers.** `vcrd verify` for RFC 7518's signature algorithms, with caller keys, the
 embedded-key opt-in, the override opt-in and the allowlist; the keys and their proofs'
 results for every row of ARCHITECTURE §8's key and proof table.
@@ -743,7 +777,11 @@ hash construction chosen and labeled provisional (REQUIREMENTS §16 item 18 stay
 `vcrd formats` and `vcrd suites`. Man pages and completions from `clap`. [Q2] decided.
 The input's source in the result (decided 2026-10-22): `input.source`, `file` or `stdin`,
 and `input.path` as given on the command line, never made absolute; in JSON always, and in
-`text` and `plain` at levels 1–3 just after the status.
+`text` and `plain` at levels 1–3 just after the status. With it, the key set's (decided
+2026-11-25): a top-level `key_set` beside `input` when verify reads one, with `path` as
+given on the command line, never made absolute, `bytes`, `members` and `checks`, shown
+where `input`'s source is. vcrd-core's `Report` carries both, each with a label the access
+mode supplies, so that every access mode reports them alike.
 [Q7] decided and built for credentials (decided 2026-10-24, in milestone 1's review): a
 result that conforms exactly to VCDM 2.0 §7.1's, with VCDM 2.0 §7.2's problem types,
 through `--format json`, a format of its own, or a conforming part of the envelope;
@@ -893,7 +931,10 @@ cheap to wire now. [T7] the differential harness: a workspace-excluded tool crat
 runs vcrd and one oracle over the curated examples and the corpus, compares the
 (parse, inspect, verify) verdict tuple, and stores each disagreement as a fixture; the
 first oracle as a dev-dependency, which REQUIREMENTS §6 permits, with the protocol-level
-services of REQUIREMENTS §11 later. [D1], [D2]. The threat model promoted to
+services of REQUIREMENTS §11 later. A decision on whether to merge the two test-input
+generators, in `vcrd-core/tests/fixtures.rs` and `vcrd-cli/tests/support`, into one that
+other access modes can use too, such as a test-only workspace crate (noted 2026-11-25;
+milestone 2 keeps them apart, as decided on 2026-11-18). [D1], [D2]. The threat model promoted to
 `docs/threat-model.md` (REQUIREMENTS §12). README quickstart pointing at `examples/`.
 `cargo-dist` binaries, crates.io through Trusted Publishing, `Cargo.lock` tagged.
 `schema_version` stays 0 at 0.1.0 and is declared 1 in a later 0.x once external

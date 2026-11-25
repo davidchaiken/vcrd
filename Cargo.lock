@@ -941,10 +941,14 @@ name = "vcrd-cli"
 version = "0.0.0"
 dependencies = [
  "assert_cmd",
+ "base64",
+ "bs58",
  "clap",
+ "ed25519-dalek",
  "predicates",
  "serde",
  "serde_json",
+ "sha2",
  "tabled",
  "time",
  "vcrd-core",

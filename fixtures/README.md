@@ -6,7 +6,7 @@ vcrd's tests use four kinds of input (REQUIREMENTS §11):
 |---|---|---|
 | Curated examples | [`examples/`](../examples) | One canonical, self-signed, known-good credential per supported proof format. The README points at them, and they are the tests' positive inputs. |
 | Negative fixtures | this directory | Inputs that each exercise one condition. A test asserts the finding code, attribution and exit code vcrd gives for each. |
-| Generated inputs | inside the tests | Inputs too large or too trivial to be worth a file, such as the one over the size limit. |
+| Generated inputs | inside the tests | Inputs too large, too trivial or too numerous to be worth a file, such as the one over the size limit, or those for every row of ARCHITECTURE §8's key and proof table. |
 | Vendored conformance fixtures | not yet present | Copies of third-party test suites (W3C VC Test Suite, DID Test Suite, RDFC-1.0 vectors). They will be kept apart from these, with each source's repository, commit and license recorded. |
 
 An input is committed here when it is small and useful beyond its test, for example to
@@ -25,6 +25,17 @@ the helper:
 cargo test -p vcrd-core --test fixtures -- --ignored regenerate
 ```
 
+The examples of key sets are the exception: each a credential and the key set to verify
+it with, `NAME.jwt` and `NAME.jwks.json`, they come from vcrd-cli's test-only generator,
+[`vcrd-cli/tests/support/generate.rs`](../vcrd-cli/tests/support/generate.rs), which also
+builds the key and proof table's inputs at run time, and their tests are in
+[`vcrd-cli/tests/key_set_examples.rs`](../vcrd-cli/tests/key_set_examples.rs). To
+regenerate them:
+
+```bash
+cargo test -p vcrd-cli --test key_set_examples -- --ignored regenerate
+```
+
 Every value in them is invented; none is anyone's personal data.
 
 ## Fixtures
@@ -32,9 +43,11 @@ Every value in them is invented; none is anyone's personal data.
 Exit codes are ARCHITECTURE §6's. Each fixture is derived from the curated example unless
 it says otherwise.
 
-**Note: This table is read by `vcrd-core/tests/fixtures.rs`, which fails when a file in
-this directory has no row. Changes to this documentation will likely cause code tests to
-fail, which will need to be fixed with code updates.**
+**Note: This table is read by `vcrd-core/tests/fixtures.rs` and
+`vcrd-cli/tests/key_set_examples.rs`, each of which fails when a file it generates has no
+row; an example of a key set has one row, for both of its files. Changes to this
+documentation will likely cause code tests to fail, which will need to be fixed with code
+updates.**
 
 | File | Condition | Finding | Attribution | Exit |
 |---|---|---|---|---|
@@ -59,6 +72,9 @@ fail, which will need to be fixed with code updates.**
 | `embedded-jwk-only.jwt` | No `issuer`, and the signer's key in the header's `jwk`. vcrd refuses a key the credential asserts about itself unless the caller opts in (REQUIREMENTS §10), so verify runs and says so rather than being blocked; inspect also reports `inspect.issuer_missing`. The embedded proof is still made, for information, and is correct. | `verify.embedded_key_refused` | policy | 5 |
 | `embedded-jwk-only-tampered.jwt` | As `embedded-jwk-only.jwt`, with the degree's name changed after signing: the embedded key alone, and its proof is incorrect. | `verify.embedded_key_refused` | policy | 5 |
 | `embedded-jwk-https-issuer.jwt` | An `https:` issuer, whose key vcrd cannot obtain, and the signer's key in the header's `jwk`, which `kid` names by its JWK Thumbprint URI (RFC 9278). Without `--allow-embedded-key` the embedded key is refused, and vcrd's limit with the issuer is an error. With it, the embedded key decides and verify passes (exit 0), with the issuer key not obtained as a warning, `verify.issuer_key_not_obtained`. One of the three inputs that show the key and proof rules at work (DEVELOPMENT-PLAN.md, milestone 2). | `verify.issuer_method_unsupported`, `verify.embedded_key_refused` | vcrd, policy | 6 |
+| `caller-key-unlike-issuer.jwt`, `caller-key-unlike-issuer.jwks.json` | The curated example's header and payload, signed by another key: the one `embedded-jwk.jwt` embeds, which the key set holds, in a member without `kid`. The caller-supplied key is not the `did:key` issuer key, and its proof is correct; the issuer proof is incorrect. Without `--allow-key-override`, the caller's policy refuses a caller-supplied key unlike the issuer key, and the issuer key decides. With it, the caller-supplied key decides and verify passes (exit 0), with `verify.issuer_key_overridden` naming the issuer key's incorrect proof. One of the three inputs that show the key and proof rules at work (DEVELOPMENT-PLAN.md, milestone 2). | `verify.caller_key_not_issuer_key`, `verify.signature_invalid` | policy, input | 5 |
+| `key-set-kid.jwt`, `key-set-kid.jwks.json` | An `https:` issuer, whose key vcrd cannot obtain, and a key set of three members, each with its key's JWK Thumbprint URI (RFC 9278) as `kid`, as VC-JOSE-COSE §4.2 recommends. The second member's key signed, and the header's `kid` names it. That key is the caller-supplied key and decides: `key_provenance.keys` lists it alone, with `members` naming member 1 and its `kid`, since the other members' keys did not sign. One of the three inputs that show the key and proof rules at work. | `verify.issuer_key_not_obtained` | vcrd | 0 |
+| `key-set-kid-not-header-kid.jwt`, `key-set-kid-not-header-kid.jwks.json` | An `https:` issuer, and a key set of one member, holding the signer's key, whose `kid` is the key's bare JWK Thumbprint (RFC 7638) while the header's is its Thumbprint URI (RFC 9278): one key, named two ways. vcrd compares a member's `kid` as written, so with `--key-set-checks strict`, the default, the member is not eligible and no key decides. With `lenient`, the member's key decides and verify passes (exit 0), with `verify.key_set_kid_not_header_kid` as a warning. | `verify.key_set_kid_not_header_kid`, `verify.caller_key_not_found` | policy | 5 |
 | `exp-past.jwt` | `exp` is 2026-06-01, before the tests' clock, while `validUntil` is 2031-01-01: the signature has expired and the credential has not (RFC 7519 §4.1.4; ARCHITECTURE §10 [S6]). Inspect passes. | `verify.proof_expired` | input | 4 |
 | `canary.jwt` | For the redaction tests (ARCHITECTURE §7): every claim leaf holds a distinct canary string, `CANARY-C1` to `CANARY-C6`, and the header's `jwk` carries a private member, `d`, holding `CANARY-S1`. No canary may be printed without `--unsafe`, and `CANARY-S1` only with `--unsafe=2`. | `inspect.jwk_private_key` | input | 3 |
 | `crit-unsupported.jwt` | A well-formed `crit` naming `urn:example:unimplemented`, an extension vcrd does not implement (RFC 7515 §4.1.11). The signature is still checked, and verifies; the extension alone fails verify. | `verify.crit_unsupported` | vcrd | 6 |
