@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use time::OffsetDateTime;
 
+use crate::key_set::KeySet;
 use crate::redact::Designations;
 
 /// The current time. Core has no default clock (REQUIREMENTS §6).
@@ -48,6 +49,8 @@ pub struct Limits {
     pub max_containment_depth: usize,
     /// Credentials inside one credential or presentation.
     pub max_contained: usize,
+    /// Size of the caller's key set, in bytes.
+    pub max_key_set_bytes: usize,
 }
 
 impl Default for Limits {
@@ -60,6 +63,9 @@ impl Default for Limits {
             max_claims: 512,
             max_containment_depth: 1,
             max_contained: 64,
+            // About 80 public RSA-4096 keys (DEVELOPMENT-PLAN.md, milestone 2, decided
+            // 2026-11-18).
+            max_key_set_bytes: 64 * 1024,
         }
     }
 }
@@ -82,6 +88,7 @@ pub struct Context {
     limits: Limits,
     designations: Designations,
     key_policy: KeyPolicy,
+    key_set: Option<KeySet>,
 }
 
 impl Context {
@@ -94,6 +101,7 @@ impl Context {
                 limits: Limits::default(),
                 designations: Designations::default(),
                 key_policy: KeyPolicy::default(),
+                key_set: None,
             },
         }
     }
@@ -119,6 +127,12 @@ impl Context {
     pub fn key_policy(&self) -> KeyPolicy {
         self.key_policy
     }
+
+    /// The caller's keys, from which the caller-supplied key is matched; none by
+    /// default.
+    pub fn key_set(&self) -> Option<&KeySet> {
+        self.key_set.as_ref()
+    }
 }
 
 impl std::fmt::Debug for Context {
@@ -129,6 +143,7 @@ impl std::fmt::Debug for Context {
             .field("limits", &self.limits)
             .field("designations", &self.designations)
             .field("key_policy", &self.key_policy)
+            .field("key_set", &self.key_set)
             .finish()
     }
 }
@@ -155,6 +170,11 @@ impl ContextBuilder {
 
     pub fn key_policy(mut self, key_policy: KeyPolicy) -> Self {
         self.context.key_policy = key_policy;
+        self
+    }
+
+    pub fn key_set(mut self, key_set: KeySet) -> Self {
+        self.context.key_set = Some(key_set);
         self
     }
 

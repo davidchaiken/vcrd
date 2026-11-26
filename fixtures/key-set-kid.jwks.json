@@ -1,0 +1,22 @@
+{
+  "keys": [
+    {
+      "crv": "Ed25519",
+      "kid": "urn:ietf:params:oauth:jwk-thumbprint:sha-256:Hl16mtbor1_9DpTmI003FS2sS6HOhCPErTz_0zMXiO0",
+      "kty": "OKP",
+      "x": "wgm77Ss8BE2VrFxwUEtKJP-gfic62ScsEn0QODyqogc"
+    },
+    {
+      "crv": "Ed25519",
+      "kid": "urn:ietf:params:oauth:jwk-thumbprint:sha-256:eh6k0oh-7hbseLREUt4UfZO_UYpZXTnc4F3qDCXFiac",
+      "kty": "OKP",
+      "x": "0zdUwVQvC34OE4_rCE961geYIjHciQFSn2KK3WX596g"
+    },
+    {
+      "crv": "Ed25519",
+      "kid": "urn:ietf:params:oauth:jwk-thumbprint:sha-256:a-TRDhnm4dwmqSJKsenfjWhHsu7C0oH1m07JhJyW7y8",
+      "kty": "OKP",
+      "x": "Mx7pgLbsL7-5I8i4Qq4LoTyuEsu_FlihlCVDmqOLSsk"
+    }
+  ]
+}

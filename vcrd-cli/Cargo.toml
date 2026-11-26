@@ -33,6 +33,12 @@ time.workspace = true
 assert_cmd.workspace = true
 predicates.workspace = true
 serde_json.workspace = true
+# For the inputs tests/support/generate.rs signs (DEVELOPMENT-PLAN.md, milestone 2,
+# decided 2026-11-18). Signing is test code only: vcrd itself only verifies.
+base64.workspace = true
+bs58.workspace = true
+ed25519-dalek.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true

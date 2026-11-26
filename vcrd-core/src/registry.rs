@@ -44,7 +44,19 @@ pub trait ProofSuite {
     /// The algorithms this suite implements, named in an unsupported-algorithm
     /// finding (REQUIREMENTS §10).
     fn algorithms(&self) -> &'static [&'static str];
+    /// Whether `algorithm`, as its definition has it, takes a key of this type, whether
+    /// or not this suite implements both. Used only to choose among a key set's members
+    /// that share a `kid`: whether the chosen key fits stays `verify`'s check.
+    fn takes_key(&self, algorithm: &str, key: KeyType<'_>) -> bool;
     fn verify(&self, input: &ProofInput<'_>, ctx: &Context) -> (ProofOutcome, Vec<Finding>);
+}
+
+/// A key's type, as a JWK names it: `kty` (RFC 7517 §4.1), and `crv` for the key types
+/// that have one (RFC 7518 §6.2.1.1; RFC 8037 §2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KeyType<'a> {
+    pub kty: &'a str,
+    pub crv: Option<&'a str>,
 }
 
 /// What a suite verifies. Not `#[non_exhaustive]` (ARCHITECTURE §5).

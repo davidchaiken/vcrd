@@ -57,7 +57,7 @@ pub struct Options {
     pub verbosity: u8,
     /// Show masked values in cleartext: 1, or the flag alone, shows every claim; 2
     /// also shows cryptographic secrets, such as a private key the credential carries.
-    /// Write the level as `--unsafe=2` or `--unsafe 2`. A warning says so, on standard
+    /// The level is written `--unsafe=2` or `--unsafe 2`. A warning says so, on standard
     /// error and in the result.
     #[arg(
         long = "unsafe",
@@ -71,10 +71,46 @@ pub struct Options {
     )]
     pub unsafe_level: u8,
     /// Let a key the credential carries about its own proof decide the outcome when
-    /// there is neither an issuer key nor a key of your own. Such a key is bound to
-    /// nothing: a correct proof shows only that the signer holds its private key.
+    /// there is neither an issuer key nor a key provided in a key set. Such a key is
+    /// bound to nothing: a correct proof shows only that the signer holds its private
+    /// key.
     #[arg(long, global = true)]
     pub allow_embedded_key: bool,
+    /// A JWK Set (RFC 7517 §5) of keys provided in the specified file, read by verify.
+    /// The set is unordered. The key used to decide correctness is the key of the
+    /// eligible member whose proof is correct, and it must be the issuer key when vcrd
+    /// can obtain the issuer key. A member is eligible when the algorithm takes its key
+    /// type and its own `alg`, `use` and `key_ops` allow the algorithm.
+    #[arg(long, global = true, value_name = "FILE")]
+    pub key_set: Option<PathBuf>,
+    /// How problems in the key set are treated. `strict`, the default, rejects a key set
+    /// with a member RFC 7517 §5 says to ignore, a member with private parameters, or one
+    /// `kid` on two different keys of one key type, and makes a member not eligible when
+    /// its `kid` is not the header's or its `alg` names the algorithm by its other name.
+    /// `lenient` reports each as a warning and uses the rest of the set.
+    #[arg(
+        long,
+        global = true,
+        value_name = "CHECKS",
+        value_enum,
+        default_value_t = KeySetChecks::Strict
+    )]
+    pub key_set_checks: KeySetChecks,
+    /// Let a key from the key set decide in place of the issuer key when the two differ.
+    /// A warning names the issuer key and its proof's result.
+    #[arg(long, global = true)]
+    pub allow_key_override: bool,
+}
+
+/// The values of `--key-set-checks`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+pub enum KeySetChecks {
+    /// Reject a key set with problems; members whose `kid` or `alg` conflicts with the
+    /// credential are not eligible.
+    #[default]
+    Strict,
+    /// Report each problem as a warning and use the rest of the key set.
+    Lenient,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]

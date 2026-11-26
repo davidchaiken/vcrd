@@ -26,6 +26,42 @@
       "sourceLanguages": ["rust"]
     },
     {
+      "name": "vcrd: allow-key-override",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["build", "--bin=vcrd", "--package=vcrd-cli"],
+        "filter": { "name": "vcrd", "kind": "bin" }
+      },
+      "args": ["verify", "fixtures/caller-key-unlike-issuer.jwt", "--now", "2026-10-01T00:00:00Z", "--key-set", "fixtures/caller-key-unlike-issuer.jwks.json", "--allow-key-override"],
+      "cwd": "${workspaceFolder}",
+      "sourceLanguages": ["rust"]
+    },
+    {
+      "name": "vcrd: key-set",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["build", "--bin=vcrd", "--package=vcrd-cli"],
+        "filter": { "name": "vcrd", "kind": "bin" }
+      },
+      "args": ["verify", "fixtures/key-set-kid.jwt", "--now", "2026-10-01T00:00:00Z", "--key-set", "fixtures/key-set-kid.jwks.json"],
+      "cwd": "${workspaceFolder}",
+      "sourceLanguages": ["rust"]
+    },
+    {
+      "name": "vcrd: key-set-checks",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["build", "--bin=vcrd", "--package=vcrd-cli"],
+        "filter": { "name": "vcrd", "kind": "bin" }
+      },
+      "args": ["verify", "fixtures/key-set-kid-not-header-kid.jwt", "--now", "2026-10-01T00:00:00Z", "--key-set", "fixtures/key-set-kid-not-header-kid.jwks.json", "--key-set-checks", "${input:keySetChecks}"],
+      "cwd": "${workspaceFolder}",
+      "sourceLanguages": ["rust"]
+    },
+    {
       "name": "vcrd: file in editor (current time)",
       "type": "lldb",
       "request": "launch",
@@ -41,6 +77,8 @@
   "inputs": [
     { "id": "command", "type": "pickString", "description": "Subcommand",
       "options": ["verify", "inspect"], "default": "verify" },
+    { "id": "keySetChecks", "type": "pickString", "description": "--key-set-checks",
+      "options": ["strict", "lenient"], "default": "strict" },
     { "id": "input", "type": "pickString", "description": "Credential (type to filter)",
       "options": [
         "examples/ed25519.jwt",

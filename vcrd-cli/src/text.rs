@@ -13,7 +13,9 @@ use tabled::builder::Builder;
 use tabled::settings::object::{Cell as TableCell, Columns};
 use tabled::settings::{Style, Width};
 
-use crate::view::{Envelope, FindingView, KeyView, LeafView, PhaseView, ProofView, ResultView};
+use crate::view::{
+    Envelope, FindingView, KeyView, LeafView, MemberView, PhaseView, ProofView, ResultView,
+};
 
 /// The `text` output at this verbosity, 1 to 3.
 pub fn text(envelope: &Envelope, verbosity: u8) -> String {
@@ -618,6 +620,13 @@ fn proof_section(index: usize, proof: &ProofView, full: bool) -> Section {
         if let Some(location) = key.location {
             fields.push(field(&member("location"), "Location", location).plain_only());
         }
+        for (j, set_member) in key.members.iter().enumerate() {
+            let at = |m: &str| member(&format!("members[{j}].{m}"));
+            fields.push(field(&at("index"), "Member", set_member.index.to_string()).plain_only());
+            if let Some(kid) = &set_member.kid {
+                fields.push(field(&at("kid"), "Kid", kid.clone()).plain_only());
+            }
+        }
         if let Some(thumbprint) = key.thumbprint.as_ref().filter(|_| full) {
             fields.push(field(
                 &member("thumbprint"),
@@ -627,6 +636,9 @@ fn proof_section(index: usize, proof: &ProofView, full: bool) -> Section {
         }
         if full && let Some(jwk) = &key.jwk {
             fields.push(field(&member("jwk"), "JWK", jwk.to_string()));
+        }
+        if full && !key.masked.is_empty() {
+            fields.push(field(&member("masked"), "Masked", key.masked.join(", ")));
         }
         fields.push(field(&member("proof"), "Proof", key.proof).plain_only());
         if let Some(refused) = key.refused {
@@ -656,7 +668,10 @@ fn key_phrase(key: &KeyView, with_proof: bool) -> String {
                 Some(location) => format!("embedded key, at {location}"),
                 None => "embedded key".to_owned(),
             },
-            "caller_supplied" => "caller-supplied key".to_owned(),
+            "caller_supplied" => match members_phrase(&key.members) {
+                Some(members) => format!("caller-supplied key, from key set {members}"),
+                None => "caller-supplied key".to_owned(),
+            },
             other => other.to_owned(),
         })
         .collect();
@@ -671,11 +686,32 @@ fn key_phrase(key: &KeyView, with_proof: bool) -> String {
             "type_unsupported" => "a type vcrd cannot use",
             "embedded_key_alone" => "alone, without the opt-in",
             "embedded_keys_differ" => "one of two embedded keys that differ",
+            "not_found" => "no eligible key set member's key gives a correct proof",
+            "excluded_by_member" => "the member's own alg, use or key_ops excludes the algorithm",
+            "kid_not_header_kid" => "the member's kid is not the header's",
+            "alg_alias" => "the member's alg names the algorithm by its other name",
             other => other,
         };
         phrase.push_str(&format!("; refused: {why}"));
     }
     phrase
+}
+
+/// The key set members a key came from, such as `member 0 (kid k1)` or `members 0 (kid
+/// a) and 3`; `None` for none.
+fn members_phrase(members: &[MemberView]) -> Option<String> {
+    let each: Vec<String> = members
+        .iter()
+        .map(|m| match &m.kid {
+            Some(kid) => format!("{} (kid {kid})", m.index),
+            None => m.index.to_string(),
+        })
+        .collect();
+    match each.as_slice() {
+        [] => None,
+        [one] => Some(format!("member {one}")),
+        [rest @ .., last] => Some(format!("members {} and {last}", rest.join(", "))),
+    }
 }
 
 /// Values: the claims, the metadata or the header. The Visibility column says

@@ -364,9 +364,9 @@ In the prototype the corresponding path was traced to the arithmetic: for ES256 
   only if the caller also supplied no key material. The format reports whether its
   findings leave no usable issuer identifier (`InspectOutput`); the runner blocks verify
   as `Impossible { missing: KeyMaterial { consulted } }` when no other key source remains
-  (`vcrd-core/src/runner.rs`, `blocked_by_inspect`). Milestone 1 has no other source, so
-  those findings always block; milestone 2's caller-supplied keys are consulted at that
-  point. The findings are a missing `issuer`, one that is neither a URL nor an object
+  (`vcrd-core/src/runner.rs`, `blocked_by_inspect`). The caller's key set is such a
+  source whatever it holds, so with one those findings never block; nor does a key the
+  credential carries about itself. The findings are a missing `issuer`, one that is neither a URL nor an object
   whose `id` is a URL, VCDM 1.1's JWT encoding (§10 [F2]), and a presentation, which
   names a holder rather than an issuer and which vcrd reads from milestone 4
   (`inspect.presentation_unsupported`). A well-formed issuer vcrd
@@ -555,7 +555,11 @@ read (finding 4).
 ### Injected traits
 
 - **`Clock`** — the current time. A system implementation exists behind `std-clock` (§2).
-- **`KeyStore`** — caller-supplied key material, by key identifier or as the sole key.
+- **`KeySet`** — caller-supplied key material, from which the caller-supplied key is
+  chosen by its proof (§8): a value in the `Context` rather than a trait, a JWK Set parsed
+  by `KeySet::parse` with its `KeySetChecks` (milestone 2, DEVELOPMENT-PLAN.md, decided
+  2026-11-16 and 2026-11-24). A trait comes back if keys
+  must come from somewhere a value cannot hold, such as a key-management service.
 - **Still to come** (REQUIREMENTS §6, §12): a DID resolver, a JSON-LD context loader, an
   HTTPS trust anchor, and a random source for proof generation.
 
@@ -736,8 +740,24 @@ The terms, used in this sense in the output and its documentation:
   the holder.
 - **Issuer key** — the key the issuer identifier gives. A `did:key` encodes it; other DID
   methods and URL issuers need resolution, which REQUIREMENTS §8's network opt-in governs.
-- **Caller-supplied key** — key material the caller passes in, through the API, a CLI
-  argument or a configuration file (milestone 2).
+- **Key set member** — one JWK of a JWK Set (RFC 7517 §5) the caller passes in: one key,
+  with parameters, RFC 7517 §4's name for a JWK's JSON members, such as `kid`, `alg`,
+  `use` and `key_ops`. The set is unordered.
+- **Eligible member** — a key set member whose key type the declared algorithm takes
+  (`ProofSuite::takes_key`) and whose own `alg`, `use` and `key_ops` allow the algorithm,
+  `EdDSA` and `Ed25519` being one algorithm for an Ed25519 key: a member's parameters are
+  the caller's policy (RFC 8725 §3.1). With `--key-set-checks strict`, the default, it
+  must also have no `kid` or the header's, resolved as inspect resolves it, and an `alg`
+  that does not name the algorithm by its other name.
+- **Caller-supplied key** — the key, from the caller's key set (`ContextBuilder::key_set`,
+  or `--key-set`), of the eligible member whose proof is correct: a proof is made with the
+  key of every member whose key type the algorithm takes, eligible or not, and the set is
+  unordered. With none, verify fails whatever is chosen, and the choice decides only which
+  finding explains it: the member holding the issuer key, when eligible; otherwise the one
+  key every eligible member holds; otherwise a refused caller-supplied key, which stands
+  in the list so that the rules never fall back to the issuer key alone. A member whose
+  key's proof is correct and which is not eligible is listed, refused, and named by a
+  finding. DEVELOPMENT-PLAN.md, milestone 2, records the decisions of 2026-11-24.
 - **Proof key** — a key the runner passes to a suite in `ProofInput` (§3), which carries no
   provenance: the suite does not know which kind of key it has.
 - **Deciding proof key** — the proof key whose proof decides the outcome and the exit code.
@@ -747,18 +767,21 @@ The terms, used in this sense in the output and its documentation:
   attempted when the check was not made, with findings that say why. vcrd says *valid*
   only of time periods.
 - **Refused** — a key that key resolution will not let decide the outcome: because of a
-  property of the key (weak, not a signing key, or a type vcrd does not support), or
-  because it is an embedded key alone and the caller has not opted in.
+  property of the key (weak, not a signing key, or a type vcrd does not support); because
+  it is an embedded key alone and the caller has not opted in, or one of two embedded
+  keys that differ; or, for a caller-supplied key, because it stands in when none is
+  chosen, or because it is the key of a member that is not eligible.
 
 The rules, which together make the table below:
 
 1. When a caller-supplied key and an issuer key are both present, they must be the same
    key, whatever the issuer key's source; otherwise vcrd does not succeed, unless the
-   caller opts in to letting its key override the issuer key (milestone 2). When the
-   credential names an issuer key, a caller-supplied key is thus a constraint on it, and
-   adds no other way to succeed; when there is no issuer key, the caller-supplied key
-   decides. RFC 8725 §3.8 has an application reject a JWT whose keys do not belong to
-   its issuer.
+   caller opts in to letting its key override the issuer key (`KeyPolicy`,
+   `--allow-key-override`), when a warning names the issuer key and its proof's
+   result. When the credential names an issuer key, a caller-supplied key is thus a
+   constraint on it, and adds no other way to succeed; when there is no issuer key, the
+   caller-supplied key decides. RFC 8725 §3.8 has an application reject a JWT whose keys
+   do not belong to its issuer.
 2. The deciding proof key is the issuer key when it is present, and the caller-supplied
    key when the issuer key is not present or the caller has opted in to the override. The
    embedded key decides only when neither is present, and then only with the caller's
@@ -766,7 +789,10 @@ The rules, which together make the table below:
 3. vcrd may succeed only when the deciding proof is correct.
 
 A refused caller-supplied key or a refused issuer key prevents success; the findings say
-why. A refused embedded key is reported and otherwise treated as not present. A proof not
+why. A refused embedded key is reported and otherwise treated as not present. A finding
+that refuses a key that does not decide, such as an issuer key the override sets aside,
+is a warning, so that the outcome is the rules' (`ProofKey::refusals` in
+`vcrd-core/src/keys.rs`). A proof not
 attempted for a reason specific to its key counts, for success, as incorrect. One not
 attempted for a reason independent of the key, such as an `alg` vcrd does not implement
 or a signature of the wrong length, means no proof is attempted with any key, and vcrd
@@ -781,7 +807,8 @@ and the result says that the two were not compared (milestone 2, DEVELOPMENT-PLA
 
 The table gives every combination of at most one key of each kind in which no two
 different keys both give correct proofs. A key set supplies at most one caller-supplied
-key, the one matched to the credential (milestone 2). E, I and C say whether an embedded,
+key: the key of the eligible member whose proof is correct, or, when there is none, the
+one chosen to explain why (milestone 2). E, I and C say whether an embedded,
 issuer and caller-supplied key is present (1) or not (0). E=I, E=C and I=C say whether
 two present keys are the same key. E?, I? and C? say whether the proof with that key is
 correct. S? says whether vcrd may succeed (Y), must not (N), or may only with the caller's
@@ -835,9 +862,10 @@ code tests to fail, which will need to be fixed with code updates.**
 | 111 | N | N | N | N | N | Y | C | issuer proof key incorrect even though caller-supplied proof key correct |
 | 111 | N | N | N | N | N | N | N | three different proof keys, all incorrect |
 
-Milestone 1 produces the ten rows without a caller-supplied key, each from a fixture
-listed in `fixtures/README.md`; `vcrd-cli/tests/key_and_proof_table.rs` reads this table
-and checks vcrd against each of them. Milestone 2 tests every row (DEVELOPMENT-PLAN.md).
+`vcrd-cli/tests/key_and_proof_table.rs` reads this table and checks vcrd against every
+row, with each setting of the two opt-ins, from inputs it builds at run time
+(DEVELOPMENT-PLAN.md, milestone 2). `fixtures/README.md` lists committed inputs that
+show some of the rows at work.
 
 ### `did:key`
 
@@ -1020,7 +1048,7 @@ mechanism and its status:
 | Threat | Mechanism | Section | Status |
 |---|---|---|---|
 | false success through algorithm confusion | caller allowlist; `none` always rejected; algorithm bound to key type | §8 | designed; tested in the prototype |
-| false success through key substitution | the rules of §8's key and proof table; provenance, including the proof with the embedded key and `verify.embedded_key_proof_correct` | §8 | implemented for `did:key` and an embedded JWK; tested by `vcrd-cli/tests/key_and_proof_table.rs` on the fixtures for the table's milestone 1 rows |
+| false success through key substitution | the rules of §8's key and proof table; provenance, including the proof with the embedded key and `verify.embedded_key_proof_correct` | §8 | implemented for `did:key`, an embedded JWK and a caller's key set; tested by `vcrd-cli/tests/key_and_proof_table.rs` on inputs for every row of the table, built at run time |
 | false success through a weak key | per-algorithm criteria at resolution; strict verification | §8 | implemented for EdDSA; tested by `fixtures/weak-key.jwt` and `small-order-r.jwt` |
 | false assurance from checks not performed | `not_evaluated` in every result | §3, §6 | designed; in the prototype |
 | verification steered to fetch key material from an attacker-chosen location | the blocking rule stops verify on a dangerous inspect failure | §4 | designed; no case implemented |

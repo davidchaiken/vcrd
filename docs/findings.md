@@ -866,7 +866,9 @@ repository; neither has a dated copy, so each is linked where it is published no
 ### <a id="verify.did_key_codec_unsupported"></a>`verify.did_key_codec_unsupported`
 
 - **Meaning.** The `did:key` names a signing key type vcrd cannot use.
-- **Attribution and severity.** `vcrd`, `error`.
+- **Attribution and severity.** `vcrd`, `error`; a `warning` when the issuer key does not
+  decide because the caller's own key overrides it (`--allow-key-override`), since a
+  refusal of a key that does not decide leaves the outcome as the rules have it.
 - **Detail.** `codec`: the multicodec code, in hexadecimal. `name`: its name in the
   [multicodec table], when vcrd knows it, otherwise `null`.
 - **Standard.** None: the key types vcrd implements ([ARCHITECTURE] §8).
@@ -878,7 +880,9 @@ repository; neither has a dated copy, so each is linked where it is published no
 
 - **Meaning.** The `did:key` holds a key-agreement key, X25519 or X448, which cannot
   verify a signature.
-- **Attribution and severity.** `input`, `error`.
+- **Attribution and severity.** `input`, `error`; a `warning` when the caller's own key
+  overrides the issuer key (`--allow-key-override`), as for
+  `verify.did_key_codec_unsupported`.
 - **Detail.** `codec`: the multicodec code, in hexadecimal. `name`: `x25519-pub` or
   `x448-pub`.
 - **Standard.** [RFC 8037] §3.2: these keys MUST NOT be used for signing.
@@ -888,9 +892,10 @@ repository; neither has a dated copy, so each is linked where it is published no
 ### <a id="verify.weak_key"></a>`verify.weak_key`
 
 - **Meaning.** The key cannot bind a signature to a message, so vcrd refuses it.
-- **Attribution and severity.** `input`, `error`.
+- **Attribution and severity.** `input`, `error`; a `warning` when the key does not decide,
+  as when the caller's own key overrides the issuer key (`--allow-key-override`).
 - **Detail.** `key`: the key, named as `key_provenance.keys` names it, by its `kinds`,
-  `method` or `location`, and `thumbprint`. `criterion`: the weak-key test it fails; for
+  `method`, `location` or `kid`, and `thumbprint`. `criterion`: the weak-key test it fails; for
   Ed25519, `small_order`.
 - **Standard.** [REQUIREMENTS] §10, with the criteria in [ARCHITECTURE] §8. [RFC 8032]
   does not ask a verifier to check the key; vcrd checks it when the key is resolved, so
@@ -961,18 +966,231 @@ repository; neither has a dated copy, so each is linked where it is published no
 - **Meaning.** The proof with a key that is not the deciding proof key is correct, though
   it does not count toward the outcome: whoever signed holds that key's private key.
   Where that is key substitution, `verify.embedded_key_proof_correct` is reported
-  instead.
+  instead; where it is the key of a key set member that is not eligible, the member's own
+  finding says so instead (`verify.caller_key_excluded`,
+  `verify.key_set_kid_not_header_kid` or `verify.caller_key_alg_alias`).
 - **Attribution and severity.** `input`, `warning`.
 - **Detail.** `key`: the key, named as `key_provenance.keys` names it, by its `kinds`,
-  `method` or `location`, and `thumbprint`. `why`: why its proof does not count, either
-  the reason it is refused, such as `embedded_key_alone` for an embedded key alone
-  without the caller's opt-in, or `another_key_decides`, as when the issuer key decides
-  but vcrd cannot compare it with this key.
+  `method`, `location` or `members`, and `thumbprint`. `why`: why its proof does not
+  count, either the reason it is refused, such as `embedded_key_alone` for an embedded key
+  alone without the caller's opt-in, or `another_key_decides`, as when the issuer key
+  decides but vcrd cannot compare it with this key.
 - **Standard.** [ARCHITECTURE] §8, "Keys and proofs": the rules that say which key
   decides, and the proofs with the other keys, made for information.
 - **Remedy.** Nothing fails because of it. It says what the credential's signature
   establishes beside the outcome: a trust layer that accepts this key on other grounds,
   or a caller that opts in to it, would find the signature correct.
+
+### <a id="verify.key_set_member_ignored"></a>`verify.key_set_member_ignored`
+
+- **Meaning.** With `--key-set-checks lenient`, a member of the key set passed with
+  `--key-set` is ignored, and the rest of the set is used. Reported once per verify,
+  before the proof's findings. With `strict`, the default, the set is rejected instead, a
+  caller error (`key_set_rejected`, [output.md](output.md)). A member is a JWK, whose own
+  JSON members RFC 7517 §4 calls parameters, as here.
+- **Attribution and severity.** `policy`, `warning`: the key set is the caller's.
+- **Detail.** `index`: the member's position in `keys`, from 0, which names it and gives
+  it no precedence. `kid`: its `kid`, when that is a string. `problem`, one of:
+  - `not_object`: the member is not a JSON object;
+  - `{"parameter_repeated": name}`: a parameter's name appears more than once;
+  - `kty_missing`: no `kty`, or one that is not a string;
+  - `{"kty_unknown": kty}`: a key type vcrd does not know;
+  - `{"parameter_missing": name}`: a parameter the key type requires is absent or not a
+    string;
+  - `{"parameter_invalid": name}`: `kid`, `alg` or `use` is not a string, or `key_ops`
+    is not an array of strings;
+  - `key_invalid`: the parameters do not decode to a key, such as an Ed25519 `x` that is
+    not a point.
+- **Standard.** [RFC 7517] §5: an implementation should ignore a member whose `kty` it
+  does not understand, that lacks required parameters, or whose values are out of range.
+  §4 lets a parser reject a JWK whose parameter names repeat; §4.2–4.5 define `use`,
+  `key_ops`, `alg` and `kid`.
+- **Remedy.** Correct the member, or remove it if it is not meant for vcrd.
+
+### <a id="verify.key_set_private_key"></a>`verify.key_set_private_key`
+
+- **Meaning.** With `--key-set-checks lenient`, a member of the key set passed with
+  `--key-set` carries private-key parameters, such as `d`, which verifying does not need:
+  whoever has the file has the private key. vcrd uses the member's public parameters, and
+  never shows the private ones. An `oct` key's `k` is the key itself, and is not reported
+  here. Reported once per verify, before the proof's findings. With `strict`, the
+  default, the set is rejected instead (`key_set_rejected`).
+- **Attribution and severity.** `policy`, `warning`: the key set is the caller's.
+- **Detail.** `index`: the member's position in `keys`, from 0. `kid`: its `kid`, when
+  that is a string. `parameters`: the private parameters present.
+- **Standard.** [RFC 7518] §6.2.2 and §6.3.2, and [RFC 8037] §2, define the private
+  parameters; a verifier needs only the public ones.
+- **Remedy.** Give vcrd a key set of public keys only, and keep the private key where its
+  holder alone can read it.
+
+### <a id="verify.key_set_kid_repeated"></a>`verify.key_set_kid_repeated`
+
+- **Meaning.** With `--key-set-checks lenient`, two or more different keys of one key type
+  in the key set passed with `--key-set` share a `kid`, and the rest of the set is used.
+  With `strict`, the default, the set is rejected instead (`key_set_rejected`). Members
+  that share a `kid` and differ in key type, by `kty` and `crv`, are alternatives and not
+  this; members that hold one key are `verify.key_set_key_repeated`. Reported once per
+  verify, before the proof's findings.
+- **Attribution and severity.** `policy`, `warning`.
+- **Detail.** `kid`: the shared `kid`. `kty`, and `crv` when the key type has one.
+  `members`: the positions in `keys` of the members with the `kid` and the key type.
+- **Standard.** [RFC 7517] §4.5: different keys within a JWK Set should have distinct
+  `kid`s; keys of different types may share one as equivalent alternatives. The decision
+  of 2026-11-24 ([DEVELOPMENT-PLAN.md], milestone 2).
+- **Remedy.** Give each key its own `kid`.
+
+### <a id="verify.key_set_key_repeated"></a>`verify.key_set_key_repeated`
+
+- **Meaning.** One key appears in two or more members of the key set passed with
+  `--key-set`. The key is listed once in `key_provenance.keys`, with every member holding
+  it. Reported once per verify, before the proof's findings, whatever `--key-set-checks`
+  says: it is confusing, not wrong.
+- **Attribution and severity.** `policy`, `warning`.
+- **Detail.** `thumbprint`: the key's RFC 7638 thumbprint; `null` for an `oct` key, whose
+  thumbprint would be a hash of the secret. `members`: each member holding it, by `index`
+  and `kid`.
+- **Standard.** [RFC 7517] §5: a JWK Set is a set of keys. The decision of 2026-11-24
+  ([DEVELOPMENT-PLAN.md], milestone 2).
+- **Remedy.** Keep one member for the key, with the parameters meant for it.
+
+### <a id="verify.key_set_kid_not_header_kid"></a>`verify.key_set_kid_not_header_kid`
+
+- **Meaning.** A member of the key set passed with `--key-set`, whose key's proof is
+  correct, has a `kid` that is not the header's, resolved as inspect resolves it (the
+  member's is compared as written). With `--key-set-checks strict`, the default, the
+  member is not eligible to be the caller-supplied key, and its key is listed refused,
+  `refused: kid_not_header_kid`, unless it is also the issuer key or an embedded key. With
+  `lenient`, the member is eligible. A member whose key did not sign is not named.
+- **Attribution and severity.** `policy`. With `strict`, an `error` when no eligible
+  member's key gives a correct proof, which is then why verify fails, beside
+  `verify.caller_key_not_found`; a `warning` otherwise. With `lenient`, a `warning`.
+- **Detail.** `key`: the key, as `key_provenance.keys` names it, without its `members`.
+  `member`: the member, by `index` and `kid`. `header_kid`: the header's, resolved.
+- **Standard.** [RFC 7517] §4.5: `kid` selects a key within a JWK Set, and a key's `kid`
+  is the one its holder gave it. The decision of 2026-11-24 ([DEVELOPMENT-PLAN.md],
+  milestone 2).
+- **Remedy.** Give the member the header's `kid`, or no `kid`, if the key is meant to
+  verify credentials that name it so; or pass `--key-set-checks lenient`.
+
+### <a id="verify.caller_key_not_found"></a>`verify.caller_key_not_found`
+
+- **Meaning.** No eligible member of the key set passed with `--key-set` has a key whose
+  proof is correct, and none is chosen to explain why: neither a member holding the issuer
+  key nor one key that every eligible member holds. A refused caller-supplied key stands
+  in `key_provenance.keys`, `refused: not_found`, so that vcrd never falls back to the
+  issuer key alone. A member is eligible when the algorithm takes its key type, its own
+  `alg`, `use` and `key_ops` allow the algorithm, and, with `--key-set-checks strict`,
+  its `kid` is the header's or absent and its `alg` does not name the algorithm by its
+  other name. A member whose key's proof is correct and which is not eligible is named by
+  its own finding.
+- **Attribution and severity.** `policy`, `error`.
+- **Detail.** `kid`: the header's `kid`, resolved; `null` when the header has none.
+- **Standard.** [RFC 8725] §3.8: a key set bound to no issuer identifier binds its keys
+  to no issuer, so vcrd uses only a key that verifies and that the set allows. The
+  decision of 2026-11-24 ([DEVELOPMENT-PLAN.md], milestone 2).
+- **Remedy.** Check that the key set holds the signer's key, and that the member's
+  parameters allow the algorithm. A key listed refused with a correct proof signed the
+  credential; its own finding says why it is not eligible.
+
+### <a id="verify.caller_key_excluded"></a>`verify.caller_key_excluded`
+
+- **Meaning.** A member of the key set passed with `--key-set`, whose key's proof is
+  correct, has its own `alg`, `use` or `key_ops` excluding the algorithm the credential
+  declares, so it is not eligible to be the caller-supplied key: its key is listed
+  refused, `refused: excluded_by_member`, unless it is also the issuer key or an embedded
+  key. A member whose `alg` is `EdDSA` with a header's `Ed25519`, or the reverse, with an
+  Ed25519 key, is not excluded; see `verify.caller_key_alg_alias`. A member whose key did
+  not sign is not named.
+- **Attribution and severity.** `policy`: a member's parameters are the caller's policy.
+  An `error` when no eligible member's key gives a correct proof, which is then why verify
+  fails, beside `verify.caller_key_not_found`; a `warning` otherwise.
+- **Detail.** `key`: the key, as `key_provenance.keys` names it, without its `members`.
+  `member`: the member, by `index` and `kid`. `parameter`: `alg`, `use` or `key_ops`.
+  `value`: the parameter's value, an array for `key_ops`. `algorithm`: the declared
+  algorithm.
+- **Standard.** [RFC 8725] §3.1: each key is used with exactly one algorithm, checked
+  when the cryptographic operation is done. [RFC 7517] §4.2–4.4: `use` (`sig` for a
+  signature), `key_ops` (`verify`) and `alg`.
+- **Remedy.** If the key is meant to verify this credential, correct the member's
+  parameter; otherwise the credential is signed with an algorithm the key's holder did
+  not intend.
+
+### <a id="verify.caller_key_alg_alias"></a>`verify.caller_key_alg_alias`
+
+- **Meaning.** A member of the key set passed with `--key-set`, whose key's proof is
+  correct, has an `alg` that names the declared algorithm by its other name: `EdDSA` for
+  `Ed25519`, or the reverse, with an Ed25519 key. The two are one algorithm; a verifier
+  that compares the names would refuse the key. With `--key-set-checks lenient`, the
+  member is eligible. With `strict`, the default, it is not, and its key is listed
+  refused, `refused: alg_alias`, unless it is also the issuer key or an embedded key.
+- **Attribution and severity.** `policy`. With `strict`, an `error` when no eligible
+  member's key gives a correct proof, beside `verify.caller_key_not_found`; a `warning`
+  otherwise. With `lenient`, a `warning`.
+- **Detail.** `key`: the key, as `key_provenance.keys` names it, without its `members`.
+  `member`: the member, by `index` and `kid`. `alg`: the member's. `declared`: the
+  credential's.
+- **Standard.** [RFC 8037] §3.1 defines `EdDSA`, whose curve the key gives; [RFC 9864]
+  §2.2 defines `Ed25519` and deprecates the polymorphic name. The decisions of 2026-11-19
+  and 2026-11-24 ([DEVELOPMENT-PLAN.md], milestone 2).
+- **Remedy.** Write the member's `alg` as the credential's header does, `Ed25519` by
+  preference, if other verifiers will use the set; or pass `--key-set-checks lenient`.
+
+### <a id="verify.caller_key_type_unsupported"></a>`verify.caller_key_type_unsupported`
+
+- **Meaning.** The caller-supplied key, the key every eligible member of the key set
+  holds when none gives a correct proof, is of a type vcrd cannot use, such as an Ed448
+  key with `EdDSA`, or an `oct` key, in this release: the key is refused,
+  `refused: type_unsupported`. A refused caller-supplied key may still decide, so that no
+  other key can.
+- **Attribution and severity.** `vcrd`, `error` when the key decides; a `warning` when the
+  issuer key decides instead, and `verify.caller_key_not_issuer_key` is the error.
+- **Detail.** `key`: the key, as `key_provenance.keys` names it. `kty`, and `crv` when the
+  key type has one.
+- **Standard.** None: what vcrd supports ([DEVELOPMENT-PLAN.md], milestone 2, adds the
+  RFC 7518 signature algorithms).
+- **Remedy.** Use a verifier that supports the key type, or a release of vcrd that does.
+
+### <a id="verify.caller_key_not_issuer_key"></a>`verify.caller_key_not_issuer_key`
+
+- **Meaning.** The caller-supplied key is not the issuer key. The issuer key decides, and
+  the caller-supplied key may not take its place. An issuer key vcrd cannot decode is
+  not known to be the same key, so this applies to it too.
+- **Attribution and severity.** `policy`, `error`.
+- **Detail.** `caller_key` and `issuer_key`: the two keys, as `key_provenance.keys` names
+  them.
+- **Standard.** [ARCHITECTURE] §8, "Keys and proofs", rule 1: a caller-supplied key and an
+  issuer key, when both are present, must be the same key, unless the caller opts in to
+  the override.
+- **Remedy.** Check that the key set holds the issuer's key. The proof with the
+  caller-supplied key, in its `proof`, says whether that key signed the credential. To
+  let it decide in the issuer key's place, pass `--allow-key-override`.
+
+### <a id="verify.issuer_key_overridden"></a>`verify.issuer_key_overridden`
+
+- **Meaning.** The caller-supplied key is not the issuer key, and decides in its place,
+  as `--allow-key-override` allows. The result says nothing of the issuer key beyond
+  this warning: its proof's result, which does not count. A finding that refuses the
+  issuer key, such as `verify.did_key_codec_unsupported`, is a warning too.
+- **Attribution and severity.** `policy`, `warning`.
+- **Detail.** `issuer_key`: the key, as `key_provenance.keys` names it. `proof`: its
+  proof's result, `correct`, `incorrect` or `not_attempted`.
+- **Standard.** [ARCHITECTURE] §8, "Keys and proofs", rule 1, and the decision of
+  2026-11-13 ([DEVELOPMENT-PLAN.md], milestone 2). [RFC 8725] §3.8 has an application
+  check that a JWT's keys belong to its issuer, which the override sets aside.
+- **Remedy.** The result establishes that the caller's key signed the credential, not that
+  the issuer did. With `proof: correct`, the issuer key also signed it.
+
+### <a id="verify.different_keys_correct"></a>`verify.different_keys_correct`
+
+- **Meaning.** Two different keys both give correct proofs, so the signature binds no one
+  key, and vcrd does not succeed, whatever the caller's opt-ins. ECDSA public-key
+  recovery computes, from any signature, a second public key under which it verifies.
+- **Attribution and severity.** `input`, `error`.
+- **Detail.** `keys`: each key whose proof is correct, as `key_provenance.keys` names it.
+- **Standard.** [ARCHITECTURE] §8, "Keys and proofs"; the decision of 2026-11-13
+  ([DEVELOPMENT-PLAN.md], milestone 2). [SEC 1] §4.1.6 describes public-key recovery.
+- **Remedy.** Treat the signature as establishing nothing about who signed: obtain the
+  credential again from its issuer.
 
 ## Checks not evaluated
 
@@ -1120,6 +1338,7 @@ give the names alone. Each entry gives:
 [RFC 8259]: https://www.rfc-editor.org/rfc/rfc8259
 [RFC 8725]: https://www.rfc-editor.org/rfc/rfc8725
 [RFC 9864]: https://www.rfc-editor.org/rfc/rfc9864
+[SEC 1]: https://www.secg.org/sec1-v2.pdf
 [VC-JOSE-COSE]: https://www.w3.org/TR/2026/REC-vc-jose-cose-20261013/
 [VCDM 1.1]: https://www.w3.org/TR/2022/REC-vc-data-model-20220303/
 [VCDM 2.0]: https://www.w3.org/TR/2025/REC-vc-data-model-2.0-20250515/

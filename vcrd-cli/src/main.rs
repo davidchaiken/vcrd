@@ -24,7 +24,10 @@ use std::time::Duration;
 
 use clap::Parser;
 use clap::error::ErrorKind;
-use vcrd_core::{Context, Designations, FixedClock, KeyPolicy, Registry, SystemClock};
+use vcrd_core::{
+    Context, Designations, FixedClock, KeyPolicy, KeySet, KeySetChecks, KeySetError, Limits,
+    Registry, SystemClock,
+};
 
 use args::{Cli, Operation, OutputFormat};
 use view::Envelope;
@@ -61,16 +64,42 @@ fn main() -> ExitCode {
     let skew = Duration::from_secs(cli.options.clock_skew);
     let key_policy = KeyPolicy {
         allow_embedded_key_alone: cli.options.allow_embedded_key,
-        ..KeyPolicy::default()
+        allow_caller_key_override: cli.options.allow_key_override,
     };
-    let ctx = match cli.options.now {
+    // No flag changes a limit until milestone 3's configuration file
+    // (DEVELOPMENT-PLAN.md, milestone 2, decided 2026-11-18).
+    let limits = Limits::default();
+    // Read by verify alone, as inspect ignores the other key options (DEVELOPMENT-PLAN.md,
+    // milestone 2, decided 2026-11-24).
+    let key_set_path = cli
+        .options
+        .key_set
+        .as_deref()
+        .filter(|_| operation == Operation::Verify);
+    let checks = key_set_checks(cli.options.key_set_checks);
+    let key_set = match key_set_path {
+        None => None,
+        Some(path) => match read_key_set(path, &limits, checks) {
+            Ok(key_set) => Some(key_set),
+            Err((code, message)) => {
+                eprintln_unless_quiet(verbosity, &message);
+                let envelope = view::caller_error(code, message).with_warnings(warnings);
+                return emit(&envelope, format, verbosity);
+            }
+        },
+    };
+    let mut builder = match cli.options.now {
         Some(now) => Context::builder(FixedClock(now)),
         None => Context::builder(SystemClock),
     }
     .clock_skew(skew)
+    .limits(limits)
     .designations(designations)
-    .key_policy(key_policy)
-    .build();
+    .key_policy(key_policy);
+    if let Some(key_set) = key_set {
+        builder = builder.key_set(key_set);
+    }
+    let ctx = builder.build();
 
     let input = match read_input(file, ctx.limits().max_bytes) {
         Ok(input) => input,
@@ -167,6 +196,40 @@ fn read_input(
 
 fn unreadable(path: &Path, error: &std::io::Error) -> (&'static str, String) {
     ("input_unreadable", format!("{}: {error}", path.display()))
+}
+
+/// Reads the caller's key set, stopping one byte past its size limit, as for the
+/// credential (ARCHITECTURE §4). A file vcrd cannot use as a JWK Set is a caller error
+/// (ARCHITECTURE §6).
+fn read_key_set(
+    path: &Path,
+    limits: &Limits,
+    checks: KeySetChecks,
+) -> Result<KeySet, (&'static str, String)> {
+    let cap = u64::try_from(limits.max_key_set_bytes)
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|file| file.take(cap).read_to_end(&mut bytes))
+        .map_err(|e| ("key_set_unreadable", format!("{}: {e}", path.display())))?;
+    KeySet::parse(&bytes, limits, checks).map_err(|error| {
+        let code = match error {
+            KeySetError::TooLarge { .. } => "key_set_too_large",
+            KeySetError::TooDeep { .. } => "key_set_too_deep",
+            KeySetError::NotJson { .. } | KeySetError::NotJwkSet(_) => "key_set_invalid",
+            KeySetError::Rejected { .. } => "key_set_rejected",
+        };
+        (code, format!("{}: {error}", path.display()))
+    })
+}
+
+/// The library's value for `--key-set-checks`.
+fn key_set_checks(checks: args::KeySetChecks) -> KeySetChecks {
+    match checks {
+        args::KeySetChecks::Strict => KeySetChecks::Strict,
+        args::KeySetChecks::Lenient => KeySetChecks::Lenient,
+    }
 }
 
 fn eprintln_unless_quiet(verbosity: u8, message: &str) {

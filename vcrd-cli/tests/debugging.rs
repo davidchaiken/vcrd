@@ -6,20 +6,42 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
-use serde_json::Value;
-
-use helpers::{ROOT, guide, tables};
+use helpers::{ROOT, configured_tables, guide, launch, picked, tables};
 
 /// In a `#[cfg(test)]` module so that the workspace's panic lints exempt it, as they
 /// do test functions (docs/reviews/milestone-0.md, gap 1).
 #[cfg(test)]
 mod helpers {
+    use std::collections::BTreeSet;
     use std::fs;
+
+    use serde_json::Value;
 
     pub const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/..");
 
     pub fn guide() -> String {
         fs::read_to_string(format!("{ROOT}/docs/debugging.md")).unwrap()
+    }
+
+    pub fn launch() -> Value {
+        serde_json::from_str(&fs::read_to_string(format!("{ROOT}/.vscode/launch.json")).unwrap())
+            .unwrap()
+    }
+
+    /// The inputs the input picker offers.
+    pub fn picked(launch: &Value) -> BTreeSet<String> {
+        let input = launch["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|input| input["id"] == "input")
+            .unwrap();
+        input["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|option| option.as_str().unwrap().to_owned())
+            .collect()
     }
 
     /// The rows of every table in the guide's section `heading`, its subsections
@@ -37,36 +59,79 @@ mod helpers {
                     && !line.starts_with("|---")
                     && !next.is_some_and(|n| n.starts_with("|---"))
             })
-            .map(|(line, _)| {
-                line.trim_matches('|')
-                    .split('|')
-                    .map(|cell| cell.trim().replace('`', ""))
-                    .collect()
-            })
+            .map(|(line, _)| cells(line))
             .collect()
+    }
+
+    fn cells(line: &str) -> Vec<String> {
+        line.trim_matches('|')
+            .split('|')
+            .map(|cell| cell.trim().replace('`', ""))
+            .collect()
+    }
+
+    /// Each table in the guide's section `heading`, its subsections included: the launch
+    /// configuration the line before it names in bold, if it names one alone, and its
+    /// rows, as [`tables`] gives them.
+    pub fn configured_tables(
+        guide: &str,
+        heading: &str,
+    ) -> Vec<(Option<String>, Vec<Vec<String>>)> {
+        let section = guide.split_once(&format!("\n## {heading}\n")).unwrap().1;
+        let section = section.split_once("\n## ").map_or(section, |(s, _)| s);
+        let mut found = Vec::new();
+        let mut before = "";
+        let mut lines = section.lines().peekable();
+        while let Some(line) = lines.next() {
+            if !line.starts_with('|') {
+                if !line.trim().is_empty() {
+                    before = line;
+                }
+                continue;
+            }
+            // A header row, which the delimiter row follows; then the rows.
+            lines.next();
+            let mut rows = Vec::new();
+            while let Some(row) = lines.next_if(|l| l.starts_with('|')) {
+                rows.push(cells(row));
+            }
+            let named: Vec<&str> = before
+                .split("**")
+                .skip(1)
+                .step_by(2)
+                .filter(|span| span.starts_with("vcrd: "))
+                .collect();
+            let configuration = match named[..] {
+                [one] => Some(one.to_owned()),
+                _ => None,
+            };
+            found.push((configuration, rows));
+        }
+        found
     }
 }
 
+/// Each example and fixture is offered by the input picker, or named by a configuration
+/// of its own. A key set, and a credential with its key set beside it, are named by a
+/// configuration of their own only: the picker cannot pass `--key-set`
+/// (DEVELOPMENT-PLAN.md, milestone 2, decided 2026-11-25).
 #[test]
-fn the_launch_configuration_offers_every_example_and_fixture() {
-    let launch: Value =
-        serde_json::from_str(&fs::read_to_string(format!("{ROOT}/.vscode/launch.json")).unwrap())
-            .unwrap();
-    let input = launch["inputs"]
+fn the_launch_configurations_offer_every_example_and_fixture() {
+    let launch = launch();
+    let picked = picked(&launch);
+    let dirs = ["examples", "fixtures"];
+    let named: BTreeSet<String> = launch["configurations"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|input| input["id"] == "input")
-        .unwrap();
-    let offered: BTreeSet<String> = input["options"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|option| option.as_str().unwrap().to_owned())
+        .flat_map(|c| c["args"].as_array().unwrap())
+        .map(|arg| arg.as_str().unwrap())
+        .filter(|arg| dirs.iter().any(|d| arg.starts_with(&format!("{d}/"))))
+        .map(str::to_owned)
         .collect();
 
     let mut inputs = BTreeSet::new();
-    for dir in ["examples", "fixtures"] {
+    for dir in dirs {
         for entry in fs::read_dir(format!("{ROOT}/{dir}")).unwrap() {
             let name = entry.unwrap().file_name().into_string().unwrap();
             if name != "README.md" {
@@ -74,11 +139,25 @@ fn the_launch_configuration_offers_every_example_and_fixture() {
             }
         }
     }
-    let missing: Vec<_> = inputs.difference(&offered).collect();
-    let absent: Vec<_> = offered.difference(&inputs).collect();
+    let with_key_set = |path: &str| {
+        path.ends_with(".jwks.json")
+            || path
+                .strip_suffix(".jwt")
+                .is_some_and(|stem| inputs.contains(&format!("{stem}.jwks.json")))
+    };
+    let missing: Vec<_> = inputs
+        .iter()
+        .filter(|p| !picked.contains(*p) && !named.contains(*p))
+        .collect();
+    let absent: Vec<_> = picked
+        .union(&named)
+        .filter(|p| !inputs.contains(*p))
+        .collect();
+    let misplaced: Vec<_> = picked.iter().filter(|p| with_key_set(p)).collect();
     assert!(
-        missing.is_empty() && absent.is_empty(),
-        "add to .vscode/launch.json: {missing:?}; remove from it: {absent:?}"
+        missing.is_empty() && absent.is_empty() && misplaced.is_empty(),
+        "offer in .vscode/launch.json: {missing:?}; remove from it, as they do not exist: \
+         {absent:?}; take out of the input picker, which cannot pass --key-set: {misplaced:?}"
     );
 }
 
@@ -103,6 +182,93 @@ fn the_guide_breaks_in_functions_that_exist() {
             "docs/debugging.md: no function {function} in {file}"
         );
     }
+}
+
+/// The line before each table of where to break names, alone, the launch configuration
+/// to run its rows with, and that configuration offers each row's input: in the input
+/// picker, or in its own arguments (DEVELOPMENT-PLAN.md, milestone 2, decided
+/// 2026-11-25).
+#[test]
+fn each_table_names_a_configuration_that_offers_its_inputs() {
+    let guide = guide();
+    let launch = launch();
+    let picked = picked(&launch);
+    let tables = configured_tables(&guide, "Where to break");
+    assert!(
+        !tables.is_empty(),
+        "docs/debugging.md: no tables in \"Where to break\""
+    );
+    for (configuration, rows) in tables {
+        let Some(configuration) = configuration else {
+            panic!(
+                "docs/debugging.md: the line before the table of {rows:?} names no one configuration in bold"
+            )
+        };
+        let found = launch["configurations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == configuration.as_str())
+            .unwrap_or_else(|| {
+                panic!("docs/debugging.md: no configuration {configuration} in .vscode/launch.json")
+            });
+        let args: Vec<&str> = found["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|arg| arg.as_str().unwrap())
+            .collect();
+        for row in rows {
+            let input = &row[1];
+            let offered = if args.contains(&"${input:input}") {
+                picked.contains(input)
+            } else {
+                args.contains(&input.as_str())
+            };
+            assert!(
+                offered,
+                "docs/debugging.md: {configuration} does not offer {input}"
+            );
+        }
+    }
+}
+
+/// Each launch configuration that runs a committed input, one that its arguments name or
+/// the input picker offers, is the configuration of a table of where to break, so that a
+/// new configuration cannot be left out of the guide (DEVELOPMENT-PLAN.md, milestone 2,
+/// decided 2026-11-25).
+#[test]
+fn every_configuration_for_a_committed_input_has_a_table() {
+    let guide = guide();
+    let used: BTreeSet<String> = configured_tables(&guide, "Where to break")
+        .into_iter()
+        .filter_map(|(configuration, _)| configuration)
+        .collect();
+    let committed = |arg: &str| {
+        arg == "${input:input}"
+            || ["examples/", "fixtures/"]
+                .iter()
+                .any(|d| arg.starts_with(d))
+    };
+    let launch = launch();
+    let missing: Vec<&str> = launch["configurations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| {
+            c["args"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|arg| committed(arg.as_str().unwrap()))
+        })
+        .map(|c| c["name"].as_str().unwrap())
+        .filter(|name| !used.contains(*name))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "docs/debugging.md: no table of where to break runs {missing:?}"
+    );
 }
 
 /// Each path in the repository that the guide's text names, outside its code blocks,
