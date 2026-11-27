@@ -3,8 +3,9 @@
 How to step through vcrd in a debugger, with a configuration known to work, and how to
 check its work without one. REQUIREMENTS §6 asks for such a configuration, and counts a
 procedure as documented only once it has been run end to end. This guide covers macOS,
-with Visual Studio Code (VS Code) and the CodeLLDB extension. Linux is ARCHITECTURE §10
-[G2], in milestone 2 of DEVELOPMENT-PLAN.md.
+with Visual Studio Code (VS Code) and the CodeLLDB extension, and Linux, from the command
+line with CodeLLDB's lldb in an Ubuntu container
+([Linux, from the command line](#linux-from-the-command-line)).
 
 **Note: This guide is read by `vcrd-cli/tests/debugging.rs`: the functions in the tables
 of where to break, every path it names, and its quotations of the scripts in
@@ -36,7 +37,9 @@ Last run end-to-end on 2026-11-11; `docs/reviews/milestone-1.md` records the com
    ```
 
    lists `lldb_lookup.py` and `lldb_providers.py`. CodeLLDB brings its own lldb, which
-   loads them.
+   loads them. Its lldb matters: with these formatters, Xcode's lldb shows some enums
+   that carry data as a variant they do not hold, where CodeLLDB's shows them correctly
+   ([Linux, from the command line](#linux-from-the-command-line)).
 2. Open the repository's root folder. VS Code reads `.vscode/launch.json` from the
    folder it opened.
 3. Build nothing by hand, and debug no `--release` build. The `dev` profile's defaults,
@@ -277,6 +280,146 @@ moved.
   (`support::vcrd()`, through `assert_cmd`), so a breakpoint in `vcrd` is never reached
   from a test. Run the test's command line with **vcrd: pick an input**, which uses the
   tests' clock.
+
+## Linux, from the command line
+
+On Linux, the guide runs from a terminal, with `rust-lldb` in an Ubuntu container.
+`rust-lldb` comes with the toolchain, beside `rustc`. It starts the first `lldb` on
+`PATH` and has it load the toolchain's formatters, as CodeLLDB does for a configuration
+with `"sourceLanguages": ["rust"]`. In the container, that `lldb` is CodeLLDB's own, from
+its package for Linux. With Rust 1.99.1's formatters, other lldbs show some enums that
+carry data as a variant they do not hold, reading one variant's fields from the bytes of
+another. At the breakpoint of [A first session](#a-first-session), Ubuntu's lldb 22.1.2,
+LLVM's own 22.1.8 and Apple's `lldb-2103.0.34.407` each showed the finding's `detail` as
+`KeySetKidRepeated{kid:"EdDSA", …}`, beside its `code`, `verify.algorithm_deprecated`.
+CodeLLDB's, `22.1.8-codelldb`, shows `AlgorithmDeprecated`, on Linux as on macOS. The
+commands below use Docker.
+
+<!-- Known to work, on Linux: from the maintainer's run. -->
+
+### The container
+
+`docker/debugging/Dockerfile` builds an image of Ubuntu 26.04 with CodeLLDB's lldb and
+the toolchain `rust-toolchain.toml` pins, and says why it holds each. It holds no source:
+`docker/debugging/Dockerfile.dockerignore` lets only `rust-toolchain.toml` into the
+build. From the repository's root:
+
+```bash
+docker build -f docker/debugging/Dockerfile -t vcrd-debug .
+```
+
+Download the crates `Cargo.lock` names into a volume. This is the only step that uses
+the network:
+
+```bash
+docker run --rm --cap-drop ALL --security-opt no-new-privileges \
+  --mount type=bind,src="$PWD",dst=/src,readonly \
+  --mount type=volume,src=vcrd-debug-cargo,dst=/home/ubuntu/.cargo \
+  vcrd-debug cargo fetch --locked
+```
+
+Then start a shell in a container:
+
+```bash
+docker run --rm -it --cap-drop ALL --security-opt no-new-privileges \
+  --network none --env CARGO_NET_OFFLINE=true --memory 4g \
+  --mount type=bind,src="$PWD",dst=/src,readonly \
+  --mount type=volume,src=vcrd-debug-cargo,dst=/home/ubuntu/.cargo \
+  --mount type=volume,src=vcrd-debug-target,dst=/home/ubuntu/target \
+  vcrd-debug
+```
+
+- **The repository** is at `/src`, the shell's working directory, and read-only.
+- **The volumes** hold cargo's downloads and the build, which outlast the container. The
+  build stays out of the repository's `target/`, which holds the host's.
+- **No network:** cargo uses what `cargo fetch` downloaded.
+- **No capabilities:** the shell runs as the image's user, `ubuntu`. lldb needs no
+  capability to trace the program it starts.
+- **4 GiB of memory:** a debugger whose memory grows without bound is stopped there,
+  inside the container.
+
+In the shell, build `vcrd` as the launch configurations do, with `--locked`, since
+`Cargo.lock` is read-only too:
+
+```bash
+cargo build --locked --bin=vcrd --package=vcrd-cli
+```
+
+It builds into `$CARGO_TARGET_DIR`, `/home/ubuntu/target`. The repository's
+`target/debug/vcrd` is the host's build: lldb loads a macOS build as `(arm64)` rather
+than `(aarch64)`, and `run` fails with `error: the platform is not currently connected`.
+The container sees a change to the source as soon as it is saved; build again before the
+next session. <!-- from the run: the image's and the volumes' sizes --> To remove the
+image and the volumes:
+
+```bash
+docker image rm vcrd-debug
+docker volume rm vcrd-debug-cargo vcrd-debug-target
+```
+
+### A first session, from the command line
+
+The steps of [A first session](#a-first-session), with lldb's commands.
+
+1. Start `rust-lldb` with the arguments of **vcrd: pick an input**, choosing `verify` and
+   `examples/ed25519.jwt`:
+
+   ```bash
+   rust-lldb "$CARGO_TARGET_DIR/debug/vcrd" -- verify examples/ed25519.jwt --now 2026-10-01T00:00:00Z
+   ```
+
+   It prints the commands it runs before its prompt. The first imports the formatters,
+   from a path that begins with what `rustc --print sysroot` prints in the container:
+   the pinned toolchain, whose name ends in `x86_64-unknown-linux-gnu` on x86_64.
+
+   ```
+   (lldb) command script import "/home/ubuntu/.rustup/toolchains/1.99.1-aarch64-unknown-linux-gnu/lib/rustlib/etc/lldb_lookup.py"
+   (lldb) target create "/home/ubuntu/target/debug/vcrd"
+   Current executable set to '/home/ubuntu/target/debug/vcrd' (aarch64).
+   ```
+
+2. Set a breakpoint on `exit_code` by name, with its crate's name
+   ([Setting breakpoints](#setting-breakpoints)), and run:
+
+   ```
+   breakpoint set --name vcrd::exit::exit_code
+   run
+   ```
+
+   lldb resolves the breakpoint to the function's first line:
+
+   ```
+   Breakpoint 1: where = vcrd`vcrd::exit::exit_code + 28 at exit.rs:15:20, address = …
+   ```
+
+   When the session stops there, lldb prints the frame with its arguments, `report`
+   among them, on one very long line; then the source around line 15,
+   `let mut vcrd = false;`; then the warning that step 3 of
+   [A first session](#a-first-session) quotes, that lldb has no plugin for Rust.
+
+3. Check that the formatters loaded:
+
+   ```
+   type category list
+   ```
+
+   Among the categories it lists is `Category: Rust (enabled)`, which the import in
+   step 1 registered.
+
+4. Print the report one phase at a time, as in step 4 of
+   [A first session](#a-first-session):
+
+   ```
+   print report->parse
+   print report->inspect
+   print report->verify
+   print report->contained
+   ```
+
+   Each prints as step 4 describes, and `print report->verify` exactly as it quotes.
+
+5. Continue, with `continue`. vcrd prints its result, and lldb then prints
+   `Process … exited with status = 0 (0x00000000)`. `quit` ends lldb.
 
 ## Without a debugger
 

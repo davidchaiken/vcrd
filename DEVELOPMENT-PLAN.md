@@ -375,7 +375,16 @@ guide run again on macOS, including a Step Out of `keys::resolve` and of
 `runner::embedded_proof` with CodeLLDB's Variables view open: at 1.99.1 both made
 CodeLLDB's memory grow without bound, and 1.101 brings rust-lang/rust#165113. Also a Step
 Out of `keys::add_members` and of `keys::choose_caller_key`, which return into
-`runner::verify_proofs` too (added 2026-11-25).
+`runner::verify_proofs` too (added 2026-11-25). Also, with 1.101's formatters (added
+2026-11-26): whether a stock lldb, Ubuntu's, LLVM's or Apple's, still shows the enums of
+slice 4's first session as a variant they do not hold. If one does, research the problem
+upstream: whether rust-lang/rust or LLVM already has a report of it, and whether a fix is
+already on its way to a release, before considering a report of vcrd's own. lldb's
+support for Rust is still changing from release to release, and CodeLLDB's own build may
+carry fixes that reach upstream later, so the likeliest remedy is a later release. If a
+stock lldb shows them correctly, the image takes its lldb from Ubuntu's archive again:
+CodeLLDB's package leaves `docker/debugging/Dockerfile`, and the guide's sentences on
+which lldb matters change with it.
 
 **Decided 2026-11-13**, before implementation:
 
@@ -728,6 +737,72 @@ sole member"), so adding a member could withdraw acceptance: `{issuer key}` pass
   configuration that runs their rows, which must offer each row's input; every
   configuration that runs a committed input has a table, the two opt-ins' included.
 
+**Decided 2026-11-25**, before slice 4 ([G2]):
+
+- *The environment.* Docker Desktop on the maintainer's Mac, so the run is on arm64; CI's
+  runners are x86_64. `ubuntu:26.04`, the release CI's `ubuntu-latest` runs, named in full
+  and pinned by the digest of its multi-arch index, with apt read from Ubuntu's snapshot
+  archive at a fixed time, so that the image is the same whenever it is built. Only
+  `ca-certificates`, which apt needs to reach the snapshot over HTTPS, and `openssl`, which
+  it depends on, come from the archive as it is at the build. The digest and the
+  snapshot's time move together when the guide is run again, not by dependabot. The
+  image holds Ubuntu's `rustup`, the toolchain
+  `rust-toolchain.toml` names (installed by reading that file, the only one the build
+  sees), an lldb (next item), a linker, and the tools the helper scripts need. It holds no
+  source. It is built from `docker/debugging/Dockerfile`, apart from the helper scripts.
+- *The lldb (changed 2026-11-26, after the first session on Linux).* With Rust 1.99.1's
+  formatters, Ubuntu's lldb 22.1.2, LLVM's own 22.1.8 and Apple's `lldb-2103.0.34.407`
+  showed some enums that carry data as a variant they do not hold. At
+  `vcrd::exit::exit_code`, for `examples/ed25519.jwt`, the finding's `detail` showed as
+  `KeySetKidRepeated` rather than `AlgorithmDeprecated`, and the header's `jwk` as
+  `Some(Ok(…))` rather than `None`. CodeLLDB 1.12.3's lldb, `22.1.8-codelldb`, built from
+  a fork of LLVM, showed them correctly, on macOS and in the container alike, through the
+  same `rust-lldb`; CodeLLDB loads the formatters as `rust-lldb` does. The image takes
+  CodeLLDB's lldb from its Linux package for the platform being built, arm64 or x86_64,
+  each pinned by URL and by the SHA-256 its release page gives, in place of Ubuntu's
+  `lldb-22`. The guide says, for both platforms, that this lldb matters. The Rust 1.101
+  task, above, looks again.
+- *What the container reaches.* The repository, mounted read-only; the target directory
+  and cargo's directory, in named volumes; an unprivileged user, with no capabilities and
+  no new privileges; 4 GiB of memory, so that a debugger whose memory grows without bound
+  is stopped inside the container; the network, only for `cargo fetch --locked`. lldb
+  leaves address-space randomization on (`target.disable-aslr false`) rather than have
+  seccomp relaxed. If the container still cannot trace, that comes back for decision: no
+  capability is added without one.
+- *The run.* All of the guide, by command line with `rust-lldb`: setup, the first session,
+  every row of where to break with the same inputs, breakpoints by name, a test binary,
+  and the helper scripts. To begin with, the maintainer runs every container and debugger
+  command, and then decides what to hand over. No row is added for a Step Out into
+  `runner::verify_proofs`; the maintainer may try one.
+- *The guide.* A Known-to-work table for Linux beside macOS's, each with its date, and a
+  section "Linux, from the command line": the image, a first session, each launch
+  configuration as a command line, VS Code's actions as lldb commands, and debugging a
+  test. The tables of where to break stay shared. Checks of the Linux text in
+  `vcrd-cli/tests/debugging.rs` wait until the differences between the platforms are
+  understood. Until then the guide names the Dockerfile rather than quoting it, so that
+  no unchecked copy can differ from it.
+- *No CI job* builds the image; the milestone review (slice 9) reconsiders it.
+- *Records.* ARCHITECTURE §10 [G2] closes once the maintainer has run the guide. What the
+  run found and changed goes in the pull request, and into the milestone's review record
+  in slice 9.
+- *Added 2026-11-26, for this slice.* Each is designed, and the design approved, before
+  it is built:
+  - *The command line on both platforms.* The guide documents running `rust-lldb` with
+    CodeLLDB's lldb first on `PATH` on macOS too, from the CodeLLDB extension's
+    `lldb/bin`, beside the container's on Linux. The first session and the tables of
+    where to break serve both.
+  - *A check of lldb's output on both platforms.* A command-line session run in batch
+    mode, whose output is checked on macOS and on Linux. Comparing the two platforms'
+    output is not enough: at first both showed the same wrong variants. The expectations
+    come from outside the debugger: vcrd's own `--format json` for the same input, and
+    rules taken from vcrd's source, such as that a finding's `detail` is the variant its
+    `code` names. Where and when it runs (by hand, in the container, in CI) is part of
+    its design. On macOS it is a debugger run outside a container, which the maintainer
+    starts.
+- *Rounds:* (a) the Dockerfile, the setup and the first session; (b) the command lines,
+  the rows, the test binary, the scripts, Known to work, and the records; (c) the two
+  items added on 2026-11-26.
+
 **Delivers.** `vcrd verify` for RFC 7518's signature algorithms, with caller keys, the
 embedded-key opt-in, the override opt-in and the allowlist; the keys and their proofs'
 results for every row of ARCHITECTURE §8's key and proof table.
@@ -938,7 +1013,47 @@ milestone 2 keeps them apart, as decided on 2026-11-18). [D1], [D2]. The threat 
 `docs/threat-model.md` (REQUIREMENTS §12). README quickstart pointing at `examples/`.
 `cargo-dist` binaries, crates.io through Trusted Publishing, `Cargo.lock` tagged.
 `schema_version` stays 0 at 0.1.0 and is declared 1 in a later 0.x once external
-consumers have used it (REQUIREMENTS §9). [D3] documentation clean-up.
+consumers have used it (REQUIREMENTS §9). [D3] documentation clean-up. The maintenance
+document, below.
+
+**The maintenance document** (booked 2026-11-27, to be written in this milestone): the
+tasks done on a regular basis, each with what makes it fall due, how it is done, and what
+it records. Two questions shape it. First, which parts can be automated: as many as
+possible, whether by a reminder, a check that fails, or a script that looks values up.
+Second, how far apart each task falls, which varies widely: Rust ships a release every six
+weeks, Ubuntu an LTS every two years, and `test-powerset`'s running time changes much only
+while features are being added. The tasks known so far:
+
+- *Dependabot's pull requests*, for cargo and GitHub Actions (`.github/dependabot.yml`),
+  reviewed and merged. Dependabot covers none of the tasks below.
+- *The toolchain pin*, moved to each new stable Rust (REQUIREMENTS §13):
+  `rust-toolchain.toml` and `rust-version` together, about every six weeks while
+  development is active, with the non-blocking latest-stable CI job as early warning. Each
+  move runs the debugging guide again, since the lldb formatters come with the toolchain,
+  and checks whether a stock lldb now shows the enums slice 4 found wrong. If one does,
+  CodeLLDB's package leaves the image (milestone 2, the Rust 1.101 task).
+- *The debugging image*: its apt snapshot time, its base image's digest and its CodeLLDB
+  version moved together, and the debugging guide run again (milestone 2, slice 4).
+  CodeLLDB on the maintainer's Mac updates itself in VS Code, so the image's version falls
+  behind unless it is moved with it.
+- *The image's Ubuntu release*, following CI's `ubuntu-latest` to the next LTS, every two
+  years or so.
+- *The weekly CI run's failures*: a new RustSec advisory against an unchanged `Cargo.lock`.
+  The failure is emailed to whoever last changed the schedule line in `ci.yml`.
+- *The tools the Makefile pins*: cargo-hack, cargo-deny and cargo-audit.
+- *The cryptographic crates' audit status* ([C1], recorded in slice 6 of milestone 2). A
+  release candidate, or an advisory against a chosen version, comes back for decision
+  (milestone 2, decided 2026-11-13).
+- *The standards vcrd implements*, checked for updates, especially the cryptographic
+  suites; and the registries and data it depends on: IANA's JOSE algorithm registry (the
+  allowlist), the multicodec table (`did:key` codecs) and, from milestone 5, the pinned
+  JSON-LD contexts.
+- *`test-powerset`'s running time*, which doubles with each feature of vcrd-core: moved back
+  to the weekly schedule if it grows slow (`ci.yml`). It changes much only during active
+  development.
+- *The examples' validity*: `examples/ed25519.jwt` is valid until 2031-01-01. The tests use
+  a fixed clock, but a run against the system clock sees it expired after that date. This
+  one falls due once.
 
 **Delivers.** Installable `vcrd-cli` and prebuilt binaries; `vcrd-core` on docs.rs.
 

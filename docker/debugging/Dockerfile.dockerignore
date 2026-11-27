@@ -1,0 +1,5 @@
+# The build of docker/debugging/Dockerfile sees rust-toolchain.toml and nothing else
+# of the repository: no source, and no target directory. Docker reads a Dockerfile's
+# own ignore file, beside it, in place of the build context's .dockerignore.
+*
+!rust-toolchain.toml

@@ -289,6 +289,7 @@ fn the_guide_names_paths_that_exist() {
     let text = text.join("\n");
     let prefixes = [
         ".vscode/",
+        "docker/",
         "docs/",
         "examples/",
         "fixtures/",
