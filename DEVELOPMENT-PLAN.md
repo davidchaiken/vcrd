@@ -798,7 +798,11 @@ sole member"), so adding a member could withdraw acceptance: `{issuer key}` pass
     rules taken from vcrd's source, such as that a finding's `detail` is the variant its
     `code` names. Where and when it runs (by hand, in the container, in CI) is part of
     its design. On macOS it is a debugger run outside a container, which the maintainer
-    starts.
+    starts. Dropped on 2026-11-28: the design for it (an ignored test that ran lldb in
+    batch mode over every launch configuration, with an lldb script in Python that
+    reported what lldb showed, compared with `--format json`) was more than the basic
+    smoke test wanted. Checking the debugger joins milestone 6's maintenance document
+    instead.
 - *The command line is for experts (decided 2026-11-26).* No way of running a debugger
   gets a complete guide of its own. VS Code with CodeLLDB has the whole guide. The command
   line, whose users, people or agents, are taken to be experts, gets what it takes to
@@ -810,7 +814,7 @@ sole member"), so adding a member could withdraw acceptance: `{issuer key}` pass
   checked. The command line on both platforms moves into round (b).
 - *Rounds:* (a) the Dockerfile, the setup and the first session; (b) the command line on
   both platforms, Known to work, the helper scripts and the `.lldbinit` check on Linux,
-  and the records; (c) the check of lldb's output.
+  and the records. Round (c), the check of lldb's output, was dropped (above).
 
 **Delivers.** `vcrd verify` for RFC 7518's signature algorithms, with caller keys, the
 embedded-key opt-in, the override opt-in and the allowlist; the keys and their proofs'
@@ -1057,6 +1061,13 @@ while features are being added. The tasks known so far:
   suites; and the registries and data it depends on: IANA's JOSE algorithm registry (the
   allowlist), the multicodec table (`did:key` codecs) and, from milestone 5, the pinned
   JSON-LD contexts.
+- *Checking the debugger*: that the lldb the guide uses still shows vcrd's values as vcrd
+  reports them, on macOS and on Linux. Milestone 2's slice 4 found that, with Rust 1.99.1's
+  formatters, only CodeLLDB's lldb did, and that comparing the two platforms is not
+  enough, since at first both were wrong. The reference is outside the debugger: the first
+  session's `print report->verify`, say, against `--format json` for the same input. An
+  automated smoke test is wanted if one can be kept simple. Slice 4's design for one,
+  dropped as too complicated, is in its round (c).
 - *`test-powerset`'s running time*, which doubles with each feature of vcrd-core: moved back
   to the weekly schedule if it grows slow (`ci.yml`). It changes much only during active
   development.
