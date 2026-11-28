@@ -1233,10 +1233,14 @@ change.
   configuration known to work.~~ Resolved in milestone 1, slice 6: `docs/debugging.md`,
   run end to end on macOS on 2026-11-11 (docs/reviews/milestone-1.md, "The debugging
   guide").
-- **[G2] Run the debugging guide on Linux**, before a Linux-only failure needs it. [G1]
+- ~~**[G2] Run the debugging guide on Linux**, before a Linux-only failure needs it. [G1]
   ran it on macOS only. Includes choosing the Linux environment, a virtual machine or
   a container on the maintainer's machine; when the work happens is the maintainer's
-  decision (DEVELOPMENT-PLAN.md, milestone 2).
+  decision (DEVELOPMENT-PLAN.md, milestone 2).~~ Resolved in milestone 2, slice 4:
+  `docs/debugging.md`, "From the command line", run on 2026-11-26 in an Ubuntu 26.04
+  container built from `docker/debugging/Dockerfile`. Only CodeLLDB's lldb showed vcrd's
+  enums correctly, so the guide uses it on both platforms (DEVELOPMENT-PLAN.md, milestone
+  2, decided 2026-11-25, before slice 4).
 
 ### [F] Format coverage
 

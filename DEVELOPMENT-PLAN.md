@@ -799,9 +799,18 @@ sole member"), so adding a member could withdraw acceptance: `{issuer key}` pass
     `code` names. Where and when it runs (by hand, in the container, in CI) is part of
     its design. On macOS it is a debugger run outside a container, which the maintainer
     starts.
-- *Rounds:* (a) the Dockerfile, the setup and the first session; (b) the command lines,
-  the rows, the test binary, the scripts, Known to work, and the records; (c) the two
-  items added on 2026-11-26.
+- *The command line is for experts (decided 2026-11-26).* No way of running a debugger
+  gets a complete guide of its own. VS Code with CodeLLDB has the whole guide. The command
+  line, whose users, people or agents, are taken to be experts, gets what it takes to
+  start an lldb that works and run one session with it, the first session, on macOS and on
+  Linux. This narrows *The run* and *The guide*, above: no row of where to break is run
+  again on Linux, and the guide gives no launch configuration as a command line, no table
+  of VS Code's actions as lldb commands, and no test binary from the command line. The
+  helper scripts are run once on Linux, and whether the `.lldbinit` setting is needed is
+  checked. The command line on both platforms moves into round (b).
+- *Rounds:* (a) the Dockerfile, the setup and the first session; (b) the command line on
+  both platforms, Known to work, the helper scripts and the `.lldbinit` check on Linux,
+  and the records; (c) the check of lldb's output.
 
 **Delivers.** `vcrd verify` for RFC 7518's signature algorithms, with caller keys, the
 embedded-key opt-in, the override opt-in and the allowlist; the keys and their proofs'

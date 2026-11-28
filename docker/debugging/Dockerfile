@@ -1,5 +1,5 @@
-# The Linux environment of the debugging guide (docs/debugging.md, "Linux, from the
-# command line"; ARCHITECTURE §10 [G2]): Ubuntu 26.04, CodeLLDB's lldb, and the
+# The Linux environment of the debugging guide (docs/debugging.md, "From the command
+# line"; ARCHITECTURE §10 [G2]): Ubuntu 26.04, CodeLLDB's lldb, and the
 # toolchain that rust-toolchain.toml pins, for rust-lldb on the command line. It holds
 # no source: the guide mounts the repository, read-only. Build it from the repository's
 # root; Dockerfile.dockerignore, beside this file, lets only rust-toolchain.toml into
@@ -83,8 +83,9 @@ RUN mkdir -p /home/ubuntu/.cargo /home/ubuntu/target \
 USER ubuntu
 
 # lldb starts a program with address-space randomization turned off, by personality(2),
-# which Docker's default seccomp profile refuses. Leaving it on lets lldb trace the
-# program without seccomp relaxed or a capability added.
+# which Docker's default seccomp profile refuses: without this setting, run fails with
+# "personality set failed: Operation not permitted" (checked 2026-11-27). Leaving it on
+# lets lldb trace the program without seccomp relaxed or a capability added.
 RUN echo 'settings set target.disable-aslr false' > /home/ubuntu/.lldbinit
 
 # Ubuntu's rustup, 1.27, installs the toolchain a rust-toolchain.toml names, with its

@@ -3,9 +3,9 @@
 How to step through vcrd in a debugger, with a configuration known to work, and how to
 check its work without one. REQUIREMENTS §6 asks for such a configuration, and counts a
 procedure as documented only once it has been run end to end. This guide covers macOS,
-with Visual Studio Code (VS Code) and the CodeLLDB extension, and Linux, from the command
-line with CodeLLDB's lldb in an Ubuntu container
-([Linux, from the command line](#linux-from-the-command-line)).
+with Visual Studio Code (VS Code) and the CodeLLDB extension. For readers who know lldb,
+it also shows how to run CodeLLDB's lldb from the command line, on macOS and on Linux in
+an Ubuntu container ([From the command line](#from-the-command-line)).
 
 **Note: This guide is read by `vcrd-cli/tests/debugging.rs`: the functions in the tables
 of where to break, every path it names, and its quotations of the scripts in
@@ -17,6 +17,8 @@ updates.**
 
 ## Known to work
 
+### VS Code on macOS
+
 | Component | Version | Shown by |
 |---|---|---|
 | macOS | 27.0.1, arm64 | `sw_vers` and `uname -m` |
@@ -26,6 +28,19 @@ updates.**
 | Rust | 1.99.1, the toolchain `rust-toolchain.toml` pins | `rustc --version` in the repository |
 
 Last run end-to-end on 2026-11-11; `docs/reviews/milestone-1.md` records the commit used for this run.
+
+### The command line
+
+| Component | macOS | Linux | Shown by |
+|---|---|---|---|
+| System | macOS 27.0.1, arm64 | Ubuntu 26.04.1 LTS, aarch64, in a container | `sw_vers`, or `grep PRETTY_NAME /etc/os-release`; `uname -m` |
+| Containers | | Docker Desktop 4.100.1 (247138), with Docker Engine 29.9.3 | Docker Desktop's About window; `docker version --format '{{.Server.Version}}'` |
+| lldb | CodeLLDB 1.12.3's, `22.1.8-codelldb` | the same, from CodeLLDB 1.12.3's Linux package | `version` at lldb's prompt |
+| lldb's Python | 3.12.7, CodeLLDB's own | 3.12.7, CodeLLDB's own | `script import sys; print(sys.version)` at lldb's prompt |
+| Rust | 1.99.1 | 1.99.1 | `rustc --version` in the repository |
+
+The first session from the command line was last run on Linux on 2026-11-26, in the
+image `docker/debugging/Dockerfile` builds, and on macOS on 2026-11-27.
 
 ## Setup
 
@@ -39,7 +54,7 @@ Last run end-to-end on 2026-11-11; `docs/reviews/milestone-1.md` records the com
    lists `lldb_lookup.py` and `lldb_providers.py`. CodeLLDB brings its own lldb, which
    loads them. Its lldb matters: with these formatters, Xcode's lldb shows some enums
    that carry data as a variant they do not hold, where CodeLLDB's shows them correctly
-   ([Linux, from the command line](#linux-from-the-command-line)).
+   ([From the command line](#from-the-command-line)).
 2. Open the repository's root folder. VS Code reads `.vscode/launch.json` from the
    folder it opened.
 3. Build nothing by hand, and debug no `--release` build. The `dev` profile's defaults,
@@ -281,24 +296,36 @@ moved.
   from a test. Run the test's command line with **vcrd: pick an input**, which uses the
   tests' clock.
 
-## Linux, from the command line
+## From the command line
 
-On Linux, the guide runs from a terminal, with `rust-lldb` in an Ubuntu container.
-`rust-lldb` comes with the toolchain, beside `rustc`. It starts the first `lldb` on
-`PATH` and has it load the toolchain's formatters, as CodeLLDB does for a configuration
-with `"sourceLanguages": ["rust"]`. In the container, that `lldb` is CodeLLDB's own, from
-its package for Linux. With Rust 1.99.1's formatters, other lldbs show some enums that
-carry data as a variant they do not hold, reading one variant's fields from the bytes of
-another. At the breakpoint of [A first session](#a-first-session), Ubuntu's lldb 22.1.2,
-LLVM's own 22.1.8 and Apple's `lldb-2103.0.34.407` each showed the finding's `detail` as
-`KeySetKidRepeated{kid:"EdDSA", …}`, beside its `code`, `verify.algorithm_deprecated`.
-CodeLLDB's, `22.1.8-codelldb`, shows `AlgorithmDeprecated`, on Linux as on macOS. The
-commands below use Docker.
+For readers who know lldb, this section gives an lldb that works with vcrd, and one
+session with it. The rest of the guide applies, with lldb's own commands. `rust-lldb`
+comes with the toolchain, beside `rustc`. It starts the first `lldb` on `PATH` and has it
+load the toolchain's formatters, as CodeLLDB does for a configuration with
+`"sourceLanguages": ["rust"]`.
 
-<!-- Known to work, on Linux: from the maintainer's run. -->
+That `lldb` should be CodeLLDB's own. With Rust 1.99.1's formatters, other lldbs show some
+enums that carry data as a variant they do not hold, reading one variant's fields from the
+bytes of another. At the breakpoint of [A first session](#a-first-session), Ubuntu's lldb
+22.1.2, LLVM's own 22.1.8 and Apple's `lldb-2103.0.34.407` each showed the finding's
+`detail` as `KeySetKidRepeated{kid:"EdDSA", …}`, beside its `code`,
+`verify.algorithm_deprecated`. CodeLLDB's, `22.1.8-codelldb`, shows `AlgorithmDeprecated`,
+on Linux as on macOS.
 
-### The container
+### macOS
 
+The CodeLLDB extension keeps its lldb in its `lldb/bin`, under a directory named for the
+extension's version, which VS Code updates. Put it first on `PATH`, and build `vcrd` as
+the launch configurations do:
+
+```bash
+export PATH="$HOME/.vscode/extensions/vadimcn.vscode-lldb-1.12.3/lldb/bin:$PATH"
+cargo build --bin=vcrd --package=vcrd-cli
+```
+
+### Linux, in a container
+
+The commands below use Docker.
 `docker/debugging/Dockerfile` builds an image of Ubuntu 26.04 with CodeLLDB's lldb and
 the toolchain `rust-toolchain.toml` pins, and says why it holds each. It holds no source:
 `docker/debugging/Dockerfile.dockerignore` lets only `rust-toolchain.toml` into the
@@ -334,7 +361,10 @@ docker run --rm -it --cap-drop ALL --security-opt no-new-privileges \
   build stays out of the repository's `target/`, which holds the host's.
 - **No network:** cargo uses what `cargo fetch` downloaded.
 - **No capabilities:** the shell runs as the image's user, `ubuntu`. lldb needs no
-  capability to trace the program it starts.
+  capability to trace the program it starts, but it must leave address-space
+  randomization on: Docker's default seccomp profile refuses the call that turns it
+  off, and `run` fails with `personality set failed: Operation not permitted`. The
+  image's `~/.lldbinit` sets `target.disable-aslr` to `false`.
 - **4 GiB of memory:** a debugger whose memory grows without bound is stopped there,
   inside the container.
 
@@ -349,8 +379,8 @@ It builds into `$CARGO_TARGET_DIR`, `/home/ubuntu/target`. The repository's
 `target/debug/vcrd` is the host's build: lldb loads a macOS build as `(arm64)` rather
 than `(aarch64)`, and `run` fails with `error: the platform is not currently connected`.
 The container sees a change to the source as soon as it is saved; build again before the
-next session. <!-- from the run: the image's and the volumes' sizes --> To remove the
-image and the volumes:
+next session. The image takes 1.48 GB of disk, and the volumes as much as the downloads
+and the build take. To remove the image and the volumes:
 
 ```bash
 docker image rm vcrd-debug
@@ -362,21 +392,31 @@ docker volume rm vcrd-debug-cargo vcrd-debug-target
 The steps of [A first session](#a-first-session), with lldb's commands.
 
 1. Start `rust-lldb` with the arguments of **vcrd: pick an input**, choosing `verify` and
-   `examples/ed25519.jwt`:
+   `examples/ed25519.jwt`. On macOS:
+
+   ```bash
+   rust-lldb target/debug/vcrd -- verify examples/ed25519.jwt --now 2026-10-01T00:00:00Z
+   ```
+
+   In the container:
 
    ```bash
    rust-lldb "$CARGO_TARGET_DIR/debug/vcrd" -- verify examples/ed25519.jwt --now 2026-10-01T00:00:00Z
    ```
 
    It prints the commands it runs before its prompt. The first imports the formatters,
-   from a path that begins with what `rustc --print sysroot` prints in the container:
-   the pinned toolchain, whose name ends in `x86_64-unknown-linux-gnu` on x86_64.
+   from a path that begins with what `rustc --print sysroot` prints: the pinned
+   toolchain. In the container, on arm64:
 
    ```
    (lldb) command script import "/home/ubuntu/.rustup/toolchains/1.99.1-aarch64-unknown-linux-gnu/lib/rustlib/etc/lldb_lookup.py"
    (lldb) target create "/home/ubuntu/target/debug/vcrd"
    Current executable set to '/home/ubuntu/target/debug/vcrd' (aarch64).
    ```
+
+   On macOS, the toolchain is `1.99.1-aarch64-apple-darwin`, the executable is the
+   repository's `target/debug/vcrd`, and lldb names its architecture `(arm64)`. On x86_64
+   Linux, the toolchain's name ends in `x86_64-unknown-linux-gnu`.
 
 2. Set a breakpoint on `exit_code` by name, with its crate's name
    ([Setting breakpoints](#setting-breakpoints)), and run:
@@ -397,14 +437,15 @@ The steps of [A first session](#a-first-session), with lldb's commands.
    `let mut vcrd = false;`; then the warning that step 3 of
    [A first session](#a-first-session) quotes, that lldb has no plugin for Rust.
 
-3. Check that the formatters loaded:
+3. Check that the lldb is CodeLLDB's, and that the formatters loaded:
 
    ```
+   version
    type category list
    ```
 
-   Among the categories it lists is `Category: Rust (enabled)`, which the import in
-   step 1 registered.
+   `version` prints `lldb version 22.1.8-codelldb`. Among the categories is
+   `Category: Rust (enabled)`, which the import in step 1 registered.
 
 4. Print the report one phase at a time, as in step 4 of
    [A first session](#a-first-session):
@@ -427,7 +468,10 @@ The steps of [A first session](#a-first-session), with lldb's commands.
 [docs/output.md](output.md) explains how to read it. The scripts in
 `scripts/debugging/` check some of it with other tools: `base64`, `jq`, `bc`, `xxd` and
 `openssl`, whichever are first on your `PATH`. They were run with macOS's `base64`,
-`jq` 1.7.1, `bc` 7.0.3 and `xxd`, and with both OpenSSL 3.6.3 and LibreSSL 3.3.6.
+`jq` 1.7.1, `bc` 7.0.3 and `xxd` 2025-08-24, and with both OpenSSL 3.6.3 and LibreSSL
+3.3.6. In the Linux container of [From the command line](#from-the-command-line), they
+were run with the `base64` of uutils coreutils 0.10.0, `jq` 1.8.1, `bc` 1.07.1, `xxd`
+2025-11-26 and OpenSSL 3.5.5, and gave the same results.
 
 ### The JWS, decoded
 
